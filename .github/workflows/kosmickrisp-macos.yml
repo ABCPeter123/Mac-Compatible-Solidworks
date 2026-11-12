@@ -62,6 +62,12 @@ jobs:
           PY
           echo "Resolved KosmicKrisp ICD contents:"
           cat "$VK_ICD"
+          echo "KosmicKrisp Mach-O dynamic dependencies:"
+          otool -L "$VK_DRIVER"
+      - name: Install open-source SPIRV-Tools runtime
+        run: |
+          brew list --versions spirv-tools || brew install spirv-tools
+          test -f /opt/homebrew/opt/spirv-tools/lib/libSPIRV-Tools.dylib
       - name: Download pinned Khronos Vulkan headers
         shell: bash
         run: |
