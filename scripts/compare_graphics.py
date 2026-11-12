@@ -27,6 +27,9 @@ def interpret(cgl: dict[str, str], wgl: dict[str, str]) -> str:
     if host == "UNAVAILABLE":
         return ("Native macOS CGL context creation also failed. Host graphics availability "
                 "is a plausible blocker; a physical or GPU-capable Mac is needed to separate causes.")
+    if host == "PASS" and wgl.get("SWCOMPAT_ONSCREEN_OPENGL_FORMATS") == "0":
+        return ("Native macOS CGL works, but Wine reports no pixel formats capable of drawing "
+                "to Windows windows. Investigate winemac.drv onscreen pixel-format enumeration.")
     if host == "PASS" and wgl.get("SWCOMPAT_PIXELFORMAT_COUNT") == "0":
         return ("Native macOS CGL succeeded, but Wine advertised no WGL formats. "
                 "Investigate Wine winemac.drv pixel-format initialization.")
@@ -43,6 +46,8 @@ def report(cgl_text: str, wgl_text: str) -> dict:
         "native_cgl": cgl.get("SWCOMPAT_CGL", "NOT_RUN"),
         "wine_wgl": wgl.get("SWCOMPAT_WGL", "NOT_RUN"),
         "wine_pixel_formats": wgl.get("SWCOMPAT_PIXELFORMAT_COUNT", "UNKNOWN"),
+        "wine_onscreen_gl_formats": wgl.get("SWCOMPAT_ONSCREEN_OPENGL_FORMATS", "UNKNOWN"),
+        "wine_bitmap_gl_formats": wgl.get("SWCOMPAT_BITMAP_OPENGL_FORMATS", "UNKNOWN"),
         "wine_failure_stage": wgl.get("SWCOMPAT_STAGE", "UNKNOWN"),
         "wine_window_valid": wgl.get("SWCOMPAT_WINDOW_VALID", "UNKNOWN"),
         "native_renderer": cgl.get("SWCOMPAT_CGL_RENDERER", "UNKNOWN"),
