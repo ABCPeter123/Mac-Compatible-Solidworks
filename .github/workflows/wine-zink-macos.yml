@@ -107,6 +107,12 @@ jobs:
         shell: bash
         run: |
           python -m scripts.stage_zink --source build/zink-payload --prefix "$RUNNER_TEMP/zinkprefix" --manifest build/zink-stage.json
+      - name: Enumerate Vulkan/MoltenVK devices from Windows x64
+        id: vulkan
+        continue-on-error: true
+        shell: bash
+        run: |
+          python -m swcompat --prefix "$RUNNER_TEMP/zinkprefix" --logs-dir build/logs probe-vulkan
       - name: Probe Windows graphics with Zink over Vulkan/MoltenVK
         id: zink
         continue-on-error: true
@@ -129,6 +135,11 @@ jobs:
           echo "Wine 11.21 with native x64 Mesa 26.2.6 DLLs, Vulkan/MoltenVK on hosted Apple Silicon." >> "$GITHUB_STEP_SUMMARY"
           echo "No SOLIDWORKS files or activation involved." >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
+          if grep -l '^SWCOMPAT_VULKAN=PASS' build/logs/*-vulkan-*.log; then
+            echo "Vulkan device discovery: **PASS**" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Vulkan device discovery: **FAIL or not run**" >> "$GITHUB_STEP_SUMMARY"
+          fi
           if grep -l '^SWCOMPAT_WGL=PASS' build/logs/*-wgl-*.log; then
             echo "WGL probe: **PASS**" >> "$GITHUB_STEP_SUMMARY"
           else
