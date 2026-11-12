@@ -44,6 +44,33 @@ class COMLifecycleTests(unittest.TestCase):
             self.assertFalse(result["passed"])
             self.assertEqual(result["unregister"]["exit_code"], 0)
 
+    def test_classes_root_mode_uses_wine_only_registration_exports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            checker, dll = root / "check.exe", root / "server.dll"
+            checker.touch()
+            dll.touch()
+            with patch("scripts.com_lifecycle.wine_environment", return_value={}), \
+                 patch("scripts.com_lifecycle.execute", side_effect=[
+                    phase_run("absent"), phase_run("register-root"),
+                    phase_run("activate"), phase_run("unregister-root"),
+                    phase_run("absent")]) as execute_mock:
+                with patch("scripts.com_lifecycle.wine_path", return_value="Z:\\server.dll"):
+                    result = lifecycle("wine", "wine", root, checker, dll, "classes-root")
+            self.assertTrue(result["passed"])
+            commands = [call.args[0] for call in execute_mock.call_args_list]
+            self.assertIn("register-root", commands[1])
+            self.assertIn("unregister-root", commands[3])
+
+    def test_reject_classes_root_registration_on_real_windows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            checker, dll = root / "check.exe", root / "server.dll"
+            checker.touch()
+            dll.touch()
+            with self.assertRaisesRegex(ValueError, "only permitted"):
+                lifecycle("native", None, root, checker, dll, "classes-root")
+
     def test_reject_missing_server(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(ValueError):
