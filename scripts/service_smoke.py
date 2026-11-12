@@ -6,6 +6,7 @@ Use only a temporary Wine prefix or a short-lived authorized Windows CI runner.
 from __future__ import annotations
 import argparse
 import json
+import subprocess
 import time
 from pathlib import Path
 from scripts.functional_smoke import execute, wine_environment, wine_path
@@ -23,7 +24,7 @@ def succeeded(data: dict, phase: str) -> bool:
             and (phase not in STATE or f"SWCOMPAT_SERVICE_STATE={STATE[phase]}" in lines))
 
 
-def run_sequence(host: str, wine: str | None, prefix: Path, exe: Path) -> dict:
+def _run_sequence(host: str, wine: str | None, prefix: Path, exe: Path) -> dict:
     if not exe.is_file():
         raise ValueError(f"Service test executable missing: {exe}")
     env = wine_environment(prefix, host)
@@ -93,11 +94,42 @@ def run_sequence(host: str, wine: str | None, prefix: Path, exe: Path) -> dict:
     return report
 
 
+def run_sequence(host: str, wine: str | None, prefix: Path, exe: Path,
+                 keepalive: bool = False) -> dict:
+    if not keepalive:
+        return _run_sequence(host, wine, prefix, exe)
+    if host != "wine" or not wine:
+        raise ValueError("The keepalive experiment is restricted to a Wine prefix")
+    if not exe.is_file():
+        raise ValueError(f"Missing harmless Wine test executable: {exe}")
+    env = wine_environment(prefix, "wine")
+    keeper = subprocess.Popen([str(wine), str(exe), "hold"], env=env,
+                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL, start_new_session=True)
+    try:
+        time.sleep(1.0)
+        if keeper.poll() is not None:
+            raise ValueError("Wine keepalive client terminated before SCM test")
+        report = _run_sequence(host, wine, prefix, exe)
+        report["wine_keepalive_client"] = True
+        return report
+    finally:
+        if keeper.poll() is None:
+            keeper.terminate()
+            try:
+                keeper.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                keeper.kill()
+                keeper.wait(timeout=5)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", choices=["wine", "native"], required=True)
     parser.add_argument("--prefix", type=Path, default=Path.home() / ".wine")
     parser.add_argument("--wine")
+    parser.add_argument("--keepalive", action="store_true",
+                        help="Keep an independent Wine client active between SCM operations")
     parser.add_argument("--exe", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -106,7 +138,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("Wine executable unavailable")
     try:
         report = run_sequence(args.host, str(wine) if wine else None,
-                              args.prefix.expanduser().resolve(), args.exe.expanduser().resolve())
+                              args.prefix.expanduser().resolve(), args.exe.expanduser().resolve(),
+                              keepalive=args.keepalive)
     except ValueError as exc:
         report = {"host": args.host, "passed": False, "error": str(exc)}
     args.output.parent.mkdir(parents=True, exist_ok=True)

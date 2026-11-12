@@ -60,6 +60,30 @@ class ServiceSmokeTests(unittest.TestCase):
             self.assertEqual(report["registration_poll_attempts"],2)
             sleep.assert_called_once()
 
+    def test_keepalive_is_restricted_to_wine(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exe=Path(tmp)/"service_smoke.exe"
+            exe.touch()
+            with self.assertRaisesRegex(ValueError, "restricted to a Wine prefix"):
+                run_sequence("native",None,Path(tmp),exe,keepalive=True)
+
+    def test_keepalive_client_is_cleaned_after_failure(self):
+        from unittest.mock import MagicMock
+        with tempfile.TemporaryDirectory() as tmp:
+            exe=Path(tmp)/"service_smoke.exe"
+            exe.touch()
+            keeper=MagicMock()
+            keeper.poll.return_value=None
+            with patch("scripts.service_smoke.subprocess.Popen", return_value=keeper), \
+                 patch("scripts.service_smoke._run_sequence", return_value={"passed":False}) as run, \
+                 patch("scripts.service_smoke.time.sleep"):
+                report=run_sequence("wine","wine",Path(tmp),exe,keepalive=True)
+            self.assertFalse(report["passed"])
+            self.assertTrue(report["wine_keepalive_client"])
+            keeper.terminate.assert_called_once()
+            keeper.wait.assert_called_once()
+            run.assert_called_once()
+
     def test_existing_service_not_modified(self):
         with tempfile.TemporaryDirectory() as tmp:
             exe=Path(tmp)/"service_smoke.exe"
