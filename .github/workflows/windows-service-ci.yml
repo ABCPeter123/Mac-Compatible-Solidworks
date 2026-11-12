@@ -1,0 +1,174 @@
+name: Windows service lifecycle compatibility
+
+on:
+  push:
+    paths:
+      - '.github/workflows/windows-service-ci.yml'
+      - 'probes/win_service_smoke.c'
+      - 'scripts/service_smoke.py'
+      - 'tests/test_service_smoke.py'
+      - 'scripts/service_single_report.py'
+      - 'tests/test_service_single_report.py'
+  pull_request:
+    paths:
+      - '.github/workflows/windows-service-ci.yml'
+      - 'probes/win_service_smoke.c'
+      - 'scripts/service_smoke.py'
+      - 'tests/test_service_smoke.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Push and pull_request runs share one experiment branch identity.
+concurrency:
+  group: service-scm-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build original Windows x64 service and controller
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run service harness tests
+        run: python -m unittest tests.test_service_smoke tests.test_service_single_report -v
+      - name: Install MinGW-w64 compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+      - name: Compile Windows service
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra -municode \
+            probes/win_service_smoke.c -o build/service_smoke.exe -ladvapi32
+          file build/service_smoke.exe
+          test -s build/service_smoke.exe
+          x86_64-w64-mingw32-objdump -p build/service_smoke.exe | grep -qi 'ADVAPI32.dll'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swcompat-original-windows-service
+          path: build/service_smoke.exe
+          retention-days: 7
+
+  windows-reference:
+    name: Native Windows SCM start-stop reference
+    runs-on: windows-2025
+    needs: build
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: swcompat-original-windows-service
+          path: build
+      - name: Verify service creation, running state and cleanup
+        shell: pwsh
+        run: python -m scripts.service_smoke --host native --exe build/service_smoke.exe --output build/service-result.json
+      - name: Validate same-process reference controller
+        shell: pwsh
+        run: |
+          & .\build\service_smoke.exe single-roundtrip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: swcompat-service-native-windows
+          path: build/service-result.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  linux-wine:
+    name: Linux Wine SCM create-start-stop-delete
+    runs-on: ubuntu-24.04
+    needs: build
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: swcompat-original-windows-service
+          path: build
+      - name: Install Wine and virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine wine64 xvfb xauth
+      - name: Initialize isolated Wine prefix
+        run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/service-prefix" --logs-dir build/logs init
+      - name: Verify Service Control Manager behavior
+        run: xvfb-run -a python -m scripts.service_smoke --host wine --prefix "$RUNNER_TEMP/service-prefix" --keepalive --diagnose-access --exe build/service_smoke.exe --output build/service-result.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: swcompat-service-linux-wine
+          path: build/service-result.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  macos-wine:
+    name: Apple Silicon Wine Staging 11.21 SCM lifecycle
+    runs-on: macos-15
+    needs: build
+    timeout-minutes: 21
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: swcompat-original-windows-service
+          path: build
+      - name: Download checksum-pinned Wine Staging 11.21
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-staging-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-staging-11.21-osx64.tar.xz"
+          echo "d7bcd5abf4df27aae397a7898aef074fea4a2e0b51e0a55aa9659517bbf9d452  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-build"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-build"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Initialize isolated Wine prefix
+        run: python -m swcompat --prefix "$RUNNER_TEMP/service-prefix" --logs-dir build/logs init
+      - name: Record known cross-process SCM limitation
+        continue-on-error: true
+        run: python -m scripts.service_smoke --host wine --prefix "$RUNNER_TEMP/service-prefix" --keepalive --diagnose-access --exe build/service_smoke.exe --output build/service-result.json
+      - name: Initialize clean Wine prefix for strict single-process SCM check
+        run: python -m swcompat --prefix "$RUNNER_TEMP/service-single-prefix" --logs-dir build/single-logs init
+      - name: Run original service with one retained SCM handle
+        shell: bash
+        run: |
+          set +e
+          export WINEPREFIX="$RUNNER_TEMP/service-single-prefix" WINEARCH=win64 WINEDEBUG=-all
+          "$SWCOMPAT_WINE" "$PWD/build/service_smoke.exe" single-roundtrip > build/service-single-roundtrip.log 2>&1
+          RESULT=$?
+          echo "SWCOMPAT_SERVICE_SINGLE_PROCESS_EXIT=$RESULT"
+          printf 'SWCOMPAT_SINGLE_EXIT_CODE=%s\n' "$RESULT" >> "$GITHUB_ENV"
+          cat build/service-single-roundtrip.log
+          exit 0
+      - name: Assert complete SCM lifecycle and process ID
+        run: python -m scripts.service_single_report --input build/service-single-roundtrip.log --exit-code "$SWCOMPAT_SINGLE_EXIT_CODE" --output build/service-single-result.json --summary "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: swcompat-service-apple-silicon
+          path: |
+            build/service-result.json
+            build/service-single-roundtrip.log
+            build/service-single-result.json
+          if-no-files-found: warn
+          retention-days: 7
