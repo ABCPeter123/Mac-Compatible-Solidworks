@@ -40,11 +40,14 @@ def interpret(cgl: dict[str, str], wgl: dict[str, str]) -> str:
             "Do not assume a graphics driver bug or hardware limitation.")
 
 
-def report(cgl_text: str, wgl_text: str) -> dict:
-    cgl, wgl = markers(cgl_text), markers(wgl_text)
+def report(cgl_text: str, wgl_text: str, bitmap_text: str = "") -> dict:
+    cgl, wgl, bitmap = markers(cgl_text), markers(wgl_text), markers(bitmap_text)
     return {
         "native_cgl": cgl.get("SWCOMPAT_CGL", "NOT_RUN"),
         "wine_wgl": wgl.get("SWCOMPAT_WGL", "NOT_RUN"),
+        "wine_bitmap_wgl": bitmap.get("SWCOMPAT_BITMAP_WGL", "NOT_RUN"),
+        "wine_bitmap_failure_stage": bitmap.get("SWCOMPAT_BITMAP_STAGE", "UNKNOWN"),
+        "wine_bitmap_renderer": bitmap.get("SWCOMPAT_BITMAP_OPENGL_RENDERER", "UNKNOWN"),
         "wine_pixel_formats": wgl.get("SWCOMPAT_PIXELFORMAT_COUNT", "UNKNOWN"),
         "wine_onscreen_gl_formats": wgl.get("SWCOMPAT_ONSCREEN_OPENGL_FORMATS", "UNKNOWN"),
         "wine_bitmap_gl_formats": wgl.get("SWCOMPAT_BITMAP_OPENGL_FORMATS", "UNKNOWN"),
@@ -66,12 +69,15 @@ def main() -> int:
     native = args.cgl.read_text(encoding="utf-8", errors="replace") if args.cgl.exists() else ""
     logs = sorted(args.logs.glob("*-wgl-*.log")) if args.logs.exists() else []
     guest = logs[-1].read_text(encoding="utf-8", errors="replace") if logs else ""
-    finding = report(native, guest)
+    bitmap_logs = sorted(args.logs.glob("*-bitmap-*.log")) if args.logs.exists() else []
+    bitmap = bitmap_logs[-1].read_text(encoding="utf-8", errors="replace") if bitmap_logs else ""
+    finding = report(native, guest, bitmap)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(finding, indent=2) + "\n", encoding="utf-8")
     body = ("## Graphics compatibility analysis\n\n"
             f"- Native CGL: **{finding['native_cgl']}**\n"
             f"- Wine WGL: **{finding['wine_wgl']}**\n"
+            f"- Wine bitmap WGL: **{finding['wine_bitmap_wgl']}**\n"
             f"- Wine pixel-format count: `{finding['wine_pixel_formats']}`\n"
             f"- Window-capable formats: `{finding['wine_onscreen_gl_formats']}`\n"
             f"- Bitmap-capable formats: `{finding['wine_bitmap_gl_formats']}`\n"
