@@ -6,7 +6,9 @@ from unittest.mock import patch
 
 class FunctionalSmokeTests(unittest.TestCase):
     def test_wine_path_translates_unix_absolute(self):
-        self.assertEqual(wine_path(Path("/tmp/myfile.msi")), r"Z:\tmp\myfile.msi")
+        original = Path("/tmp/myfile.msi")
+        expected = "Z:" + str(original.resolve()).replace("/", "\\")
+        self.assertEqual(wine_path(original), expected)
 
     def test_marker_requires_clean_exit(self):
         self.assertTrue(validate_marker({"exit_code": 0, "output": "SWCOMPAT_DOTNET=PASS\n"}, "SWCOMPAT_DOTNET=PASS"))
