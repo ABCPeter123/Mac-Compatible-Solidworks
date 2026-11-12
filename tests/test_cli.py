@@ -20,7 +20,8 @@ class CLITests(unittest.TestCase):
             '#!/bin/sh\n'
             'if [ "$1" = "--version" ]; then echo wine-11-test; exit 0; fi\n'
             'if [ "$1" = "cmd.exe" ]; then echo Microsoft Windows; exit 0; fi\n'
-            'case "$1" in *good.exe) echo SWCOMPAT_WGL=PASS; exit 0;; '
+            'case "$1" in *bitmap.exe) echo SWCOMPAT_BITMAP_WGL=PASS; exit 0;; '
+            '*good.exe) echo SWCOMPAT_WGL=PASS; exit 0;; '
             '*bad.exe) echo SWCOMPAT_WGL=FAIL; exit 0;; esac\n'
             'exit 1\n'
         )
@@ -73,6 +74,19 @@ class CLITests(unittest.TestCase):
         code, output = self.invoke("probe-wgl", "--exe", str(good))
         self.assertEqual(code, 0)
         self.assertIn("PASS", output)
+
+    def test_bitmap_probe_requires_its_own_success_marker(self):
+        self.assertEqual(self.invoke("init")[0], 0)
+        ordinary = self.root / "good.exe"
+        ordinary.touch()
+        code, message = self.invoke("probe-bitmap", "--exe", str(ordinary))
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL", message)
+        bitmap = self.root / "bitmap.exe"
+        bitmap.touch()
+        code, message = self.invoke("probe-bitmap", "--exe", str(bitmap))
+        self.assertEqual(code, 0)
+        self.assertIn("PASS", message)
 
     def test_analyze(self):
         log = self.root / "wine.log"
