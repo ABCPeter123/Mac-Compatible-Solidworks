@@ -174,8 +174,17 @@ static int manage(const wchar_t *action, const wchar_t *exe) {
 
 int wmain(int argc, wchar_t **argv) {
     if (argc < 2) {
-        fputs("Usage: service_smoke.exe run|absent|install <path>|status|start|stop|delete\n",stderr);
+        fputs("Usage: service_smoke.exe run|hold|absent|install <path>|status|start|stop|delete\n",stderr);
         return 2;
+    }
+    if (!wcscmp(argv[1], L"hold")) {
+        /* Diagnostic only: retain one active client of the same Wine prefix
+         * while other Wine controllers register/start/stop the service.
+         * A successful lifecycle here would isolate wineserver churn. */
+        puts("SWCOMPAT_SERVICE_KEEPALIVE=READY");
+        fflush(stdout);
+        Sleep(180000);
+        return 0;
     }
     if (!wcscmp(argv[1], L"run")) {
         SERVICE_TABLE_ENTRYW dispatch[] = {
