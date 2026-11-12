@@ -93,6 +93,22 @@ The [Wine Staging 11.21 Apple Silicon run](https://github.com/ABCPeter123/Mac-Co
 
 Both Wine development 11.21 and Wine Staging 11.21 therefore have the same observable cross-process service-object visibility issue on the tested GitHub-hosted Mac. Changing only the Wine flavor is **not** a confirmed fix. We are retaining both test traces rather than switching the production compatibility baseline.
 
+## Verified single-process Wine Staging 11.21 result and strict regression
+
+[Run 43301055974](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43301055974) confirmed all five lifecycle actions under hosted Apple Silicon Wine Staging 11.21 with **one retained SCM handle**:
+
+- Original service created successfully.
+- Initial `StartServiceW` returned 1055 (`ERROR_SERVICE_DATABASE_LOCKED`); the fifth bounded retry returned success.
+- The test observed `SERVICE_RUNNING` (state 4), with process ID 644.
+- `ControlService(STOP)` succeeded, with `SERVICE_STOPPED` (state 1).
+- `DeleteService` succeeded and the service was no longer registered.
+
+The same run reproduced the **cross-process failure**: one controller observed service registration but another could not open the class with any of six SCM access masks (1060), and StartService later failed with 1053. Therefore the two modes must never be combined into one claimed success.
+
+The CI now preserves both reports and enforces `SWCOMPAT_SERVICE_SINGLE_PROCESS=PASS` through `scripts/service_single_report.py` with exact state markers, a nonzero process ID, and zero executable exit code. Cross-process failure is retained explicitly, without failing the narrower single-handle test.
+
+The single-process success establishes working basic SCM lifecycle functionality for this test. It does **not** repair arbitrary Windows service installations, multi-process service controllers, real SOLIDWORKS background services, kernel drivers or licensing.
+
 ## Scope
 
 A passing test establishes only these Service Control Manager operations. It does not prove compatibility with kernel drivers, system-level license services, SOLIDWORKS background components, Windows service accounts, or CAD functionality.
