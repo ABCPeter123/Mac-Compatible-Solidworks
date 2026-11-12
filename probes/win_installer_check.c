@@ -4,6 +4,7 @@
 #include <msi.h>
 #include <stdio.h>
 #include <string.h>
+#include <wchar.h>
 
 #define PRODUCT_CODE L"{EB00D74E-5D24-49C6-BFB1-FF694AE23719}"
 
