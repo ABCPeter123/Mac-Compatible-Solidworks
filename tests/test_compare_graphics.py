@@ -20,6 +20,17 @@ class GraphicsComparisonTests(unittest.TestCase):
         wgl = {"SWCOMPAT_WGL": "FAIL", "SWCOMPAT_PIXELFORMAT_COUNT": "0"}
         self.assertIn("winemac.drv", interpret(cgl, wgl))
 
+    def test_native_gl_but_no_onscreen_wgl_formats(self):
+        cgl = {"SWCOMPAT_CGL": "PASS"}
+        wgl = {"SWCOMPAT_WGL": "FAIL", "SWCOMPAT_PIXELFORMAT_COUNT": "12",
+               "SWCOMPAT_ONSCREEN_OPENGL_FORMATS": "0",
+               "SWCOMPAT_BITMAP_OPENGL_FORMATS": "12"}
+        result = interpret(cgl, wgl)
+        self.assertIn("no pixel formats capable of drawing", result)
+        data = report("SWCOMPAT_CGL=PASS\\n",
+                      "SWCOMPAT_WGL=FAIL\\nSWCOMPAT_ONSCREEN_OPENGL_FORMATS=0\\n")
+        self.assertEqual(data["wine_onscreen_gl_formats"], "0")
+
     def test_success_does_not_claim_solidworks(self):
         self.assertIn("SOLIDWORKS is still untested",
                       interpret({"SWCOMPAT_CGL": "PASS"}, {"SWCOMPAT_WGL": "PASS"}))
