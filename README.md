@@ -46,6 +46,18 @@ python3 -m swcompat probe-prereqs
 
 The probe needs the Windows x64 executable from CI. A successful probe only confirms its own completion, not readiness to install SOLIDWORKS. No proprietary installer or licensing material is used in public CI.
 
+## Offline SOLIDWORKS installation-media preflight
+
+We can now inspect an **authorized local SOLIDWORKS 2026 installer folder** without installing or uploading it:
+
+```sh
+python3 -m scripts.installer_media_preflight \
+  --media "/path/to/authorized/SOLIDWORKS_2026" \
+  --output "$HOME/swcompat-preflight.json"
+```
+
+The inventory identifies the Installation Manager entrypoint, official prerequisite filenames, and broad Windows PE import categories. It does not run the installer, expose user paths in JSON, or claim the installation media is complete. See [local media preflight and privacy controls](docs/INSTALLER_MEDIA_PREFLIGHT.md) and its [synthetic-media CI tests](.github/workflows/installer-media-preflight.yml).
+
 ## Local development
 
 Requires Python 3.10+:
