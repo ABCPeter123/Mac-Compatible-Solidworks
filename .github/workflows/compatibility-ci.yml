@@ -49,6 +49,10 @@ jobs:
           xcrun swiftc probes/metal_probe.swift -o build/metal_probe
       - name: Run probe
         run: ./build/metal_probe | tee build/metal-probe.txt
+      - name: Compile and run GPU Metal pixel validation
+        run: |
+          xcrun swiftc probes/metal_render_probe.swift -o build/metal_render_probe
+          ./build/metal_render_probe | tee build/metal-render-probe.txt
       - name: Probe native CGL pixel formats
         run: |
           xcrun clang -Wno-deprecated-declarations probes/cgl_probe.c -framework OpenGL -o build/cgl_probe
