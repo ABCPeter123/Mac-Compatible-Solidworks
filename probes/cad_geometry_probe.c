@@ -63,7 +63,7 @@ int main(void) {
     glViewport(0, 0, 256, 256);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-    glOrtho(-1, 1, -1, 1, -1, 1);
+    glOrtho(-1, 1, -1, 1, 0, 2);
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
     glEnable(GL_DEPTH_TEST);
@@ -72,8 +72,9 @@ int main(void) {
     glClearColor(0.08f, 0.10f, 0.16f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    /* Draw near red geometry FIRST. The far green geometry drawn
-       afterwards must not overwrite it if depth testing works. */
+    /* Using glOrtho zNear=0, zFar=2, eye-space z=-0.5 is closer
+       than z=-1.5. Draw the near red geometry FIRST, so the far green
+       geometry drawn afterward must not overwrite it if depth works. */
     glColor3f(0.92f, 0.15f, 0.15f);
     glBegin(GL_TRIANGLES);
     glVertex3f(-0.80f, -0.80f, -0.5f);
@@ -85,9 +86,9 @@ int main(void) {
        the center green, failing our expected red pixel check. */
     glColor3f(0.1f, 0.85f, 0.15f);
     glBegin(GL_TRIANGLES);
-    glVertex3f(-0.75f, -0.75f, 0.5f);
-    glVertex3f( 0.75f, -0.75f, 0.5f);
-    glVertex3f( 0.0f,   0.75f, 0.5f);
+    glVertex3f(-0.75f, -0.75f, -1.5f);
+    glVertex3f( 0.75f, -0.75f, -1.5f);
+    glVertex3f( 0.0f,   0.75f, -1.5f);
     glEnd();
     glFinish();
 
