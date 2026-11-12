@@ -30,10 +30,24 @@ int main(void) {
     int count = DescribePixelFormat(dc, 1, sizeof(available), &available);
     printf("SWCOMPAT_PIXELFORMAT_COUNT=%d\n", count);
     printf("SWCOMPAT_DESCRIBE_LASTERROR=%lu\n", GetLastError());
-    if (count > 0) {
-        printf("SWCOMPAT_FIRST_FORMAT_FLAGS=%lu\n", (unsigned long)available.dwFlags);
-        printf("SWCOMPAT_FIRST_FORMAT_COLOR=%u\n", available.cColorBits);
+    int onscreen_opengl = 0;
+    int bitmap_opengl = 0;
+    for (int i = 1; i <= count && i <= 128; ++i) {
+        PIXELFORMATDESCRIPTOR desc = {0};
+        if (!DescribePixelFormat(dc, i, sizeof(desc), &desc)) {
+            printf("SWCOMPAT_FORMAT_%d_DESCRIBE_FAILED=1\n", i);
+            continue;
+        }
+        printf("SWCOMPAT_FORMAT_%d_FLAGS=0x%08lX\n", i, (unsigned long)desc.dwFlags);
+        printf("SWCOMPAT_FORMAT_%d_COLOR=%u\n", i, desc.cColorBits);
+        printf("SWCOMPAT_FORMAT_%d_DEPTH=%u\n", i, desc.cDepthBits);
+        if (desc.dwFlags & PFD_SUPPORT_OPENGL) {
+            if (desc.dwFlags & PFD_DRAW_TO_WINDOW) ++onscreen_opengl;
+            if (desc.dwFlags & PFD_DRAW_TO_BITMAP) ++bitmap_opengl;
+        }
     }
+    printf("SWCOMPAT_ONSCREEN_OPENGL_FORMATS=%d\n", onscreen_opengl);
+    printf("SWCOMPAT_BITMAP_OPENGL_FORMATS=%d\n", bitmap_opengl);
 
     /* Probe multiple requirements before concluding that the host has no
        compatible WGL format. ChoosePixelFormat does not modify the HDC. */
