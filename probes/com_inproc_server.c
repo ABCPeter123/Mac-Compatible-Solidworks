@@ -13,6 +13,8 @@ static const CLSID CLSID_SWCompat = {
 };
 static const wchar_t *REGKEY =
     L"Software\\Classes\\CLSID\\{99FCFDA0-3C7A-4909-AB39-67C40C772F15}";
+static const wchar_t *ROOT_CLSID =
+    L"CLSID\\{99FCFDA0-3C7A-4909-AB39-67C40C772F15}";
 static LONG live_objects = 0, server_locks = 0;
 static HMODULE module_handle = NULL;
 
@@ -117,36 +119,55 @@ static HRESULT put_string(HKEY key, const wchar_t *name, const wchar_t *value) {
                                             (const BYTE *)value, bytes));
 }
 
-__declspec(dllexport) HRESULT WINAPI DllRegisterServer(void) {
+/* Register in HKCU on Windows; test isolated HKCR registration as a
+ * separate Wine-only experiment if Wine cannot merge per-user class data.
+ * Never invoke HKCR registration on the real Windows host in CI.
+ */
+static HRESULT register_class(HKEY root, const wchar_t *clsid_key) {
     wchar_t path[MAX_PATH] = {0};
     DWORD length = GetModuleFileNameW(module_handle, path, MAX_PATH);
     if (!length || length >= MAX_PATH) return HRESULT_FROM_WIN32(GetLastError());
 
     wchar_t keypath[256] = {0};
-    if (swprintf(keypath, 256, L"%ls\\InprocServer32", REGKEY) <= 0)
+    if (swprintf(keypath, 256, L"%ls\\InprocServer32", clsid_key) <= 0)
         return E_FAIL;
-
     HKEY key = NULL;
-    LONG status = RegCreateKeyExW(HKEY_CURRENT_USER, keypath, 0, NULL, 0,
+    LONG status = RegCreateKeyExW(root, keypath, 0, NULL, 0,
                                   KEY_SET_VALUE, NULL, &key, NULL);
     if (status != ERROR_SUCCESS) return HRESULT_FROM_WIN32(status);
-
     HRESULT hr = put_string(key, NULL, path);
     if (SUCCEEDED(hr)) hr = put_string(key, L"ThreadingModel", L"Both");
     RegCloseKey(key);
     return hr;
 }
 
-__declspec(dllexport) HRESULT WINAPI DllUnregisterServer(void) {
+static HRESULT unregister_class(HKEY root, const wchar_t *clsid_key) {
     wchar_t keypath[256] = {0};
-    if (swprintf(keypath, 256, L"%ls\\InprocServer32", REGKEY) <= 0)
+    if (swprintf(keypath, 256, L"%ls\\InprocServer32", clsid_key) <= 0)
         return E_FAIL;
-    LONG a = RegDeleteKeyW(HKEY_CURRENT_USER, keypath);
-    LONG b = RegDeleteKeyW(HKEY_CURRENT_USER, REGKEY);
+    LONG a = RegDeleteKeyW(root, keypath);
+    LONG b = RegDeleteKeyW(root, clsid_key);
     if ((a != ERROR_SUCCESS && a != ERROR_FILE_NOT_FOUND) ||
         (b != ERROR_SUCCESS && b != ERROR_FILE_NOT_FOUND))
         return HRESULT_FROM_WIN32(a != ERROR_SUCCESS ? a : b);
     return S_OK;
+}
+
+__declspec(dllexport) HRESULT WINAPI DllRegisterServer(void) {
+    return register_class(HKEY_CURRENT_USER, REGKEY);
+}
+
+__declspec(dllexport) HRESULT WINAPI DllUnregisterServer(void) {
+    return unregister_class(HKEY_CURRENT_USER, REGKEY);
+}
+
+/* Test-only alternate registration for a *disposable Wine prefix*, not Windows. */
+__declspec(dllexport) HRESULT WINAPI SWCompatRegisterClassesRoot(void) {
+    return register_class(HKEY_CLASSES_ROOT, ROOT_CLSID);
+}
+
+__declspec(dllexport) HRESULT WINAPI SWCompatUnregisterClassesRoot(void) {
+    return unregister_class(HKEY_CLASSES_ROOT, ROOT_CLSID);
 }
 
 BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved) {
