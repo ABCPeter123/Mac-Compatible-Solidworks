@@ -92,7 +92,7 @@ def run_msi(host: str, wine: str | None, prefix: Path, msi: Path, helper: Path) 
     return output
 
 
-def run_managed(host: str, wine: str | None, prefix: Path, exe: Path) -> dict:
+def run_managed(host: str, wine: str | None, prefix: Path, exe: Path, runtime_label: str = "unspecified") -> dict:
     if not exe.is_file():
         raise ValueError("Missing the self-authored .NET Framework executable.")
     env = wine_environment(prefix, host)
@@ -101,9 +101,20 @@ def run_managed(host: str, wine: str | None, prefix: Path, exe: Path) -> dict:
     markers = ["SWCOMPAT_DOTNET=PASS", "SWCOMPAT_DOTNET_TASKS=PASS",
                "SWCOMPAT_DOTNET_XML=PASS", "SWCOMPAT_DOTNET_CRYPTO=PASS",
                "SWCOMPAT_DOTNET_FILEIO=PASS"]
-    return {"scenario": "dotnet_framework_smoke", "host": host,
-            "execution": run, "passed": all(validate_marker(run, x) for x in markers),
-            "scope": "CLR 4 managed code execution; does not prove .NET Framework 4.8.1 is installed."}
+    passed = all(validate_marker(run, x) for x in markers)
+    result = {"scenario": "dotnet_framework_smoke", "host": host,
+              "runtime_label": runtime_label, "execution": run, "passed": passed,
+              "scope": "Managed BCL execution only. Wine Mono is not Microsoft .NET Framework 4.8.1."}
+    if not passed and host == "wine":
+        diagnostic_env = env.copy()
+        diagnostic_env["WINEDEBUG"] = "+mscoree,+loaddll,+seh"
+        debug = execute(cmd, diagnostic_env, timeout=40)
+        interesting = [line[:350] for line in debug["output"].splitlines()
+                       if any(term in line.lower() for term in
+                              ("mscoree", "mono", "err:", "exception", "mscorlib", "failed"))]
+        result["diagnostics"] = {"exit_code": debug["exit_code"],
+                                 "last_relevant_lines": interesting[-30:]}
+    return result
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -115,6 +126,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--msi", type=Path, default=Path("build/msi_probe.msi"))
     p.add_argument("--checker", type=Path, default=Path("build/msi_check.exe"))
     p.add_argument("--exe", type=Path, default=Path("build/dotnet_smoke.exe"))
+    p.add_argument("--runtime-label", default="unspecified", help="Record runtime used, e.g. native-dotnet or Wine-Mono")
     p.add_argument("--output", type=Path, required=True)
     args = p.parse_args(argv)
     wine = find_wine(args.wine) if args.host == "wine" else None
@@ -125,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
         report = (run_msi(args.host, str(wine) if wine else None, prefix,
                           args.msi.resolve(), args.checker.resolve())
                   if args.scenario == "msi" else
-                  run_managed(args.host, str(wine) if wine else None, prefix, args.exe.resolve()))
+                  run_managed(args.host, str(wine) if wine else None, prefix, args.exe.resolve(), args.runtime_label))
     except ValueError as exc:
         report = {"scenario": args.scenario, "host": args.host, "passed": False,
                   "error": str(exc)}
