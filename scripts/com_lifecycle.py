@@ -18,17 +18,24 @@ def completed(run: dict, phase: str) -> bool:
 
 
 def lifecycle(host: str, wine: str | None, prefix: Path,
-              checker: Path, server: Path) -> dict:
+              checker: Path, server: Path, mode: str = "user") -> dict:
     if not checker.is_file() or not server.is_file():
         raise ValueError("Both self-authored COM binaries are required")
+    if mode not in ("user", "classes-root"):
+        raise ValueError("Unsupported COM registration mode")
+    if host == "native" and mode != "user":
+        raise ValueError("Classes-root registration is only permitted inside a disposable Wine prefix")
     env = wine_environment(prefix, host)
     dll_argument = wine_path(server) if host == "wine" else str(server)
-    report = {"host": host, "scenario": "user_scoped_com_registration_activation"}
+    report = {"host": host, "mode": mode,
+              "scenario": "cross_process_com_registration_activation"}
+    reg = "register-root" if mode == "classes-root" else "register"
+    unreg = "unregister-root" if mode == "classes-root" else "unregister"
     prefix_cmd = [wine] if host == "wine" else []
 
     def run(phase: str) -> dict:
         args = [str(checker), phase]
-        if phase in ("register", "unregister"):
+        if phase in ("register", "unregister", "register-root", "unregister-root"):
             args.append(dll_argument)
         return execute(prefix_cmd + args, env, timeout=60)
 
@@ -37,22 +44,22 @@ def lifecycle(host: str, wine: str | None, prefix: Path,
     if not completed(report["before"], "absent"):
         report["passed"] = False
         report["reason"] = "Test COM class unexpectedly registered before starting"
-        report["cleanup"] = run("unregister")
+        report["cleanup"] = run(unreg)
         return report
 
     try:
-        report["register"] = run("register")
-        if completed(report["register"], "register"):
+        report["register"] = run(reg)
+        if completed(report["register"], reg):
             report["activate"] = run("activate")
     finally:
-        report["unregister"] = run("unregister")
+        report["unregister"] = run(unreg)
         report["after"] = run("absent")
 
     report["passed"] = all(completed(report.get(key, {}), phase)
                            for key, phase in (("before", "absent"),
-                                              ("register", "register"),
+                                              ("register", reg),
                                               ("activate", "activate"),
-                                              ("unregister", "unregister"),
+                                              ("unregister", unreg),
                                               ("after", "absent")))
     report["scope"] = ("Registers an original HKCU COM server DLL and activates it "
                        "in a separate Win32 process; not SOLIDWORKS COM compatibility")
@@ -66,6 +73,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--prefix", type=Path, default=Path.home() / ".wine")
     parser.add_argument("--checker", type=Path, required=True)
     parser.add_argument("--dll", type=Path, required=True)
+    parser.add_argument("--mode", choices=["user", "classes-root"], default="user",
+                        help="classes-root is for disposable Wine prefixes ONLY")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     wine = find_wine(args.wine) if args.host == "wine" else None
@@ -74,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = lifecycle(args.host, str(wine) if wine else None,
                            args.prefix.expanduser().resolve(),
-                           args.checker.resolve(), args.dll.resolve())
+                           args.checker.resolve(), args.dll.resolve(), args.mode)
     except ValueError as exc:
         result = {"host": args.host, "passed": False, "error": str(exc)}
     args.output.parent.mkdir(parents=True, exist_ok=True)
