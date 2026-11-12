@@ -34,7 +34,7 @@ jobs:
           retention-days: 3
 
   mesa-payload:
-    name: Verify and stage Mesa 26.2.6 Windows x64 files
+    name: Verify and stage Mesa 25.1.9 Windows x64 files
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -48,8 +48,8 @@ jobs:
           mkdir -p build/mesa-extract build/zink-payload
           curl --fail --location --retry 3 \
             -o "$RUNNER_TEMP/mesa.7z" \
-            "https://github.com/pal1000/mesa-dist-win/releases/download/26.2.6/mesa3d-26.2.6-release-mingw.7z"
-          echo "da0f71d9181b672c1918f3c342f11118c687f6059a46b16502845160733cc388  $RUNNER_TEMP/mesa.7z" | sha256sum -c -
+            "https://github.com/pal1000/mesa-dist-win/releases/download/25.1.9/mesa3d-25.1.9-release-mingw.7z"
+          echo "5d6cd7fe78c524a534bdfa92bfb437cb914c9d291ab5f4d48185a71f2d8a2210  $RUNNER_TEMP/mesa.7z" | sha256sum -c -
           7z x -y -o"build/mesa-extract" "$RUNNER_TEMP/mesa.7z" >/dev/null
       - name: Select only x64 Windows Mesa DLLs
         run: |
@@ -102,6 +102,14 @@ jobs:
           VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
         run: |
           xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/zink-linux-prefix" --logs-dir build/logs probe-vulkan
+      - name: Inspect Wine prefix before Mesa staging
+        run: |
+          echo "Prefix contents"
+          ls -la "$RUNNER_TEMP/zink-linux-prefix" || true
+          echo "Windows directories"
+          find "$RUNNER_TEMP/zink-linux-prefix/drive_c" -maxdepth 3 -type d 2>/dev/null | head -50 || true
+          test -f "$RUNNER_TEMP/zink-linux-prefix/system.reg" && echo "system.reg exists" || echo "system.reg missing"
+          test -d "$RUNNER_TEMP/zink-linux-prefix/drive_c/windows/system32" && echo "system32 exists" || echo "system32 missing"
       - name: Stage exact Windows x64 Mesa Zink DLLs
         run: python -m scripts.stage_zink --source build/zink-payload --prefix "$RUNNER_TEMP/zink-linux-prefix" --manifest build/zink-stage-linux.json
       - name: Test Windows WGL using Mesa Zink and Vulkan lavapipe
@@ -185,7 +193,7 @@ jobs:
         shell: bash
         run: |
           echo "## Mesa Zink experimental result" >> "$GITHUB_STEP_SUMMARY"
-          echo "Wine 11.21 with native x64 Mesa 26.2.6 DLLs, Vulkan/MoltenVK on hosted Apple Silicon." >> "$GITHUB_STEP_SUMMARY"
+          echo "Wine 11.21 with native x64 Mesa 25.1.9 DLLs, Vulkan/MoltenVK on hosted Apple Silicon." >> "$GITHUB_STEP_SUMMARY"
           echo "No SOLIDWORKS files or activation involved." >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           if grep -l '^SWCOMPAT_VULKAN=PASS' build/logs/*-vulkan-*.log; then
