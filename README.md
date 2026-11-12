@@ -22,6 +22,12 @@ The separate [macOS Wine experiment](.github/workflows/wine-macos-experimental.y
 
 [Inspect the experiment's workflow runs](../../actions/workflows/wine-macos-experimental.yml). A passing dependency or download step is not equivalent to a passing WGL probe, and neither proves SOLIDWORKS compatibility.
 
+## Graphics backend research
+
+Our first hosted macOS tests proved Windows x64 execution but **not** WGL graphics: the tested Gcenx Wine 11.21 package explicitly disables OpenGL (`--without-opengl`). Native Metal framebuffer rendering has passed on both hosted Mac architectures.
+
+We now test **Mesa Zink → Vulkan/MoltenVK → Metal**, using an independent Windows x64 OpenGL probe and a checksum-pinned Mesa 26.2.6 Windows distribution. See the [Zink experiment](.github/workflows/wine-zink-macos.yml) and [documented evidence](docs/KNOWN_ISSUES.md). Test logs are published as workflow artifacts. The experiment uses only open-source runtime DLLs and a disposable Wine prefix, never SOLIDWORKS binaries.
+
 ## Local development
 
 Requires Python 3.10+:
