@@ -45,6 +45,17 @@ From a prepared Wine prefix after obtaining the probe executable from CI:
 
     python -m swcompat --prefix /path/to/prefix --logs-dir build/logs probe-prereqs
 
+## Wine's Windows 11 version profile
+
+The initial Apple Silicon Wine 11.21 probe reported Windows 10 build 19045, even though the official SOLIDWORKS 2026 client target is Windows 11. Wine supports setting its reported global Windows version within a disposable prefix:
+
+    python -m swcompat --prefix /path/to/prefix set-winver win11
+    python -m swcompat --prefix /path/to/prefix probe-prereqs
+
+The dedicated CI job tests this setting and checks that the reported build is at least 22000. The baseline and altered-profile reports are retained separately for comparison.
+
+**Version emulation is not actual Windows 11 compatibility.** The setting may satisfy simple installer version checks but does not provide unavailable Windows API implementations, drivers, .NET functionality, or license mechanisms. Never use version reporting as evidence of SOLIDWORKS installation success.
+
 ## Next gate
 
 1. Compare MSI, COM, SCM, .NET, and VC++ evidence across the three environments.

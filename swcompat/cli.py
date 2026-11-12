@@ -114,6 +114,8 @@ def parser() -> argparse.ArgumentParser:
     bitmap.add_argument("--exe", type=Path, default=ROOT / "build/wgl_bitmap_probe.exe")
     prereq = sub.add_parser("probe-prereqs", help="Read-only Windows installer API and runtime reconnaissance")
     prereq.add_argument("--exe", type=Path, default=ROOT / "build/win_prereq_probe.exe")
+    version = sub.add_parser("set-winver", help="Set reported Windows version in isolated Wine prefix")
+    version.add_argument("version", choices=["win11", "win10"])
     installer = sub.add_parser("install", help="Launch a legitimately obtained SOLIDWORKS installer")
     installer.add_argument("exe", type=Path)
     launcher = sub.add_parser("launch", help="Launch an existing Windows executable")
@@ -161,6 +163,16 @@ def main(argv: list[str] | None = None) -> int:
     if not prefix.is_dir():
         print("Wine prefix missing. Run 'python3 -m swcompat init'.", file=sys.stderr)
         return 2
+    if args.command == "set-winver":
+        # This edits Wine's isolated compatibility profile, not host Windows or
+        # any proprietary application. OS version emulation is not OS compatibility.
+        status, path = capture([str(wine), "winecfg", "/v", args.version],
+                               prefix, logs, "winver", timeout=60)
+        print(f"Wine reported-Windows-version setting ({args.version}): "
+              f"{'APPLIED' if status == 0 else 'FAILED'}; log: {path}")
+        if status:
+            summarize(path)
+        return status
     if args.command == "probe-win32":
         status, path = capture([str(wine), "cmd.exe", "/c", "ver"], prefix, logs, "win32", timeout=90)
         print(f"Win32 probe: {'PASS' if status == 0 else 'FAIL'}; log: {path}")
