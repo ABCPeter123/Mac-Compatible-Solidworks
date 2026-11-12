@@ -8,6 +8,11 @@ on:
       - 'scripts/msvc_runtime_check.py'
       - 'tests/test_msvc_runtime_check.py'
   pull_request:
+    paths:
+      - '.github/workflows/msvc-runtime-ci.yml'
+      - 'probes/msvc_runtime_smoke.cpp'
+      - 'scripts/msvc_runtime_check.py'
+      - 'tests/test_msvc_runtime_check.py'
   workflow_dispatch:
 
 permissions:

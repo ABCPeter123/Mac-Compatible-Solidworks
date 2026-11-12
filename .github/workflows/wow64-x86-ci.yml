@@ -8,6 +8,11 @@ on:
       - 'tests/test_wow64_report.py'
       - 'probes/win_prereq_probe.c'
   pull_request:
+    paths:
+      - '.github/workflows/wow64-x86-ci.yml'
+      - 'scripts/wow64_report.py'
+      - 'tests/test_wow64_report.py'
+      - 'probes/win_prereq_probe.c'
   workflow_dispatch:
 
 permissions:

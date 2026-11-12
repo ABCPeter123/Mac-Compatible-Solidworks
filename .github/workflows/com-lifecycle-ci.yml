@@ -9,6 +9,12 @@ on:
       - 'scripts/com_lifecycle.py'
       - 'tests/test_com_lifecycle.py'
   pull_request:
+    paths:
+      - '.github/workflows/com-lifecycle-ci.yml'
+      - 'probes/com_inproc_server.c'
+      - 'probes/com_lifecycle_check.c'
+      - 'scripts/com_lifecycle.py'
+      - 'tests/test_com_lifecycle.py'
   workflow_dispatch:
 
 permissions:
