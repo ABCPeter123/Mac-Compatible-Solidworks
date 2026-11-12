@@ -45,7 +45,22 @@ jobs:
           echo "SWCOMPAT_VK_LOADER=$VK_LOADER" >> "$GITHUB_ENV"
           echo "SWCOMPAT_VK_ICD=$VK_ICD" >> "$GITHUB_ENV"
           echo "SWCOMPAT_VK_LIBRARY_DIR=$(dirname "$VK_LOADER")" >> "$GITHUB_ENV"
-          echo "KosmicKrisp ICD contents:"
+          export SWCOMPAT_VK_ICD="$VK_ICD"
+          export SWCOMPAT_VK_DRIVER="$VK_DRIVER"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          manifest = Path(os.environ["SWCOMPAT_VK_ICD"])
+          driver = Path(os.environ["SWCOMPAT_VK_DRIVER"]).resolve()
+          data = json.loads(manifest.read_text())
+          # The extracted distribution has a prefix-relative library path.
+          # Make the CI-local copy absolute, without patching the driver.
+          data["ICD"]["library_path"] = str(driver)
+          manifest.write_text(json.dumps(data, indent=2) + "\\n")
+          print("Resolved ICD driver:", driver)
+          PY
+          echo "Resolved KosmicKrisp ICD contents:"
           cat "$VK_ICD"
       - name: Download pinned Khronos Vulkan headers
         shell: bash
@@ -63,13 +78,13 @@ jobs:
             probes/native_vulkan_features.c -o build/native_vk_features
       - name: Run KosmicKrisp instance and nullDescriptor test
         shell: bash
-        env:
-          VK_DRIVER_FILES: ${{ env.SWCOMPAT_VK_ICD }}
-          VK_ICD_FILENAMES: ${{ env.SWCOMPAT_VK_ICD }}
-          DYLD_LIBRARY_PATH: ${{ env.SWCOMPAT_VK_LIBRARY_DIR }}
         run: |
           set -o pipefail
-          ./build/native_vk_features "$SWCOMPAT_VK_LOADER" | tee build/kosmickrisp-features.txt
+          export VK_DRIVER_FILES="$SWCOMPAT_VK_ICD"
+          export VK_ICD_FILENAMES="$SWCOMPAT_VK_ICD"
+          export DYLD_LIBRARY_PATH="$SWCOMPAT_VK_LIBRARY_DIR"
+          export VK_LOADER_DEBUG=all
+          ./build/native_vk_features "$SWCOMPAT_VK_LOADER" 2>&1 | tee build/kosmickrisp-features.txt
       - name: Summarize device support
         if: always()
         shell: bash
