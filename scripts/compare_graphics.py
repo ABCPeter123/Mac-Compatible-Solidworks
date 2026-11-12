@@ -73,6 +73,8 @@ def main() -> int:
             f"- Native CGL: **{finding['native_cgl']}**\n"
             f"- Wine WGL: **{finding['wine_wgl']}**\n"
             f"- Wine pixel-format count: `{finding['wine_pixel_formats']}`\n"
+            f"- Window-capable formats: `{finding['wine_onscreen_gl_formats']}`\n"
+            f"- Bitmap-capable formats: `{finding['wine_bitmap_gl_formats']}`\n"
             f"- Failure stage: `{finding['wine_failure_stage']}`\n\n"
             f"{finding['assessment']}\n\n"
             "This does not test SOLIDWORKS installation or activation.\n")
