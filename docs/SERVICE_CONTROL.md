@@ -55,6 +55,27 @@ The standard Wine experiment verifies service registration through `SERVICE_QUER
 
 The same test also queries access rights while retaining the original SCM handle in the single-process control. Comparing these two sets of signals will distinguish an access-rights problem from service-object visibility between processes. No workaround is considered validated until an actual service can run, stop and be deleted using the intended lifecycle.
 
+## Confirmed Apple Silicon access-rights comparison
+
+In [run 43298673742](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43298673742) the Mac cross-process lifecycle failed even with a persistent Wine client and bounded 1055/1060 retries.
+
+The detailed `OpenServiceW` probe gave the following comparison:
+
+| Access mask | Separate process after registration | Original controller holding SCM handle |
+| --- | --- | --- |
+| SERVICE_QUERY_STATUS | ERROR_SERVICE_DOES_NOT_EXIST (1060) | Open succeeds |
+| SERVICE_START | ERROR_SERVICE_DOES_NOT_EXIST (1060) | Open succeeds |
+| SERVICE_STOP | ERROR_SERVICE_DOES_NOT_EXIST (1060) | Open succeeds |
+| DELETE | ERROR_SERVICE_DOES_NOT_EXIST (1060) | Open succeeds |
+| SERVICE_QUERY_STATUS plus SERVICE_START | ERROR_SERVICE_DOES_NOT_EXIST (1060) | Open succeeds |
+| SERVICE_ALL_ACCESS | ERROR_SERVICE_DOES_NOT_EXIST (1060) | Open succeeds |
+
+In the same-process diagnostic, startup initially returned 1055 (`ERROR_SERVICE_DATABASE_LOCKED`) but succeeded on the fifth retry. The service then ran with process ID 640, stopped and was deleted successfully.
+
+**Conclusion supported by this experiment:** the Wine 11.21 Apple Silicon SCM test service is not consistently discoverable from separate controller processes. All tested masks fail in that context, so adjusting the access mask alone is not a workaround. A same-process service lifecycle is demonstrated, but general cross-process service compatibility is not.
+
+This finding is limited to the GitHub-hosted macOS 15 Apple Silicon runner and the pinned Gcenx Wine 11.21 distribution. It does not establish the behavior of other macOS Wine builds or physical hardware.
+
 ## Scope
 
 A passing test establishes only these Service Control Manager operations. It does not prove compatibility with kernel drivers, system-level license services, SOLIDWORKS background components, Windows service accounts, or CAD functionality.
