@@ -15,6 +15,8 @@ on:
       - 'probes/win_service_smoke.c'
       - 'scripts/service_smoke.py'
       - 'tests/test_service_smoke.py'
+      - 'scripts/service_single_report.py'
+      - 'tests/test_service_single_report.py'
   workflow_dispatch:
 
 permissions:
@@ -105,13 +107,31 @@ jobs:
           sudo apt-get install -y --no-install-recommends wine wine64 xvfb xauth
       - name: Initialize isolated Wine prefix
         run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/service-prefix" --logs-dir build/logs init
-      - name: Verify Service Control Manager behavior
+      - name: Record potentially intermittent cross-process SCM result
+        continue-on-error: true
         run: xvfb-run -a python -m scripts.service_smoke --host wine --prefix "$RUNNER_TEMP/service-prefix" --keepalive --diagnose-access --exe build/service_smoke.exe --output build/service-result.json
+      - name: Initialize independent Wine prefix for strict service lifecycle
+        run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/service-single-prefix" --logs-dir build/single-logs init
+      - name: Run original Windows service using one retained SCM handle
+        shell: bash
+        run: |
+          set +e
+          export WINEPREFIX="$RUNNER_TEMP/service-single-prefix" WINEARCH=win64 WINEDEBUG=-all
+          xvfb-run -a wine "$PWD/build/service_smoke.exe" single-roundtrip > build/service-single-roundtrip.log 2>&1
+          RESULT=$?
+          printf 'SWCOMPAT_SINGLE_EXIT_CODE=%s\n' "$RESULT" >> "$GITHUB_ENV"
+          cat build/service-single-roundtrip.log
+          exit 0
+      - name: Require complete service state transitions and process ID
+        run: python -m scripts.service_single_report --input build/service-single-roundtrip.log --exit-code "$SWCOMPAT_SINGLE_EXIT_CODE" --output build/service-single-result.json --summary "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: swcompat-service-linux-wine
-          path: build/service-result.json
+          path: |
+            build/service-result.json
+            build/service-single-roundtrip.log
+            build/service-single-result.json
           if-no-files-found: warn
           retention-days: 7
 

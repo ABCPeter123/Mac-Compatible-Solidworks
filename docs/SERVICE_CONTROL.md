@@ -109,6 +109,14 @@ The CI now preserves both reports and enforces `SWCOMPAT_SERVICE_SINGLE_PROCESS=
 
 The single-process success establishes working basic SCM lifecycle functionality for this test. It does **not** repair arbitrary Windows service installations, multi-process service controllers, real SOLIDWORKS background services, kernel drivers or licensing.
 
+## Linux SCM reliability follow-up
+
+The earlier Linux Wine result passed on a hosted runner with a persistent Wine client, but the [first merged main run 43303238908](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43303238908) reproduced a failure on a fresh runner: `StartServiceW` returned 1053 (`ERROR_SERVICE_REQUEST_TIMEOUT`). Therefore **cross-process Wine SCM lifecycle is not consistently reliable** in this environment.
+
+We retain its JSON report as a best-effort diagnostic. Linux CI now runs a second, disposable Wine prefix and **requires** the same strict retained-SCM-handle lifecycle test used on Apple Silicon. A zero process exit code alone is insufficient: the validator checks service creation, running state, a nonzero process ID, successful stop, deletion, and final absence. Failure of the strict test continues to fail the job.
+
+This preserves the negative result without turning nondeterministic cross-process service startup into a misleading assertion of broad compatibility. The actual SOLIDWORKS service and licensing behaviors remain untested.
+
 ## Scope
 
 A passing test establishes only these Service Control Manager operations. It does not prove compatibility with kernel drivers, system-level license services, SOLIDWORKS background components, Windows service accounts, or CAD functionality.
