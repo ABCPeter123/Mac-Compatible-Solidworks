@@ -49,6 +49,24 @@ class StagingTests(unittest.TestCase):
             self.assertEqual(item["sha256"], hashlib.sha256(
                 (self.dest / item["name"]).read_bytes()).hexdigest())
 
+    def test_staging_does_not_follow_wine_runtime_symlinks(self):
+        for name in ("opengl32.dll", "libgallium_wgl.dll"):
+            fake_pe(self.source / "x64" / name, AMD64)
+        shared = self.root / "wine-shared-opengl32.dll"
+        shared.write_bytes(b"protected upstream Wine binary")
+        (self.dest / "opengl32.dll").symlink_to(shared)
+        stage(self.source, self.dest)
+        self.assertEqual(shared.read_bytes(), b"protected upstream Wine binary")
+        self.assertFalse((self.dest / "opengl32.dll").is_symlink())
+        self.assertEqual(pe_machine(self.dest / "opengl32.dll"), AMD64)
+
+    def test_staging_backs_up_regular_existing_dlls(self):
+        for name in ("opengl32.dll", "libgallium_wgl.dll"):
+            fake_pe(self.source / "x64" / name, AMD64)
+        (self.dest / "opengl32.dll").write_bytes(b"old DLL")
+        stage(self.source, self.dest)
+        self.assertEqual((self.dest / "opengl32.dll.swcompat-backup").read_bytes(), b"old DLL")
+
     def test_reject_missing_required_dll(self):
         fake_pe(self.source / "x64/opengl32.dll", AMD64)
         with self.assertRaisesRegex(ValueError, "Missing x64"):
