@@ -13,6 +13,11 @@ on:
 permissions:
   contents: read
 
+# Push and pull_request runs share one experiment branch identity.
+concurrency:
+  group: service-scm-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build original Windows x64 service and controller
