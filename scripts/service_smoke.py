@@ -6,6 +6,7 @@ Use only a temporary Wine prefix or a short-lived authorized Windows CI runner.
 from __future__ import annotations
 import argparse
 import json
+import time
 from pathlib import Path
 from scripts.functional_smoke import execute, wine_environment, wine_path
 from swcompat.cli import find_wine
@@ -45,19 +46,46 @@ def run_sequence(host: str, wine: str | None, prefix: Path, exe: Path) -> dict:
     try:
         report["install"] = run("install")
         if succeeded(report["install"], "install"):
-            report["start"] = run("start")
-            if succeeded(report["start"], "start"):
-                report["stop"] = run("stop")
+            # Some Wine service databases take a moment to expose a newly
+            # created service to another Windows process. Record that delay.
+            for attempt in range(25):
+                observation = run("status")
+                report["registration_visibility"] = observation
+                report["registration_poll_attempts"] = attempt + 1
+                if succeeded(observation, "status"):
+                    break
+                time.sleep(0.4)
+
+            if succeeded(report["registration_visibility"], "status"):
+                report["start"] = run("start")
+                if succeeded(report["start"], "start"):
+                    report["after_start"] = run("status")
+                    if succeeded(report["after_start"], "status"):
+                        report["stop"] = run("stop")
     finally:
         if "stop" not in report:
             report["cleanup_stop"] = run("stop")
         report["delete"] = run("delete")
         report["after"] = run("absent")
+        # DeleteService marks a service for deletion; an in-flight process or
+        # Wine service database update can delay final disappearance.
+        if succeeded(report["delete"], "delete"):
+            for attempt in range(25):
+                if succeeded(report["after"], "absent"):
+                    break
+                time.sleep(0.4)
+                report["after"] = run("absent")
+                report["deletion_poll_attempts"] = attempt + 2
 
     report["passed"] = all(succeeded(report.get(name, {}), phase)
         for name, phase in (("before", "absent"), ("install", "install"),
-                            ("start", "start"), ("stop", "stop"),
-                            ("delete", "delete"), ("after", "absent")))
+                            ("registration_visibility", "status"),
+                            ("start", "start"), ("after_start", "status"),
+                            ("stop", "stop"), ("delete", "delete"),
+                            ("after", "absent")))
+    report["passed"] = report["passed"] and (
+        "SWCOMPAT_SERVICE_STATE=4" in
+        report.get("after_start", {}).get("output", "").splitlines())
     report["scope"] = (
         "Original harmless Windows service tests SCM create, start, running, "
         "stop and deregistration. No SOLIDWORKS service, kernel driver or "
@@ -84,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(f"Windows service lifecycle: {'PASS' if report['passed'] else 'FAIL'}")
-    for step in ("before","install","start","stop","cleanup_stop","delete","after"):
+    for step in ("before","install","registration_visibility","start","after_start","stop","cleanup_stop","delete","after"):
         if step in report:
             data=report[step]
             print(f"{step}: exit_code={data['exit_code']}")
