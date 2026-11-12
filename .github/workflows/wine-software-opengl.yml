@@ -1,0 +1,177 @@
+name: Windows OpenGL software rendering on macOS
+
+on:
+  push:
+    paths:
+      - '.github/workflows/wine-software-opengl.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: software-opengl-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probes:
+    name: Build independent Windows WGL test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MinGW
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+      - run: sh scripts/build-wgl-probe.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: software-wgl-probes
+          path: build/*.exe
+          retention-days: 3
+
+  mesa:
+    name: Verify CPU renderer Mesa 25.1.9
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install sevenzip
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends p7zip-full
+      - name: Download checksum-pinned Mesa 25.1.9
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/mesa-extract build/mesa-payload
+          curl --fail --location --retry 3 \
+            --output "$RUNNER_TEMP/mesa-25.1.9.7z" \
+            "https://github.com/pal1000/mesa-dist-win/releases/download/25.1.9/mesa3d-25.1.9-release-mingw.7z"
+          echo "5d6cd7fe78c524a534bdfa92bfb437cb914c9d291ab5f4d48185a71f2d8a2210  $RUNNER_TEMP/mesa-25.1.9.7z" | sha256sum -c -
+          7z x -y -o"build/mesa-extract" "$RUNNER_TEMP/mesa-25.1.9.7z" >/dev/null
+      - name: Select x64 DLLs
+        run: |
+          python - <<'PY'
+          import shutil
+          from pathlib import Path
+          from scripts.stage_zink import select_dlls
+          for name, source in select_dlls(Path("build/mesa-extract")).items():
+              target = Path("build/mesa-payload") / name
+              shutil.copy2(source, target)
+              print(f"Staged {source}: {target.stat().st_size} bytes")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: software-x64-mesa
+          path: build/mesa-payload/*.dll
+          retention-days: 3
+
+  linux-control:
+    name: Linux Wine Windows x64 llvmpipe control
+    runs-on: ubuntu-24.04
+    needs: [probes, mesa]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: software-wgl-probes
+          path: build
+      - uses: actions/download-artifact@v4
+        with:
+          name: software-x64-mesa
+          path: build/mesa-payload
+      - name: Install Wine and virtual X server
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine wine64 xvfb xauth libgl1-mesa-dri
+      - name: Initialize isolated Wine prefix
+        run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/wine-software" --logs-dir build/logs init
+      - name: Stage Mesa OpenGL DLLs
+        run: python -m scripts.stage_zink --source build/mesa-payload --prefix "$RUNNER_TEMP/wine-software" --manifest build/mesa-stage.json
+      - name: Run Windows WGL using llvmpipe, no Vulkan backend
+        shell: bash
+        env:
+          WINEDLLOVERRIDES: opengl32,libgallium_wgl,libglapi=n,b
+          GALLIUM_DRIVER: llvmpipe
+          MESA_LOADER_DRIVER_OVERRIDE: llvmpipe
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/wine-software" --logs-dir build/logs probe-wgl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: software-linux-logs
+          path: |
+            build/mesa-stage.json
+            build/logs/*.log
+          if-no-files-found: warn
+          retention-days: 7
+
+  macos-control:
+    name: Apple Silicon Wine Windows x64 llvmpipe test
+    runs-on: macos-15
+    needs: [probes, mesa]
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: software-wgl-probes
+          path: build
+      - uses: actions/download-artifact@v4
+        with:
+          name: software-x64-mesa
+          path: build/mesa-payload
+      - name: Download Wine 11.21 and validate SHA-256
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-devel-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-devel-11.21-osx64.tar.xz"
+          echo "9909b486657e10ab66c7279371ae1f990345b596b3b1b3a0cf21f28af24fa0ce  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-build"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-build"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Initialize isolated Wine prefix
+        run: python -m swcompat --prefix "$RUNNER_TEMP/wine-software" --logs-dir build/logs init
+      - name: Stage Windows Mesa software renderer
+        run: python -m scripts.stage_zink --source build/mesa-payload --prefix "$RUNNER_TEMP/wine-software" --manifest build/mesa-stage.json
+      - name: Test CPU-only Windows OpenGL context creation
+        shell: bash
+        env:
+          WINEDLLOVERRIDES: opengl32,libgallium_wgl,libglapi=n,b
+          GALLIUM_DRIVER: llvmpipe
+          MESA_LOADER_DRIVER_OVERRIDE: llvmpipe
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: |
+          python -m swcompat --prefix "$RUNNER_TEMP/wine-software" --logs-dir build/logs probe-win32
+          python -m swcompat --prefix "$RUNNER_TEMP/wine-software" --logs-dir build/logs probe-wgl
+      - name: Summarize actual context result
+        if: always()
+        shell: bash
+        run: |
+          echo "## Windows OpenGL CPU rendering, macOS 15 Apple Silicon" >> "$GITHUB_STEP_SUMMARY"
+          echo "Wine 11.21 and Mesa 25.1.9 x64, no GPU or proprietary CAD required." >> "$GITHUB_STEP_SUMMARY"
+          if grep -l '^SWCOMPAT_WGL=PASS' build/logs/*-wgl-*.log; then
+            echo "WGL context: **PASS**" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "WGL context: **FAIL or not run**" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: software-macos-logs
+          path: |
+            build/mesa-stage.json
+            build/logs/*.log
+          if-no-files-found: warn
+          retention-days: 7
