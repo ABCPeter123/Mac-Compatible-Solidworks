@@ -112,6 +112,8 @@ def parser() -> argparse.ArgumentParser:
     wgl.add_argument("--exe", type=Path, default=ROOT / "build/wgl_probe.exe")
     bitmap = sub.add_parser("probe-bitmap", help="Test offscreen Wine WGL bitmap rendering")
     bitmap.add_argument("--exe", type=Path, default=ROOT / "build/wgl_bitmap_probe.exe")
+    prereq = sub.add_parser("probe-prereqs", help="Read-only Windows installer API and runtime reconnaissance")
+    prereq.add_argument("--exe", type=Path, default=ROOT / "build/win_prereq_probe.exe")
     installer = sub.add_parser("install", help="Launch a legitimately obtained SOLIDWORKS installer")
     installer.add_argument("exe", type=Path)
     launcher = sub.add_parser("launch", help="Launch an existing Windows executable")
@@ -165,6 +167,21 @@ def main(argv: list[str] | None = None) -> int:
         if status:
             summarize(path)
         return status
+    if args.command == "probe-prereqs":
+        exe = args.exe.expanduser().resolve()
+        if not exe.is_file():
+            print(f"Missing prerequisite executable: {exe}", file=sys.stderr)
+            return 2
+        status, path = capture([str(wine), str(exe)], prefix, logs, "prereqs", timeout=60)
+        output = path.read_text(encoding="utf-8", errors="replace")
+        complete = status == 0 and "SWCOMPAT_PREREQ_SCHEMA=1" in output and "SWCOMPAT_PREREQ_PROBE=PASS" in output
+        print(f"Installer prerequisite probe: {'COMPLETE' if complete else 'FAILED'}; log: {path}")
+        for line in output.splitlines():
+            if line.startswith("SWCOMPAT_PREREQ_"):
+                print(line)
+        if not complete:
+            summarize(path)
+        return 0 if complete else (status or 1)
     if args.command in ("probe-wgl", "probe-bitmap"):
         exe = args.exe.expanduser().resolve()
         if not exe.is_file():
