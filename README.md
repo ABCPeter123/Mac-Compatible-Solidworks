@@ -28,6 +28,12 @@ Our first hosted macOS tests proved Windows x64 execution but **not** WGL graphi
 
 We now test **Mesa Zink → Vulkan/MoltenVK → Metal**, using an independent Windows x64 OpenGL probe and a checksum-pinned Mesa 26.2.6 Windows distribution. See the [Zink experiment](.github/workflows/wine-zink-macos.yml) and [documented evidence](docs/KNOWN_ISSUES.md). Test logs are published as workflow artifacts. The experiment uses only open-source runtime DLLs and a disposable Wine prefix, never SOLIDWORKS binaries.
 
+### Confirmed Apple Silicon Windows OpenGL software-rendering fallback
+
+Our [macOS and Linux experiment](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43261277885) succeeded at **Windows x64 WGL OpenGL 4.5 context creation** on hosted Apple Silicon, using Wine 11.21 plus Mesa 25.1.9 with the `llvmpipe` software renderer. This avoids the missing Vulkan features that blocked the newer Mesa Zink path. The independent Windows program creates a context, selects a pixel format, clears the viewport, and swaps buffers. The stricter pixel-readback test and latest CI results are tracked in [the software OpenGL workflow](.github/workflows/wine-software-opengl.yml).
+
+See [software OpenGL installation and launching](docs/SOFTWARE_OPENGL.md) for a reproducible test configuration and `scripts.software_launch` launcher. This is still experimental, potentially slow CPU rendering. **The actual SOLIDWORKS installer, activation, and CAD functions have not been tested.**
+
 ## Local development
 
 Requires Python 3.10+:

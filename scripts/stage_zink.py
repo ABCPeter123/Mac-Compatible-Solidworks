@@ -12,6 +12,7 @@ from pathlib import Path
 import shutil
 import struct
 import sys
+import time
 
 REQUIRED = ("opengl32.dll", "libgallium_wgl.dll")
 OPTIONAL = ("libglapi.dll",)
@@ -78,6 +79,23 @@ def stage(source: Path, destination: Path) -> dict:
     return manifest
 
 
+def prefix_is_ready(prefix: Path) -> bool:
+    return (prefix / "system.reg").is_file() and (prefix / "drive_c/windows/system32").is_dir()
+
+
+def wait_for_prefix(prefix: Path, timeout_seconds: float = 45.0) -> bool:
+    """Wine may return from wineboot before registry and system32 are written."""
+    if not prefix.is_dir():
+        return False
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        if prefix_is_ready(prefix):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.25)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path, required=True)
@@ -85,8 +103,13 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, default=Path("build/zink-stage.json"))
     args = parser.parse_args()
     prefix = args.prefix.expanduser().resolve()
-    if not (prefix / "system.reg").exists() or not (prefix / "drive_c/windows/system32").is_dir():
-        parser.error("Target must be an initialized Wine prefix with a Windows system32 directory.")
+    if not wait_for_prefix(prefix):
+        missing = []
+        if not (prefix / "system.reg").is_file():
+            missing.append("system.reg")
+        if not (prefix / "drive_c/windows/system32").is_dir():
+            missing.append("drive_c/windows/system32")
+        parser.error("Wine prefix was not ready after initialization; missing: " + ", ".join(missing))
     try:
         report = stage(args.source.resolve(), prefix / "drive_c/windows/system32")
     except ValueError as exc:

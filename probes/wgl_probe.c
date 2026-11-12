@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <GL/gl.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 static int failure(const char *step) {
     printf("SWCOMPAT_STAGE=%s\nSWCOMPAT_WINERR=%lu\nSWCOMPAT_WGL=FAIL\n", step, GetLastError());
@@ -110,7 +111,26 @@ int main(void) {
     glViewport(0, 0, 640, 480);
     glClearColor(0.1f, 0.2f, 0.3f, 1);
     glClear(GL_COLOR_BUFFER_BIT);
-    SwapBuffers(dc);
+#ifdef SWCOMPAT_VERIFY_PIXEL
+    /* A real framebuffer check, stronger than merely creating a context.
+       Basic WGL and pixel-validation builds remain separate test binaries. */
+    glFinish();
+    GLboolean double_buffer = GL_FALSE;
+    glGetBooleanv(GL_DOUBLEBUFFER, &double_buffer);
+    glReadBuffer(double_buffer ? GL_BACK : GL_FRONT);
+    unsigned char pixel[4] = {0, 0, 0, 0};
+    glReadPixels(320, 240, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    GLenum err = glGetError();
+    printf("SWCOMPAT_PIXEL_RGBA=%u,%u,%u,%u\n",
+           pixel[0], pixel[1], pixel[2], pixel[3]);
+    printf("SWCOMPAT_GL_ERROR=%u\n", (unsigned int)err);
+    fflush(stdout);
+    if (err != GL_NO_ERROR || abs((int)pixel[0] - 26) > 4 ||
+        abs((int)pixel[1] - 51) > 4 || abs((int)pixel[2] - 77) > 4)
+        return failure("PixelReadback");
+    printf("SWCOMPAT_PIXEL_READBACK=PASS\n");
+#endif
+    if (!SwapBuffers(dc)) return failure("SwapBuffers");
     printf("SWCOMPAT_WGL=PASS\n");
     fflush(stdout);
     wglMakeCurrent(NULL, NULL);

@@ -4,7 +4,7 @@ import struct
 import tempfile
 import unittest
 
-from scripts.stage_zink import AMD64, pe_machine, select_dlls, stage
+from scripts.stage_zink import AMD64, pe_machine, select_dlls, stage, prefix_is_ready, wait_for_prefix
 
 
 def fake_pe(path, machine):
@@ -25,6 +25,17 @@ class StagingTests(unittest.TestCase):
         self.source = self.root / "archive"
         self.dest = self.root / "windows" / "system32"
         self.dest.mkdir(parents=True)
+
+    def test_prefix_initialization_readiness(self):
+        prefix = self.root / "wineprefix"
+        self.assertFalse(wait_for_prefix(prefix, timeout_seconds=0))
+        prefix.mkdir()
+        self.assertFalse(wait_for_prefix(prefix, timeout_seconds=0))
+        (prefix / "drive_c/windows/system32").mkdir(parents=True)
+        self.assertFalse(prefix_is_ready(prefix))
+        (prefix / "system.reg").write_text("Wine registry")
+        self.assertTrue(prefix_is_ready(prefix))
+        self.assertTrue(wait_for_prefix(prefix, timeout_seconds=0))
 
     def test_machine_header(self):
         x64 = self.source / "x64/opengl32.dll"
