@@ -6,4 +6,5 @@ command -v "$CC" >/dev/null 2>&1 || { echo "Missing MinGW-w64 cross compiler: $C
 mkdir -p "$ROOT/build"
 "$CC" -std=c11 -O2 -Wall -Wextra "$ROOT/probes/wgl_probe.c" -o "$ROOT/build/wgl_probe.exe" -lopengl32 -lgdi32 -luser32
 "$CC" -std=c11 -O2 -Wall -Wextra "$ROOT/probes/wgl_bitmap_probe.c" -o "$ROOT/build/wgl_bitmap_probe.exe" -lopengl32 -lgdi32 -luser32
-echo "Built build/wgl_probe.exe and build/wgl_bitmap_probe.exe"
+"$CC" -std=c11 -O2 -Wall -Wextra -DSWCOMPAT_VERIFY_PIXEL=1 "$ROOT/probes/wgl_probe.c" -o "$ROOT/build/wgl_pixel_probe.exe" -lopengl32 -lgdi32 -luser32
+echo "Built basic WGL, bitmap WGL, and pixel-verified WGL executables"
