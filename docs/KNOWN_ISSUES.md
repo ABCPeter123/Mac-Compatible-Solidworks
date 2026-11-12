@@ -2,6 +2,38 @@
 
 Updated 2026-11-12. Results here refer to **our independent test executable**, not SOLIDWORKS.
 
+## Root cause identified: bundled Wine compiled without OpenGL
+
+The Gcenx Wine 11.21 macOS distribution we originally used documents `--without-opengl` and `--without-x` in its [official build configuration](https://github.com/Gcenx/macOS_Wine_builds/blob/master/README.md). Therefore our original Windows WGL experiments cannot establish a macOS OpenGL implementation defect: **we chose a Wine binary built without the OpenGL backend**.
+
+Reproducible observations on the hosted machines were valid, but the initial interpretation was incomplete:
+
+- Native Apple CGL/OpenGL runs using a 2.1 software renderer.
+- Wine exposes 12 bitmap-only pixel formats (`0x78`) and **zero** window-capable formats.
+- Wine cannot create a windowed WGL context; its bitmap context creation also fails.
+- Native Metal rendering succeeds and returns the expected pixels on **both Intel and Apple Silicon macOS**.
+- Linux Wine with Mesa llvmpipe exposes 96 window-capable formats and successfully renders Windows OpenGL 4.5.
+
+### Active mitigation: Mesa Zink
+
+Instead of replacing the licensed SOLIDWORKS executable, we are testing a standard Windows Mesa OpenGL DLL stack:
+
+```text
+SOLIDWORKS / independent Win32 test.exe
+             |
+      Mesa opengl32.dll (Windows x64)
+             |
+       Gallium / Zink
+             |
+       Wine Vulkan loader
+             |
+      MoltenVK -> macOS Metal
+```
+
+The [dedicated Zink feasibility workflow](../.github/workflows/wine-zink-macos.yml) pins Mesa `26.2.6` and Wine `11.21` to exact SHA-256 checksums. It injects the AMD64 DLLs into a **disposable Wine prefix** and verifies a Windows WGL probe. No SOLIDWORKS files are used.
+
+Mesa Zink is an engineering experiment, **not proof** of SOLIDWORKS compatibility. The hosted Mac may still lack Vulkan portability features or an interactive display suitable for CAD. A successful WGL sample would only unblock further compatibility work.
+
 ## Confirmed, Intel GitHub-hosted macOS
 
 Experiment [initial run](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43239479218) and [isolated call run](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43240516020):
