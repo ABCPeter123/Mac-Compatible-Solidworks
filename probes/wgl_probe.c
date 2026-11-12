@@ -22,18 +22,58 @@ int main(void) {
     if (!hwnd) return failure("CreateWindowExW");
     HDC dc = GetDC(hwnd);
     if (!dc) return failure("GetDC");
-    PIXELFORMATDESCRIPTOR pfd = {0};
-    pfd.nSize = sizeof(pfd);
-    pfd.nVersion = 1;
-    pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
-    pfd.iPixelType = PFD_TYPE_RGBA;
-    pfd.cColorBits = 24;
-    pfd.cDepthBits = 24;
-    pfd.iLayerType = PFD_MAIN_PLANE;
-    SetLastError(0);
-    int pf = ChoosePixelFormat(dc, &pfd);
-    DWORD choose_error = GetLastError();
     printf("SWCOMPAT_WINDOW_VALID=%d\n", IsWindow(hwnd) ? 1 : 0);
+    printf("SWCOMPAT_DISPLAY_BITS=%d\n", GetDeviceCaps(dc, BITSPIXEL));
+    printf("SWCOMPAT_DISPLAY_PLANES=%d\n", GetDeviceCaps(dc, PLANES));
+    PIXELFORMATDESCRIPTOR available = {0};
+    SetLastError(0);
+    int count = DescribePixelFormat(dc, 1, sizeof(available), &available);
+    printf("SWCOMPAT_PIXELFORMAT_COUNT=%d\n", count);
+    printf("SWCOMPAT_DESCRIBE_LASTERROR=%lu\n", GetLastError());
+    if (count > 0) {
+        printf("SWCOMPAT_FIRST_FORMAT_FLAGS=%lu\n", (unsigned long)available.dwFlags);
+        printf("SWCOMPAT_FIRST_FORMAT_COLOR=%u\n", available.cColorBits);
+    }
+
+    /* Probe multiple requirements before concluding that the host has no
+       compatible WGL format. ChoosePixelFormat does not modify the HDC. */
+    struct candidate {
+        const char *name;
+        DWORD flags;
+        BYTE color_bits;
+        BYTE depth_bits;
+    };
+    const struct candidate candidates[] = {
+        {"doublebuffer_24", PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER, 24, 24},
+        {"singlebuffer_24", PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL, 24, 0},
+        {"singlebuffer_auto", PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL, 0, 0},
+        {"doublebuffer_auto", PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER, 0, 0},
+        {"doublebuffer_dontcare", PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER_DONTCARE, 0, 0},
+    };
+    PIXELFORMATDESCRIPTOR pfd = {0};
+    int pf = 0;
+    DWORD choose_error = 0;
+    unsigned int selected = 0;
+    for (unsigned int i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
+        pfd = (PIXELFORMATDESCRIPTOR){0};
+        pfd.nSize = sizeof(pfd);
+        pfd.nVersion = 1;
+        pfd.dwFlags = candidates[i].flags;
+        pfd.iPixelType = PFD_TYPE_RGBA;
+        pfd.cColorBits = candidates[i].color_bits;
+        pfd.cDepthBits = candidates[i].depth_bits;
+        pfd.iLayerType = PFD_MAIN_PLANE;
+        SetLastError(0);
+        int selected_pf = ChoosePixelFormat(dc, &pfd);
+        choose_error = GetLastError();
+        printf("SWCOMPAT_CANDIDATE_%s=%d\n", candidates[i].name, selected_pf);
+        printf("SWCOMPAT_CANDIDATE_%s_LASTERROR=%lu\n", candidates[i].name, choose_error);
+        if (selected_pf) {
+            pf = selected_pf;
+            selected = i;
+            break;
+        }
+    }
     printf("SWCOMPAT_PIXELFORMAT_CHOICE=%d\n", pf);
     printf("SWCOMPAT_CHOOSE_LASTERROR=%lu\n", choose_error);
     fflush(stdout);
@@ -41,6 +81,7 @@ int main(void) {
         SetLastError(choose_error);
         return failure("ChoosePixelFormat");
     }
+    printf("SWCOMPAT_SELECTED_CANDIDATE=%s\n", candidates[selected].name);
     SetLastError(0);
     if (!SetPixelFormat(dc, pf, &pfd)) return failure("SetPixelFormat");
     printf("SWCOMPAT_PIXELFORMAT_SET=PASS\n");
