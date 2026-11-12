@@ -94,19 +94,19 @@ jobs:
       - name: Verify Vulkan software ICD exists
         run: |
           ls -la /usr/share/vulkan/icd.d/
-          test -f /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+          test -f /usr/share/vulkan/icd.d/lvp_icd.json
       - name: Initialize isolated Wine prefix
         run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/zink-linux-prefix" --logs-dir build/logs init
       - name: Verify Windows Vulkan physical device via lavapipe
         env:
-          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
         run: |
           xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/zink-linux-prefix" --logs-dir build/logs probe-vulkan
       - name: Stage exact Windows x64 Mesa Zink DLLs
         run: python -m scripts.stage_zink --source build/zink-payload --prefix "$RUNNER_TEMP/zink-linux-prefix" --manifest build/zink-stage-linux.json
       - name: Test Windows WGL using Mesa Zink and Vulkan lavapipe
         env:
-          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
           WINEDLLOVERRIDES: opengl32,libgallium_wgl,libglapi=n,b
           GALLIUM_DRIVER: zink
           MESA_LOADER_DRIVER_OVERRIDE: zink
