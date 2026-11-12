@@ -1,0 +1,111 @@
+name: KosmicKrisp Vulkan 1.4 on macOS 26
+
+on:
+  push:
+    paths:
+      - '.github/workflows/kosmickrisp-macos.yml'
+      - 'probes/native_vulkan_features.c'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kosmickrisp-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-driver:
+    name: Native Apple Silicon Vulkan robustness2 capability
+    runs-on: macos-26
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - name: Confirm macOS 26 Apple Silicon host
+        run: |
+          sw_vers
+          uname -m
+          test "$(uname -m)" = arm64
+          mkdir -p build
+      - name: Download checksum-pinned KosmicKrisp 26.3.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/kosmickrisp-macos-arm64.zip"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/rokuz/kosmickrisp-binaries/releases/download/mesa-mesa-26.3.0/kosmickrisp-macos-arm64.zip"
+          echo "d92c1eb5be8be3c2723495fb0fad72f9e762e447029e6bfd0364a20c73ad9b74  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p build/kk
+          unzip -q "$ARCHIVE" -d build/kk
+          find build/kk -maxdepth 6 -type f | head -70
+          VK_LOADER="$(find "$PWD/build/kk" -type f -name libvulkan.dylib -print -quit)"
+          VK_DRIVER="$(find "$PWD/build/kk" -type f -name libvulkan_kosmickrisp.dylib -print -quit)"
+          VK_ICD="$(find "$PWD/build/kk" -type f -name '*.json' -path '*/icd.d/*' -print -quit)"
+          test -n "$VK_LOADER" && test -n "$VK_DRIVER" && test -n "$VK_ICD"
+          echo "SWCOMPAT_VK_LOADER=$VK_LOADER" >> "$GITHUB_ENV"
+          echo "SWCOMPAT_VK_ICD=$VK_ICD" >> "$GITHUB_ENV"
+          echo "SWCOMPAT_VK_LIBRARY_DIR=$(dirname "$VK_LOADER")" >> "$GITHUB_ENV"
+          export SWCOMPAT_VK_ICD="$VK_ICD"
+          export SWCOMPAT_VK_DRIVER="$VK_DRIVER"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          manifest = Path(os.environ["SWCOMPAT_VK_ICD"])
+          driver = Path(os.environ["SWCOMPAT_VK_DRIVER"]).resolve()
+          data = json.loads(manifest.read_text())
+          # The extracted distribution has a prefix-relative library path.
+          # Make the CI-local copy absolute, without patching the driver.
+          data["ICD"]["library_path"] = str(driver)
+          manifest.write_text(json.dumps(data, indent=2))
+          print("Resolved ICD driver:", driver)
+          PY
+          echo "Resolved KosmicKrisp ICD contents:"
+          cat "$VK_ICD"
+          echo "KosmicKrisp Mach-O dynamic dependencies:"
+          otool -L "$VK_DRIVER"
+      - name: Install open-source SPIRV-Tools runtime
+        run: |
+          brew list --versions spirv-tools || brew install spirv-tools
+          test -f /opt/homebrew/opt/spirv-tools/lib/libSPIRV-Tools.dylib
+      - name: Download pinned Khronos Vulkan headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch vulkan-sdk-1.4.363.0 \
+            https://github.com/KhronosGroup/Vulkan-Headers.git build/Vulkan-Headers
+          test "$(git -C build/Vulkan-Headers rev-parse HEAD)" = \
+            "6802bb4733b63ed5efd3adb308a6c885ef180ea1"
+      - name: Build native Vulkan feature checker
+        shell: bash
+        run: |
+          xcrun clang -std=c11 -O2 -Wall -Wextra \
+            -I build/Vulkan-Headers/include \
+            probes/native_vulkan_features.c -o build/native_vk_features
+      - name: Run KosmicKrisp instance and nullDescriptor test
+        shell: bash
+        run: |
+          set -o pipefail
+          export VK_DRIVER_FILES="$SWCOMPAT_VK_ICD"
+          export VK_ICD_FILENAMES="$SWCOMPAT_VK_ICD"
+          export DYLD_LIBRARY_PATH="$SWCOMPAT_VK_LIBRARY_DIR"
+          export VK_LOADER_DEBUG=all
+          ./build/native_vk_features "$SWCOMPAT_VK_LOADER" 2>&1 | tee build/kosmickrisp-features.txt
+      - name: Summarize device support
+        if: always()
+        shell: bash
+        run: |
+          echo "## Native KosmicKrisp on hosted macOS 26" >> "$GITHUB_STEP_SUMMARY"
+          echo "Pinned Mesa driver 26.3.0; no SOLIDWORKS or Wine binaries used." >> "$GITHUB_STEP_SUMMARY"
+          if test -f build/kosmickrisp-features.txt; then
+            grep '^SWCOMPAT_' build/kosmickrisp-features.txt >> "$GITHUB_STEP_SUMMARY" || true
+          else
+            echo "Vulkan feature probe did not run." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kosmickrisp-macos26-features
+          path: build/kosmickrisp-features.txt
+          if-no-files-found: warn
+          retention-days: 14
