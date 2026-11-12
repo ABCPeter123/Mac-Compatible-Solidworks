@@ -20,6 +20,8 @@ class CLITests(unittest.TestCase):
             '#!/bin/sh\n'
             'if [ "$1" = "--version" ]; then echo wine-11-test; exit 0; fi\n'
             'if [ "$1" = "cmd.exe" ]; then echo Microsoft Windows; exit 0; fi\n'
+            'if [ "$1" = "winecfg" ]; then exit 0; fi\n'
+            'case "$1" in *prereq.exe) printf "SWCOMPAT_PREREQ_SCHEMA=1\\nSWCOMPAT_PREREQ_PROBE=PASS\\n"; exit 0;; esac\n'
             'case "$1" in *bitmap.exe) echo SWCOMPAT_BITMAP_WGL=PASS; exit 0;; '
             '*good.exe) echo SWCOMPAT_WGL=PASS; exit 0;; '
             '*bad.exe) echo SWCOMPAT_WGL=FAIL; exit 0;; esac\n'
@@ -61,6 +63,23 @@ class CLITests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("PASS", output)
         self.assertEqual(len(list(self.logs.glob("*-win32-*.log"))), 1)
+
+    def test_windows11_profile_command_isolated_prefix(self):
+        self.assertEqual(self.invoke("set-winver", "win11")[0], 2)
+        self.assertEqual(self.invoke("init")[0], 0)
+        code, message = self.invoke("set-winver", "win11")
+        self.assertEqual(code, 0)
+        self.assertIn("APPLIED", message)
+        self.assertEqual(len(list(self.logs.glob("*-winver-*.log"))), 1)
+
+    def test_installer_prerequisite_probe_requires_completion_marker(self):
+        self.assertEqual(self.invoke("init")[0], 0)
+        good = self.root / "prereq.exe"
+        good.touch()
+        code, message = self.invoke("probe-prereqs", "--exe", str(good))
+        self.assertEqual(code, 0)
+        self.assertIn("COMPLETE", message)
+        self.assertIn("SWCOMPAT_PREREQ_PROBE=PASS", message)
 
     def test_wgl_requires_success_marker_not_only_exit_zero(self):
         self.assertEqual(self.invoke("init")[0], 0)
