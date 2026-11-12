@@ -82,14 +82,16 @@ jobs:
         run: sh scripts/build-wgl-probe.sh
       - name: Verify Windows binary and imports
         run: |
-          file build/wgl_probe.exe
-          x86_64-w64-mingw32-objdump -p build/wgl_probe.exe > build/imports.txt
-          grep -qi 'DLL Name: OPENGL32.dll' build/imports.txt
-          grep -qi 'DLL Name: USER32.dll' build/imports.txt
+          for executable in build/wgl_probe.exe build/wgl_bitmap_probe.exe; do
+            file "$executable"
+            x86_64-w64-mingw32-objdump -p "$executable" > build/imports.txt
+            grep -qi 'DLL Name: OPENGL32.dll' build/imports.txt
+            grep -qi 'DLL Name: GDI32.dll' build/imports.txt
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64-wgl-probe
-          path: build/wgl_probe.exe
+          path: build/*.exe
           retention-days: 14
 
   wine-smoke-linux:
