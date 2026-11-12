@@ -123,6 +123,22 @@ jobs:
       - name: Test real .NET Framework managed execution
         continue-on-error: true
         run: xvfb-run -a python -m scripts.functional_smoke managed --host wine --prefix "$RUNNER_TEMP/smoke-prefix" --output build/dotnet-functional.json
+      - name: Download and verify Wine Mono 11.3.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --output build/wine-mono-11.3.0-x86.msi "https://github.com/wine-mono/wine-mono/releases/download/wine-mono-11.3.0/wine-mono-11.3.0-x86.msi"
+          echo "df2dfc1665c2511882e7cabd56eafd0c0a3d94e5a7e86f969277f6c189d418d3  build/wine-mono-11.3.0-x86.msi" | sha256sum -c -
+      - name: Install open-source Wine Mono in disposable Wine prefix
+        continue-on-error: true
+        shell: bash
+        run: |
+          export WINEPREFIX="$RUNNER_TEMP/smoke-prefix" WINEARCH=win64 WINEDEBUG=-all
+          MSI="$(python -c 'from pathlib import Path; from scripts.functional_smoke import wine_path; print(wine_path(Path("build/wine-mono-11.3.0-x86.msi")))')"
+          xvfb-run -a wine msiexec.exe /i "$MSI" /qn /norestart
+      - name: Repeat functional managed test with Wine Mono 11.3.0
+        continue-on-error: true
+        run: xvfb-run -a python -m scripts.functional_smoke managed --host wine --runtime-label wine-mono-11.3.0 --prefix "$RUNNER_TEMP/smoke-prefix" --output build/dotnet-mono-functional.json
       - name: Preserve results and state limitations
         if: always()
         shell: bash
@@ -132,7 +148,7 @@ jobs:
           from pathlib import Path
           with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as fp:
               fp.write("## Linux Wine functional prerequisite checks\n\n")
-              for scenario in ("msi","dotnet"):
+              for scenario in ("msi","dotnet","dotnet-mono"):
                   file=Path(f"build/{scenario}-functional.json")
                   result=json.loads(file.read_text()) if file.exists() else {}
                   fp.write(f"- {scenario}: **{'PASS' if result.get('passed') else 'FAIL / NOT RUN'}**\n")
@@ -145,15 +161,15 @@ jobs:
           path: build/*-functional.json
           if-no-files-found: warn
           retention-days: 7
-      - name: Enforce both actual functional outcomes
+      - name: Enforce MSI and managed execution with Wine Mono
         if: always()
-        run: python -c 'import json; from pathlib import Path; assert all(json.loads(Path(f"build/{s}-functional.json").read_text()).get("passed") for s in ["msi","dotnet"])'
+        run: python -c 'import json; from pathlib import Path; assert all(json.loads(Path(f"build/{s}-functional.json").read_text()).get("passed") for s in ["msi","dotnet-mono"])'
 
   macos-wine:
     name: Apple Silicon Wine functional prerequisites
     needs: [build-msi, build-managed]
     runs-on: macos-15
-    timeout-minutes: 22
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -188,6 +204,22 @@ jobs:
       - name: Test .NET managed tasks, XML, hashing and file IO
         continue-on-error: true
         run: python -m scripts.functional_smoke managed --host wine --prefix "$RUNNER_TEMP/smoke-prefix" --output build/dotnet-functional.json
+      - name: Download and verify Wine Mono 11.3.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --output build/wine-mono-11.3.0-x86.msi "https://github.com/wine-mono/wine-mono/releases/download/wine-mono-11.3.0/wine-mono-11.3.0-x86.msi"
+          echo "df2dfc1665c2511882e7cabd56eafd0c0a3d94e5a7e86f969277f6c189d418d3  build/wine-mono-11.3.0-x86.msi" | shasum -a 256 -c -
+      - name: Install open-source Wine Mono in disposable Wine prefix
+        continue-on-error: true
+        shell: bash
+        run: |
+          export WINEPREFIX="$RUNNER_TEMP/smoke-prefix" WINEARCH=win64 WINEDEBUG=-all
+          MSI="$(python -c 'from pathlib import Path; from scripts.functional_smoke import wine_path; print(wine_path(Path("build/wine-mono-11.3.0-x86.msi")))')"
+          "$SWCOMPAT_WINE" msiexec.exe /i "$MSI" /qn /norestart
+      - name: Repeat functional managed test with Wine Mono 11.3.0
+        continue-on-error: true
+        run: python -m scripts.functional_smoke managed --host wine --runtime-label wine-mono-11.3.0 --prefix "$RUNNER_TEMP/smoke-prefix" --output build/dotnet-mono-functional.json
       - name: Summarize actual runtime behavior
         if: always()
         shell: bash
@@ -197,7 +229,7 @@ jobs:
           from pathlib import Path
           with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as fp:
               fp.write("## Apple Silicon macOS Wine functional prerequisite checks\n\n")
-              for scenario in ("msi","dotnet"):
+              for scenario in ("msi","dotnet","dotnet-mono"):
                   file=Path(f"build/{scenario}-functional.json")
                   result=json.loads(file.read_text()) if file.exists() else {}
                   fp.write(f"- {scenario}: **{'PASS' if result.get('passed') else 'FAIL / NOT RUN'}**\n")
@@ -210,6 +242,6 @@ jobs:
           path: build/*-functional.json
           if-no-files-found: warn
           retention-days: 7
-      - name: Enforce MSI and managed smoke success
+      - name: Enforce MSI and Wine Mono managed smoke success
         if: always()
-        run: python -c 'import json; from pathlib import Path; assert all(json.loads(Path(f"build/{s}-functional.json").read_text()).get("passed") for s in ["msi","dotnet"])'
+        run: python -c 'import json; from pathlib import Path; assert all(json.loads(Path(f"build/{s}-functional.json").read_text()).get("passed") for s in ["msi","dotnet-mono"])'
