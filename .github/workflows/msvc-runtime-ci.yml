@@ -1,0 +1,150 @@
+name: Microsoft Visual C++ dynamic runtime behavior on Wine
+
+on:
+  push:
+    paths:
+      - '.github/workflows/msvc-runtime-ci.yml'
+      - 'probes/msvc_runtime_smoke.cpp'
+      - 'scripts/msvc_runtime_check.py'
+      - 'tests/test_msvc_runtime_check.py'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: msvc-runtime-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Compile genuine MSVC /MD x64 and x86 applications
+    runs-on: windows-2025
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile native MSVC 2022 C++17 executables
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build | Out-Null
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (!(Test-Path $vswhere)) { throw 'vswhere.exe not installed' }
+          $location = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $location) { throw 'MSVC compiler toolchain unavailable' }
+          $vcvars = Join-Path $location 'VC\Auxiliary\Build\vcvarsall.bat'
+          if (!(Test-Path $vcvars)) { throw 'vcvarsall.bat not installed' }
+          foreach ($arch in @('x64','x86')) {
+            $output = "build\msvc_$arch.exe"
+            $command = 'call "' + $vcvars + '" ' + $arch + ' >nul && cl /nologo /std:c++17 /EHsc /MD /O2 /W4 probes\msvc_runtime_smoke.cpp /Fe:' + $output
+            & cmd.exe /d /c $command
+            if ($LASTEXITCODE -ne 0) { throw "MSVC $arch compilation failed" }
+            if (!(Test-Path $output)) { throw "Missing $output" }
+            Write-Output "Built $output using $location"
+          }
+      - name: Check binaries import Microsoft runtime DLLs
+        shell: pwsh
+        run: |
+          $dumpbin = Get-ChildItem -Path 'C:\Program Files\Microsoft Visual Studio' -Filter dumpbin.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $dumpbin) { throw 'dumpbin.exe unavailable' }
+          foreach ($arch in @('x64','x86')) {
+            $imports = & $dumpbin /dependents "build\msvc_$arch.exe" | Out-String
+            Write-Output $imports
+            if ($imports -notmatch 'MSVCP140.dll' -or $imports -notmatch 'VCRUNTIME140.dll') {
+              throw "MSVC $arch program did not import both dynamic runtime DLLs"
+            }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: original-msvc-runtime-probes
+          path: build/msvc_*.exe
+          retention-days: 6
+
+  windows-reference:
+    name: Native Windows x86 and x64 reference
+    needs: build
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: original-msvc-runtime-probes
+          path: build
+      - name: Execute genuine MSVC dynamic runtime programs
+        shell: pwsh
+        run: |
+          python -m scripts.msvc_runtime_check --host native --arch x64 --exe build/msvc_x64.exe --output build/msvc-native-x64.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m scripts.msvc_runtime_check --host native --arch x86 --exe build/msvc_x86.exe --output build/msvc-native-x86.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: msvc-native-results
+          path: build/msvc-native-*.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  macos-wine:
+    name: Apple Silicon Wine MSVC x64 and x86 runtime behavior
+    needs: build
+    runs-on: macos-15
+    timeout-minutes: 23
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: original-msvc-runtime-probes
+          path: build
+      - name: Install checksum-pinned macOS Wine 11.21
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-devel-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-devel-11.21-osx64.tar.xz"
+          echo "9909b486657e10ab66c7279371ae1f990345b596b3b1b3a0cf21f28af24fa0ce  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-build"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-build"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Initialize isolated 64-bit Wine prefix
+        run: python -m swcompat --prefix "$RUNNER_TEMP/msvc-prefix" --logs-dir build/logs init
+      - name: Execute x64 MSVC C++ runtime test
+        continue-on-error: true
+        run: python -m scripts.msvc_runtime_check --host wine --arch x64 --prefix "$RUNNER_TEMP/msvc-prefix" --exe build/msvc_x64.exe --output build/msvc-mac-x64.json
+      - name: Execute x86 MSVC C++ runtime test
+        continue-on-error: true
+        run: python -m scripts.msvc_runtime_check --host wine --arch x86 --prefix "$RUNNER_TEMP/msvc-prefix" --exe build/msvc_x86.exe --output build/msvc-mac-x86.json
+      - name: Summarize observed runtime execution
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as f:
+              f.write("## Apple Silicon Windows MSVC dynamic runtime tests\n\n")
+              for arch in ("x64", "x86"):
+                  path = Path(f"build/msvc-mac-{arch}.json")
+                  data = json.loads(path.read_text()) if path.is_file() else {}
+                  f.write(f"- MSVC {arch}: **{'PASS' if data.get('passed') else 'FAIL / NOT RUN'}**\n")
+              f.write("\nThis checks standalone VC++ runtime behavior, not SOLIDWORKS or official VC++ redistributable installation.\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: msvc-macos-wine-results
+          path: build/msvc-mac-*.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Assert both MSVC programs execute
+        if: always()
+        run: python -c 'import json; from pathlib import Path; assert all(json.loads(Path(f"build/msvc-mac-{a}.json").read_text()).get("passed") for a in ("x64","x86"))'
