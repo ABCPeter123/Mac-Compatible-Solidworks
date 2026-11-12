@@ -2,7 +2,7 @@ name: Experimental macOS Wine execution
 
 on:
   push:
-    paths: ['.github/workflows/wine-macos-experimental.yml', 'probes/wgl_probe.c', 'probes/cgl_probe.c', 'swcompat/cli.py']
+    paths: ['.github/workflows/wine-macos-experimental.yml', 'probes/wgl_probe.c', 'probes/cgl_probe.c', 'swcompat/cli.py', 'scripts/compare_graphics.py']
   workflow_dispatch:
 
 permissions:
@@ -102,6 +102,7 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Probe failures mark this experimental job failed. Logs and host reports upload even after failures." >> "$GITHUB_STEP_SUMMARY"
           python -m scripts.ci_report --require-macos --output build/host.json || true
+          python -m scripts.compare_graphics --summary "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
