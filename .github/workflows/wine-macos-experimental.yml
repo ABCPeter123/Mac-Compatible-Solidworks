@@ -29,6 +29,49 @@ jobs:
           path: build/*.exe
           retention-days: 3
 
+  linux-wine-reference:
+    name: Linux Mesa software-WGL reference
+    needs: windows-probe
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: experimental-wgl-probe
+          path: build
+      - name: Install Wine and Mesa Xvfb software rendering
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine wine64 xvfb xauth libgl1-mesa-dri mesa-utils
+      - name: Initialize Wine in Xvfb
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/linuxprefix" --logs-dir build/logs init
+      - name: Execute Windows x64 console process
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/linuxprefix" --logs-dir build/logs probe-win32
+      - name: Test windowed WGL through Mesa
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/linuxprefix" --logs-dir build/logs probe-wgl
+      - name: Test offscreen bitmap WGL through Mesa
+        continue-on-error: true
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/linuxprefix" --logs-dir build/logs probe-bitmap
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-mesa-wine-reference-logs
+          path: build/logs/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
   macos-wine:
     name: Wine 11.21 (${{ matrix.os }})
     needs: windows-probe
