@@ -77,11 +77,36 @@ static DWORD await_state(SC_HANDLE handle, DWORD required) {
     return 0;
 }
 
+/* Report exactly which OpenServiceW rights can be obtained. Read-only. */
+static void inspect_service_access(SC_HANDLE scm) {
+    struct service_mask { DWORD rights; const char *label; };
+    static const struct service_mask masks[] = {
+        {SERVICE_QUERY_STATUS, "QUERY"},
+        {SERVICE_START, "START"},
+        {SERVICE_STOP, "STOP"},
+        {DELETE, "DELETE"},
+        {SERVICE_QUERY_STATUS | SERVICE_START, "QUERY_START"},
+        {SERVICE_ALL_ACCESS, "ALL"}
+    };
+    for (unsigned i = 0; i < sizeof(masks) / sizeof(masks[0]); i++) {
+        SetLastError(0);
+        SC_HANDLE service = OpenServiceW(scm, SERVICE_NAME, masks[i].rights);
+        DWORD error = service ? 0 : GetLastError();
+        printf("SWCOMPAT_SERVICE_ACCESS_%s=%s\n",
+               masks[i].label, service ? "PRESENT" : "ABSENT");
+        printf("SWCOMPAT_SERVICE_ACCESS_%s_ERROR=%lu\n",
+               masks[i].label, (unsigned long)error);
+        if (service) CloseServiceHandle(service);
+    }
+    fflush(stdout);
+}
+
 static int manage(const wchar_t *action, const wchar_t *exe) {
     const char *phase = "unknown";
     if (!wcscmp(action, L"absent")) phase = "absent";
     else if (!wcscmp(action, L"install")) phase = "install";
     else if (!wcscmp(action, L"status")) phase = "status";
+    else if (!wcscmp(action, L"access")) phase = "access";
     else if (!wcscmp(action, L"start")) phase = "start";
     else if (!wcscmp(action, L"stop")) phase = "stop";
     else if (!wcscmp(action, L"delete")) phase = "delete";
@@ -91,6 +116,11 @@ static int manage(const wchar_t *action, const wchar_t *exe) {
                        ? SC_MANAGER_CREATE_SERVICE | SC_MANAGER_CONNECT : SC_MANAGER_CONNECT;
     SC_HANDLE scm = OpenSCManagerW(NULL, NULL, scm_rights);
     if (!scm) return result(phase, GetLastError(), 0, FALSE);
+    if (!wcscmp(action, L"access")) {
+        inspect_service_access(scm);
+        CloseServiceHandle(scm);
+        return result("access", 0, 0, TRUE);
+    }
     DWORD state = 0, error = 0;
     BOOL ok = FALSE;
     SC_HANDLE handle = NULL;
@@ -198,6 +228,7 @@ static int single_process_roundtrip(void) {
     }
     puts("SWCOMPAT_SERVICE_SINGLE_CREATE=PASS");
     fflush(stdout);
+    inspect_service_access(scm);
     DWORD start_error = 0, stop_error = 0, delete_error = 0;
     DWORD running = 0, stopped = 0, process_id = 0;
     BOOL started = StartServiceW(handle, 0, NULL);
@@ -284,7 +315,7 @@ static int single_process_roundtrip(void) {
 
 int wmain(int argc, wchar_t **argv) {
     if (argc < 2) {
-        fputs("Usage: service_smoke.exe single-roundtrip|run|hold|absent|install <path>|status|start|stop|delete\n",stderr);
+        fputs("Usage: service_smoke.exe single-roundtrip|run|hold|absent|install <path>|status|access|start|stop|delete\n",stderr);
         return 2;
     }
     if (!wcscmp(argv[1], L"single-roundtrip"))

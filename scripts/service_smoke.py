@@ -24,7 +24,8 @@ def succeeded(data: dict, phase: str) -> bool:
             and (phase not in STATE or f"SWCOMPAT_SERVICE_STATE={STATE[phase]}" in lines))
 
 
-def _run_sequence(host: str, wine: str | None, prefix: Path, exe: Path) -> dict:
+def _run_sequence(host: str, wine: str | None, prefix: Path, exe: Path,
+                  diagnose_access: bool = False) -> dict:
     if not exe.is_file():
         raise ValueError(f"Service test executable missing: {exe}")
     env = wine_environment(prefix, host)
@@ -58,6 +59,8 @@ def _run_sequence(host: str, wine: str | None, prefix: Path, exe: Path) -> dict:
                 time.sleep(0.4)
 
             if succeeded(report["registration_visibility"], "status"):
+                if diagnose_access:
+                    report["access_rights"] = run("access")
                 # Wine's service database can briefly return 1055 (locked)
                 # or 1060 (not visible) while services.exe finishes startup.
                 # Only retry these diagnosed transients; do not mask failures.
@@ -108,9 +111,9 @@ def _run_sequence(host: str, wine: str | None, prefix: Path, exe: Path) -> dict:
 
 
 def run_sequence(host: str, wine: str | None, prefix: Path, exe: Path,
-                 keepalive: bool = False) -> dict:
+                 keepalive: bool = False, diagnose_access: bool = False) -> dict:
     if not keepalive:
-        return _run_sequence(host, wine, prefix, exe)
+        return _run_sequence(host, wine, prefix, exe, diagnose_access=diagnose_access)
     if host != "wine" or not wine:
         raise ValueError("The keepalive experiment is restricted to a Wine prefix")
     if not exe.is_file():
@@ -123,7 +126,7 @@ def run_sequence(host: str, wine: str | None, prefix: Path, exe: Path,
         time.sleep(1.0)
         if keeper.poll() is not None:
             raise ValueError("Wine keepalive client terminated before SCM test")
-        report = _run_sequence(host, wine, prefix, exe)
+        report = _run_sequence(host, wine, prefix, exe, diagnose_access=diagnose_access)
         report["wine_keepalive_client"] = True
         return report
     finally:
@@ -143,6 +146,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--wine")
     parser.add_argument("--keepalive", action="store_true",
                         help="Keep an independent Wine client active between SCM operations")
+    parser.add_argument("--diagnose-access", action="store_true",
+                        help="Record individual SCM OpenServiceW rights after registration")
     parser.add_argument("--exe", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -152,13 +157,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         report = run_sequence(args.host, str(wine) if wine else None,
                               args.prefix.expanduser().resolve(), args.exe.expanduser().resolve(),
-                              keepalive=args.keepalive)
+                              keepalive=args.keepalive,
+                              diagnose_access=args.diagnose_access)
     except ValueError as exc:
         report = {"host": args.host, "passed": False, "error": str(exc)}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(f"Windows service lifecycle: {'PASS' if report['passed'] else 'FAIL'}")
-    for step in ("before","install","registration_visibility","start","after_start","stop","cleanup_stop","delete","after"):
+    for step in ("before","install","registration_visibility","access_rights","start","after_start","stop","cleanup_stop","delete","after"):
         if step in report:
             data=report[step]
             print(f"{step}: exit_code={data['exit_code']}")

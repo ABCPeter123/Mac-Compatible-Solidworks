@@ -49,6 +49,12 @@ The regular cross-process test still failed with error 1060. A follow-up therefo
 
 Microsoft documents `QUERY_SERVICE_LOCK_STATUS.dwLockDuration` in **seconds**. The diagnostic marker reports the correct unit.
 
+## Service access-rights differential
+
+The standard Wine experiment verifies service registration through `SERVICE_QUERY_STATUS` before attempting startup through `SERVICE_QUERY_STATUS | SERVICE_START`. Because macOS has allowed the status lookup but returned error 1060 from the startup controller, the probe now records **six** `OpenServiceW` access masks separately: QUERY, START, STOP, DELETE, QUERY+START and ALL_ACCESS. This operation does not start or modify a service.
+
+The same test also queries access rights while retaining the original SCM handle in the single-process control. Comparing these two sets of signals will distinguish an access-rights problem from service-object visibility between processes. No workaround is considered validated until an actual service can run, stop and be deleted using the intended lifecycle.
+
 ## Scope
 
 A passing test establishes only these Service Control Manager operations. It does not prove compatibility with kernel drivers, system-level license services, SOLIDWORKS background components, Windows service accounts, or CAD functionality.
