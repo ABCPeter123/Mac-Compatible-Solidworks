@@ -2,7 +2,7 @@ name: Experimental macOS Wine execution
 
 on:
   push:
-    paths: ['.github/workflows/wine-macos-experimental.yml', 'probes/wgl_probe.c', 'probes/cgl_probe.c', 'swcompat/cli.py', 'scripts/compare_graphics.py']
+    paths: ['.github/workflows/wine-macos-experimental.yml', 'probes/wgl_probe.c', 'probes/wgl_bitmap_probe.c', 'scripts/build-wgl-probe.sh', 'probes/cgl_probe.c', 'swcompat/cli.py', 'scripts/compare_graphics.py']
   workflow_dispatch:
 
 permissions:
@@ -26,7 +26,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: experimental-wgl-probe
-          path: build/wgl_probe.exe
+          path: build/*.exe
           retention-days: 3
 
   macos-wine:
@@ -95,8 +95,13 @@ jobs:
         shell: bash
         run: python -m swcompat --prefix "$RUNNER_TEMP/swcompat-prefix" --logs-dir build/logs probe-win32
       - name: Run x64 WGL viewport probe
+        continue-on-error: true
         shell: bash
         run: python -m swcompat --prefix "$RUNNER_TEMP/swcompat-prefix" --logs-dir build/logs probe-wgl
+      - name: Test offscreen Windows bitmap WGL rendering
+        continue-on-error: true
+        shell: bash
+        run: python -m swcompat --prefix "$RUNNER_TEMP/swcompat-prefix" --logs-dir build/logs probe-bitmap
       - name: Summarize reproducible diagnostics
         if: always()
         shell: bash
@@ -117,3 +122,13 @@ jobs:
             build/logs/*.log
           if-no-files-found: warn
           retention-days: 7
+      - name: Assert onscreen WGL compatibility
+        if: always()
+        shell: bash
+        run: |
+          if grep -l '^SWCOMPAT_WGL=PASS' build/logs/*-wgl-*.log; then
+            echo "Onscreen WGL works"
+          else
+            echo "Onscreen WGL did not pass. Experimental offscreen success cannot replace it."
+            exit 1
+          fi
