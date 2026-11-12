@@ -29,18 +29,21 @@ df2dfc1665c2511882e7cabd56eafd0c0a3d94e5a7e86f969277f6c189d418d3
 
 Official project: https://github.com/wine-mono/wine-mono
 
-## Current results
+## Verified functional results
 
-First run: https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43276248202
+Passing three-platform test run: https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43276979403
 
-| Host | MSI install + removal | Managed Framework sample |
-| --- | --- | --- |
-| Windows Server 2025 | PASS, including file and registration checks | PASS |
-| Ubuntu 24.04 Wine 9.0, clean prefix | PASS, including file and registration checks | FAIL, process exit 255 |
-| Apple Silicon Wine 11.21 | Pending | Pending |
-| Wine with explicitly installed Wine Mono 11.3.0 | Follow-up in progress | Follow-up in progress |
+| Host | MSI install + removal | Managed smoke in clean prefix | Managed smoke after Wine Mono 11.3.0 |
+| --- | --- | --- | --- |
+| Windows Server 2025 | PASS | PASS, native Microsoft CLR | Not applicable |
+| Ubuntu 24.04 Wine 9.0 | PASS | FAIL, exit 255 | PASS |
+| Apple Silicon Wine 11.21 | PASS | PASS | PASS |
 
-When the GitHub workflow finishes, detailed test results are attached as JSON artifacts and displayed in the step summaries. The Windows reference is not a supported client operating system for SOLIDWORKS Design.
+All MSI PASS results include verification of file content, Windows Installer registration, and successful uninstall with file and registration removal. Managed PASS includes tasks, XML, SHA256 hashing and file I/O.
+
+The macOS Wine build passed the managed test before this workflow explicitly installed Wine Mono. That does not reveal which managed runtime the bundled distribution had already provided; a fully native Microsoft .NET Framework 4.8.1 runtime was **not** verified. The Linux clean prefix lacked working managed execution, while adding Wine Mono enabled our test to execute.
+
+Reports for all scenarios are preserved as JSON workflow artifacts. The Windows reference runs on Server 2025 and is **not** a supported SOLIDWORKS Design client environment. This result does not prove the genuine SOLIDWORKS installer, .NET 4.8.1 equivalence, or CAD application support.
 
 ## Running
 
