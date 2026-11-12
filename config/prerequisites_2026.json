@@ -1,0 +1,85 @@
+{
+  "product": "SOLIDWORKS Design 2026",
+  "reference_environment": {
+    "operating_system": "Windows 11 x64",
+    "architecture": "x86_64",
+    "notes": "Wine/macOS is experimental and unsupported as a native SOLIDWORKS installation. Registry and API probes are signals, not functional verification."
+  },
+  "requirements": [
+    {
+      "id": "vc_x64",
+      "name": "Microsoft Visual C++ 2022 Redistributable x64",
+      "classification": "required",
+      "probe": "VC_X64_REGISTRY",
+      "verification": "registry_indication"
+    },
+    {
+      "id": "vc_x86",
+      "name": "Microsoft Visual C++ 2022 Redistributable x86",
+      "classification": "required",
+      "probe": "VC_X86_REGISTRY",
+      "verification": "registry_indication"
+    },
+    {
+      "id": "netfx481",
+      "name": ".NET Framework 4.8.1",
+      "classification": "required",
+      "probe": "NETFX481_REGISTRY",
+      "verification": "registry_indication"
+    },
+    {
+      "id": "vba71",
+      "name": "Visual Basic for Applications 7.1 and language package",
+      "classification": "listed_prerequisite",
+      "probe": null,
+      "verification": "not_tested"
+    },
+    {
+      "id": "swcef",
+      "name": "CEF for SOLIDWORKS Applications",
+      "classification": "listed_prerequisite",
+      "probe": null,
+      "verification": "not_tested"
+    },
+    {
+      "id": "webview2",
+      "name": "Microsoft Edge WebView2 Runtime",
+      "classification": "listed_prerequisite",
+      "probe": null,
+      "verification": "not_tested"
+    },
+    {
+      "id": "vsta17",
+      "name": "Microsoft Visual Studio Tools for Applications 2022",
+      "classification": "optional_component",
+      "probe": null,
+      "verification": "not_tested"
+    },
+    {
+      "id": "msi",
+      "name": "Windows Installer MSI API",
+      "classification": "compatibility_probe",
+      "probe": "MSI_EXPORTS",
+      "verification": "api_exports_only"
+    },
+    {
+      "id": "com",
+      "name": "COM apartment and ShellLink",
+      "classification": "compatibility_probe",
+      "probe": "SHELLLINK_COM",
+      "verification": "sample_com_class_only"
+    },
+    {
+      "id": "scm",
+      "name": "Service Control Manager access",
+      "classification": "compatibility_probe",
+      "probe": "SCM_CONNECT",
+      "verification": "connect_only"
+    }
+  ],
+  "sources": [
+    "https://www.solidworks.com/support/system-requirements",
+    "https://help.solidworks.com/2026/english/Installation/install_guide/c_prep_clients_admin_images.htm?id=0.2.2.0",
+    "https://help.solidworks.com/2026/english/Installation/install_guide/c_installing_on_individual_computers.htm"
+  ]
+}
