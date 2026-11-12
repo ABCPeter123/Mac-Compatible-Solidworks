@@ -93,6 +93,10 @@ python3 -m scripts.installer_evidence_report \
 
 Either input report is optional if unavailable. The output contains only known diagnostic categories and fixed next-step guidance. It never claims that SOLIDWORKS is installed or usable.
 
+## Microsoft WebView2 loader compatibility research
+
+The [Windows WebView2 SDK loader probe](docs/WEBVIEW2_LOADER.md) tests the genuine Microsoft loader's browser-version API on Windows Server, Linux Wine, and Apple Silicon Wine using the independent x64 executable. It distinguishes a callable SDK loader from a runtime that could not be discovered. This is a narrower prerequisite check, **not** a WebView2 browser-controller test or a SOLIDWORKS installation.
+
 ## Local development
 
 Requires Python 3.10+:

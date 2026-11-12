@@ -1,0 +1,174 @@
+name: WebView2 loader and runtime discovery
+
+on:
+  push:
+    paths:
+      - '.github/workflows/webview2-loader-ci.yml'
+      - 'probes/webview2_loader_probe.c'
+      - 'scripts/webview2_report.py'
+      - 'tests/test_webview2_report.py'
+  pull_request:
+    paths:
+      - '.github/workflows/webview2-loader-ci.yml'
+      - 'probes/webview2_loader_probe.c'
+      - 'scripts/webview2_report.py'
+      - 'tests/test_webview2_report.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Original x64 probe and official SDK loader
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test privacy-preserving result validator
+        run: python -m unittest discover -s tests -p "test_webview2_report.py" -v
+      - name: Install Windows cross compiler and unzip
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 unzip
+      - name: Compile x64 loader query
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra \
+            probes/webview2_loader_probe.c -o build/webview2_loader_probe.exe -lole32
+          x86_64-w64-mingw32-objdump -f build/webview2_loader_probe.exe | grep -qi pei-x86-64
+      - name: Download checksum-pinned official Microsoft WebView2 SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=1.0.4314.35
+          URL="https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/$VERSION/microsoft.web.webview2.$VERSION.nupkg"
+          curl --fail --location --retry 3 --output build/webview2-sdk.nupkg "$URL"
+          # Fixed SHA-256 captured from the official versioned NuGet package.
+          echo "90778deb1b77e36292828b4b5833c9255c27533f40e0ddd55891ae718944edc4  build/webview2-sdk.nupkg" | sha256sum -c -
+          unzip -p build/webview2-sdk.nupkg \
+            runtimes/win-x64/native/WebView2Loader.dll > build/WebView2Loader.dll
+          test -s build/WebView2Loader.dll
+          x86_64-w64-mingw32-objdump -f build/WebView2Loader.dll | grep -qi pei-x86-64
+          file build/WebView2Loader.dll
+          echo "d3fce90bdeecb08596e377dea6a316354dd8949e32ff09b89d51be00c14e21b6  build/WebView2Loader.dll" | sha256sum -c -
+      - uses: actions/upload-artifact@v4
+        with:
+          name: independent-x64-webview2-query-and-ms-loader
+          path: |
+            build/webview2_loader_probe.exe
+            build/WebView2Loader.dll
+          retention-days: 3
+
+  windows-reference:
+    name: Windows Server SDK loader query
+    needs: build
+    runs-on: windows-2025
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: independent-x64-webview2-query-and-ms-loader
+          path: build
+      - name: Run and classify the original Win64 executable
+        shell: pwsh
+        run: |
+          & .\build\webview2_loader_probe.exe 2>&1 | Out-File build\webview2-run.log -Encoding utf8
+          $result = $LASTEXITCODE
+          python -m scripts.webview2_report --input build/webview2-run.log --exit-code $result --output build/webview2-result.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: webview2-windows-sanitized-report
+          path: build/webview2-result.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  linux-wine:
+    name: Linux Wine clean-prefix WebView2 loader query
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: independent-x64-webview2-query-and-ms-loader
+          path: build
+      - name: Install Wine and display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine wine64 xvfb xauth
+      - name: Initialize disposable Wine prefix
+        run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/webview2-prefix" --logs-dir build/logs init
+      - name: Run official loader query with Wine
+        shell: bash
+        run: |
+          set +e
+          export WINEPREFIX="$RUNNER_TEMP/webview2-prefix" WINEARCH=win64 WINEDEBUG=-all
+          xvfb-run -a wine "$PWD/build/webview2_loader_probe.exe" > build/webview2-run.log 2>&1
+          code=$?
+          python -m scripts.webview2_report --input build/webview2-run.log --exit-code "$code" --output build/webview2-result.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: webview2-linux-wine-sanitized-report
+          path: build/webview2-result.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  macos-wine:
+    name: Apple Silicon Wine clean-prefix WebView2 loader query
+    needs: build
+    runs-on: macos-15
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: independent-x64-webview2-query-and-ms-loader
+          path: build
+      - name: Download checksum-pinned Wine 11.21
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-devel-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-devel-11.21-osx64.tar.xz"
+          echo "9909b486657e10ab66c7279371ae1f990345b596b3b1b3a0cf21f28af24fa0ce  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-build"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-build"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Initialize disposable Wine prefix
+        run: python -m swcompat --prefix "$RUNNER_TEMP/webview2-prefix" --logs-dir build/logs init
+      - name: Run official loader query under Apple Silicon Wine
+        shell: bash
+        run: |
+          set +e
+          export WINEPREFIX="$RUNNER_TEMP/webview2-prefix" WINEARCH=win64 WINEDEBUG=-all
+          "$SWCOMPAT_WINE" "$PWD/build/webview2_loader_probe.exe" > build/webview2-run.log 2>&1
+          code=$?
+          python -m scripts.webview2_report --input build/webview2-run.log --exit-code "$code" --output build/webview2-result.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: webview2-apple-silicon-sanitized-report
+          path: build/webview2-result.json
+          if-no-files-found: warn
+          retention-days: 7
