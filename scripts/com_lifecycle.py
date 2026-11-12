@@ -61,8 +61,12 @@ def lifecycle(host: str, wine: str | None, prefix: Path,
                                               ("activate", "activate"),
                                               ("unregister", unreg),
                                               ("after", "absent")))
-    report["scope"] = ("Registers an original HKCU COM server DLL and activates it "
-                       "in a separate Win32 process; not SOLIDWORKS COM compatibility")
+    report["scope"] = (
+        "Registers an original test COM DLL in " +
+        ("a Wine-only virtual HKCR view" if mode == "classes-root" else "HKCU") +
+        "; activates from a separate Win32 process, then unregisters. "
+        "This does not establish SOLIDWORKS COM compatibility."
+    )
     return report
 
 
