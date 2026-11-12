@@ -88,6 +88,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends wine wine64 xvfb xauth
       - name: Initialize isolated Wine prefix
         run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/service-prefix" --logs-dir build/logs init
+      - name: Keep Wine kernel/server persistent across separate Win32 controllers
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v wineserver
+          WINEPREFIX="$RUNNER_TEMP/service-prefix" wineserver -p
+          echo "SWCOMPAT_WIN_SERVER_PERSISTENT=1"
       - name: Verify Service Control Manager behavior
         run: xvfb-run -a python -m scripts.service_smoke --host wine --prefix "$RUNNER_TEMP/service-prefix" --exe build/service_smoke.exe --output build/service-result.json
       - uses: actions/upload-artifact@v4
@@ -125,8 +132,17 @@ jobs:
           WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
           test -n "$WINE_BIN" && test -x "$WINE_BIN"
           echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+          WINESERVER_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wineserver' -print -quit)"
+          test -n "$WINESERVER_BIN" && test -x "$WINESERVER_BIN"
+          echo "SWCOMPAT_WINESERVER=$WINESERVER_BIN" >> "$GITHUB_ENV"
       - name: Initialize isolated Wine prefix
         run: python -m swcompat --prefix "$RUNNER_TEMP/service-prefix" --logs-dir build/logs init
+      - name: Keep Wine kernel/server persistent across separate Win32 controllers
+        shell: bash
+        run: |
+          set -euo pipefail
+          WINEPREFIX="$RUNNER_TEMP/service-prefix" "$SWCOMPAT_WINESERVER" -p
+          echo "SWCOMPAT_WIN_SERVER_PERSISTENT=1"
       - name: Verify Service Control Manager behavior
         run: python -m scripts.service_smoke --host wine --prefix "$RUNNER_TEMP/service-prefix" --exe build/service_smoke.exe --output build/service-result.json
       - uses: actions/upload-artifact@v4
