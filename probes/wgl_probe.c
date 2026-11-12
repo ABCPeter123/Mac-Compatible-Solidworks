@@ -30,8 +30,20 @@ int main(void) {
     pfd.cColorBits = 24;
     pfd.cDepthBits = 24;
     pfd.iLayerType = PFD_MAIN_PLANE;
+    SetLastError(0);
     int pf = ChoosePixelFormat(dc, &pfd);
-    if (!pf || !SetPixelFormat(dc, pf, &pfd)) return failure("SetPixelFormat");
+    DWORD choose_error = GetLastError();
+    printf("SWCOMPAT_WINDOW_VALID=%d\n", IsWindow(hwnd) ? 1 : 0);
+    printf("SWCOMPAT_PIXELFORMAT_CHOICE=%d\n", pf);
+    printf("SWCOMPAT_CHOOSE_LASTERROR=%lu\n", choose_error);
+    fflush(stdout);
+    if (!pf) {
+        SetLastError(choose_error);
+        return failure("ChoosePixelFormat");
+    }
+    SetLastError(0);
+    if (!SetPixelFormat(dc, pf, &pfd)) return failure("SetPixelFormat");
+    printf("SWCOMPAT_PIXELFORMAT_SET=PASS\n");
     HGLRC gl = wglCreateContext(dc);
     if (!gl || !wglMakeCurrent(dc, gl)) return failure("wglCreateContext");
     const GLubyte *vendor = glGetString(GL_VENDOR);
