@@ -1,0 +1,115 @@
+name: Windows x86 helper support on Apple Silicon Wine
+
+on:
+  push:
+    paths:
+      - '.github/workflows/wow64-x86-ci.yml'
+      - 'scripts/wow64_report.py'
+      - 'tests/test_wow64_report.py'
+      - 'probes/win_prereq_probe.c'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-x86:
+    name: Build genuine Windows 32-bit executable
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install x86 MinGW-w64
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-i686
+      - name: Compile x86 prerequisite executable
+        run: |
+          mkdir -p build
+          i686-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra \
+            probes/win_prereq_probe.c -o build/win_prereq_x86.exe \
+            -lole32 -ladvapi32 -luuid
+          file build/win_prereq_x86.exe
+          file build/win_prereq_x86.exe | grep -q 'PE32 executable'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: win-prereq-x86
+          path: build/win_prereq_x86.exe
+          retention-days: 7
+
+  windows-x86:
+    name: Windows reference x86 process
+    runs-on: windows-2025
+    needs: build-x86
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: win-prereq-x86
+          path: build
+      - name: Run independent x86 process and validate interfaces
+        shell: pwsh
+        run: |
+          & .\build\win_prereq_x86.exe | Tee-Object -FilePath build/x86.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m scripts.wow64_report --input build/x86.log --output build/x86-report.json --host windows-server-2025
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: x86-windows-reference
+          path: |
+            build/x86.log
+            build/x86-report.json
+          retention-days: 7
+          if-no-files-found: warn
+
+  macos-x86:
+    name: Apple Silicon Wine x86 process and COM / MSI
+    runs-on: macos-15
+    needs: build-x86
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: win-prereq-x86
+          path: build
+      - name: Fetch checksum-pinned Wine 11.21
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-devel-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-devel-11.21-osx64.tar.xz"
+          echo "9909b486657e10ab66c7279371ae1f990345b596b3b1b3a0cf21f28af24fa0ce  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-build"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-build"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Initialize isolated win64 Wine prefix
+        run: python -m swcompat --prefix "$RUNNER_TEMP/wow64-prefix" --logs-dir build/logs init
+      - name: Run a genuine 32-bit Windows process in WoW64
+        run: python -m swcompat --prefix "$RUNNER_TEMP/wow64-prefix" --logs-dir build/logs probe-prereqs --exe build/win_prereq_x86.exe
+      - name: Verify x86 process and COM / MSI operation
+        shell: bash
+        run: |
+          set -euo pipefail
+          LOG="$(find build/logs -maxdepth 1 -name '*-prereqs-*.log' -print -quit)"
+          test -n "$LOG"
+          python -m scripts.wow64_report --input "$LOG" --output build/x86-report.json --host macos-15-apple-silicon-wine
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: x86-macos-wine
+          path: |
+            build/logs/*-prereqs-*.log
+            build/x86-report.json
+          retention-days: 7
+          if-no-files-found: warn
