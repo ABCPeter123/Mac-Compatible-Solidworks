@@ -54,6 +54,18 @@ python3 -m swcompat --prefix "$SWPREFIX" probe-wgl
 
 Use a disposable Wine prefix for testing. The staging script deliberately avoids following links into a shared Wine runtime and preserves existing regular files in `.swcompat-backup` files. It is not a software installation or activation workaround.
 
+For any existing **licensed** Windows `.exe`, you can use the separate launcher rather than exporting graphics settings manually:
+
+```sh
+python3 -m scripts.software_launch \
+  --wine "$SWCOMPAT_WINE" \
+  --prefix "$SWPREFIX" \
+  --exe "/path/to/your-program.exe"
+```
+
+The launcher checks that the x64 Mesa DLLs are present, then launches using `llvmpipe` and stores Wine logs in the standard SWCompat log directory. Starting a program does **not** demonstrate that it installs, activates, or works correctly. A desktop Mac's GUI activation and performance still require testing.
+
+
 ## Technical milestones
 
 1. Windows x64 process execution: confirmed on hosted macOS.
