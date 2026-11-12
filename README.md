@@ -70,6 +70,19 @@ python3 -m scripts.solidworks_log_triage \
 
 The tool recognizes a fixed set of MSI, COM, service, runtime, and WebView2 error patterns. It never exports raw log lines, user paths, license tokens, or unknown error codes. See [log collection and safe triage](docs/INSTALLATION_LOG_TRIAGE.md). A recognized error remains a possible diagnostic, not proof of its root cause.
 
+## Offline installer evidence correlation
+
+After generating either sanitized report, use the [offline evidence correlator](docs/INSTALLER_EVIDENCE_REPORT.md) to prioritize the next compatibility investigation:
+
+```sh
+python3 -m scripts.installer_evidence_report \
+  --media-report "$HOME/swcompat-preflight.json" \
+  --log-report "$HOME/swcompat-log-report.json" \
+  --output "$HOME/swcompat-evidence.json"
+```
+
+Either input report is optional if unavailable. The output contains only known diagnostic categories and fixed next-step guidance. It never claims that SOLIDWORKS is installed or usable.
+
 ## Local development
 
 Requires Python 3.10+:

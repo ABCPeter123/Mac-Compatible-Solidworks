@@ -1,0 +1,33 @@
+name: Offline SOLIDWORKS installer evidence correlation
+
+on:
+  push:
+    paths:
+      - '.github/workflows/installer-evidence-report.yml'
+      - 'scripts/installer_evidence_report.py'
+      - 'tests/test_installer_evidence_report.py'
+  pull_request:
+    paths:
+      - '.github/workflows/installer-evidence-report.yml'
+      - 'scripts/installer_evidence_report.py'
+      - 'tests/test_installer_evidence_report.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  safe-correlator:
+    name: Offline evidence report (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate correlations, schema, limits and privacy
+        run: python -m unittest discover -s tests -p "test_installer_evidence_report.py" -v
