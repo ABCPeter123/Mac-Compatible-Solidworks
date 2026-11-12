@@ -65,7 +65,7 @@ def wine_environment(prefix: Path, debug: bool = False) -> dict[str, str]:
     env = os.environ.copy()
     env["WINEPREFIX"] = str(prefix)
     env["WINEARCH"] = "win64"
-    env["WINEDEBUG"] = "+timestamp,+seh,+loaddll" if debug else "-all"
+    env["WINEDEBUG"] = "+timestamp,+seh,+loaddll,+wgl,+opengl" if debug else "-all"
     return env
 
 def log_path(directory: Path, label: str) -> Path:
