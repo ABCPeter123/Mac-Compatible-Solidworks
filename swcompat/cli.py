@@ -112,6 +112,8 @@ def parser() -> argparse.ArgumentParser:
     wgl.add_argument("--exe", type=Path, default=ROOT / "build/wgl_probe.exe")
     bitmap = sub.add_parser("probe-bitmap", help="Test offscreen Wine WGL bitmap rendering")
     bitmap.add_argument("--exe", type=Path, default=ROOT / "build/wgl_bitmap_probe.exe")
+    vk = sub.add_parser("probe-vulkan", help="Enumerate Vulkan devices via Windows x64 Wine")
+    vk.add_argument("--exe", type=Path, default=ROOT / "build/win32_vulkan_probe.exe")
     installer = sub.add_parser("install", help="Launch a legitimately obtained SOLIDWORKS installer")
     installer.add_argument("exe", type=Path)
     launcher = sub.add_parser("launch", help="Launch an existing Windows executable")
@@ -165,18 +167,20 @@ def main(argv: list[str] | None = None) -> int:
         if status:
             summarize(path)
         return status
-    if args.command in ("probe-wgl", "probe-bitmap"):
+    if args.command in ("probe-wgl", "probe-bitmap", "probe-vulkan"):
         exe = args.exe.expanduser().resolve()
         if not exe.is_file():
             print(f"Missing probe executable: {exe}; run ./scripts/build-wgl-probe.sh", file=sys.stderr)
             return 2
         is_bitmap = args.command == "probe-bitmap"
-        label = "bitmap" if is_bitmap else "wgl"
-        success_marker = "SWCOMPAT_BITMAP_WGL=PASS" if is_bitmap else "SWCOMPAT_WGL=PASS"
+        is_vulkan = args.command == "probe-vulkan"
+        label = "bitmap" if is_bitmap else ("vulkan" if is_vulkan else "wgl")
+        success_marker = ("SWCOMPAT_BITMAP_WGL=PASS" if is_bitmap else
+                          ("SWCOMPAT_VULKAN=PASS" if is_vulkan else "SWCOMPAT_WGL=PASS"))
         status, path = capture([str(wine), str(exe)], prefix, logs, label, timeout=90, debug=True)
         output = path.read_text(encoding="utf-8", errors="replace")
         passed = status == 0 and success_marker in output
-        print(f"{'Offscreen WGL' if is_bitmap else 'WGL'} probe: {'PASS' if passed else 'FAIL'}; log: {path}")
+        print(f"{'Offscreen WGL' if is_bitmap else ('Vulkan' if is_vulkan else 'WGL')} probe: {'PASS' if passed else 'FAIL'}; log: {path}")
         for line in output.splitlines():
             if line.startswith(("OPENGL_", "SWCOMPAT_")):
                 print(line)
