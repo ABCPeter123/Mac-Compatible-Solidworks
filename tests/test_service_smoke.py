@@ -70,6 +70,7 @@ class ServiceSmokeTests(unittest.TestCase):
     def test_keepalive_client_is_cleaned_after_failure(self):
         from unittest.mock import MagicMock
         with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp)/"drive_c").mkdir()
             exe=Path(tmp)/"service_smoke.exe"
             exe.touch()
             keeper=MagicMock()
