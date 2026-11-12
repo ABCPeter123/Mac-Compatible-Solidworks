@@ -6,7 +6,9 @@ Status: independent, **read-only** WebView2 SDK loader discovery. No SOLIDWORKS,
 
 SOLIDWORKS Design 2026 lists Microsoft Edge WebView2 among its installation prerequisites. The existing Windows prerequisites probe does not validate it. Microsoft provides an architecture-specific WebView2Loader.dll in the Microsoft.Web.WebView2 SDK NuGet package. The loader offers the documented GetAvailableCoreWebView2BrowserVersionString API to discover an available browser runtime.
 
-This experiment obtains SDK version 1.0.4314.35 from the official NuGet v3 distribution endpoint, checks the package SHA-512 supplied by the NuGet feed, extracts only the Windows x64 loader DLL, and runs an independently authored Windows x64 executable. The DLL is not committed to GitHub and is retained only as a short-lived CI build artifact. Our test executable is compiled from probes/webview2_loader_probe.c with MinGW.
+This experiment obtains SDK version 1.0.4314.35 from the official NuGet v3 distribution endpoint, verifies fixed SHA-256 checksums for the NuGet package and the extracted Windows x64 DLL, extracts only the Windows x64 loader DLL, and runs an independently authored Windows x64 executable. Archive SHA-256: `90778deb1b77e36292828b4b5833c9255c27533f40e0ddd55891ae718944edc4`. Loader SHA-256: `d3fce90bdeecb08596e377dea6a316354dd8949e32ff09b89d51be00c14e21b6`.
+
+The DLL is not committed to GitHub and is retained only as a short-lived CI build artifact. Our test executable is compiled from probes/webview2_loader_probe.c with MinGW.
 
 The test performs exactly one loader API call, with NULL as the browser path. It does **not** install a runtime, create an ICoreWebView2Environment, create a browser controller, render HTML or use any network-based application content.
 
