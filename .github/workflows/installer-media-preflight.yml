@@ -1,0 +1,67 @@
+name: Offline SOLIDWORKS installer media preflight
+
+on:
+  push:
+    paths:
+      - '.github/workflows/installer-media-preflight.yml'
+      - 'scripts/installer_media_preflight.py'
+      - 'tests/test_installer_media_preflight.py'
+  pull_request:
+    paths:
+      - '.github/workflows/installer-media-preflight.yml'
+      - 'scripts/installer_media_preflight.py'
+      - 'tests/test_installer_media_preflight.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-inventory:
+    name: Offline media scanner (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test scanning, PE imports and privacy boundaries
+        run: python -m unittest discover -s tests -p "test_installer_media_preflight.py" -v
+      - name: Exercise CLI on synthetic media without proprietary files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import runpy
+          synthetic_pe = runpy.run_path("tests/test_installer_media_preflight.py")["synthetic_pe"]
+          directory = Path("build/synthetic-media")
+          directory.mkdir(parents=True, exist_ok=True)
+          synthetic_pe(directory / "setup.exe")
+          (directory / "vc_redist.x64.exe").write_bytes(b"not a real redistributable")
+          (directory / "Confidential Customer Name.dll").write_bytes(b"not real")
+          PY
+          python -m scripts.installer_media_preflight \
+            --media build/synthetic-media --output build/synthetic-preflight.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path("build/synthetic-preflight.json").read_text())
+          assert result["schema"] == 1
+          assert result["entrypoints"]["root_setup_observed"]
+          assert result["package_indicators"]["vcredist_x64"]["observed"]
+          assert result["entrypoint_pe"]["api_families"] == ["base_windows_api", "com_automation"]
+          assert "Confidential Customer Name" not in json.dumps(result)
+          assert "synthetic-media" not in json.dumps(result)
+          print("Sanitized synthetic media inventory: PASS")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-media-report-${{ matrix.os }}
+          path: build/synthetic-preflight.json
+          if-no-files-found: error
+          retention-days: 7
