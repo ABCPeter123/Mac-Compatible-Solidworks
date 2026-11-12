@@ -24,24 +24,41 @@ class ServiceSmokeTests(unittest.TestCase):
             exe=Path(tmp)/"service_smoke.exe"
             exe.touch()
             with patch("scripts.service_smoke.execute", side_effect=[
-                result("absent"),result("install"),result("start","4"),
-                result("stop","1"),result("delete"),result("absent")]) as execute:
+                result("absent"),result("install"),result("status","1"),
+                result("start","4"),result("status","4"),result("stop","1"),
+                result("delete"),result("absent")]) as execute:
                 report=run_sequence("native",None,Path(tmp),exe)
             self.assertTrue(report["passed"])
-            self.assertEqual(execute.call_count,6)
+            self.assertEqual(execute.call_count,8)
 
     def test_failed_start_always_attempts_cleanup(self):
         with tempfile.TemporaryDirectory() as tmp:
             exe=Path(tmp)/"service_smoke.exe"
             exe.touch()
             with patch("scripts.service_smoke.execute",side_effect=[
-                result("absent"),result("install"),
+                result("absent"),result("install"),result("status","1"),
                 {"exit_code":1,"output":"SWCOMPAT_SERVICE_CHECK=FAIL"},
                 result("stop","1"),result("delete"),result("absent")]) as execute:
                 report=run_sequence("native",None,Path(tmp),exe)
             self.assertFalse(report["passed"])
             self.assertIn("cleanup_stop",report)
             self.assertEqual(execute.call_count,6)
+
+    def test_retries_cross_process_service_discovery(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exe=Path(tmp)/"service_smoke.exe"
+            exe.touch()
+            with patch("scripts.service_smoke.time.sleep") as sleep, \
+                 patch("scripts.service_smoke.execute", side_effect=[
+                    result("absent"), result("install"),
+                    {"exit_code": 1, "output": "SWCOMPAT_SERVICE_PHASE=status\\nSWCOMPAT_SERVICE_CHECK=FAIL"},
+                    result("status","1"), result("start","4"),
+                    result("status","4"), result("stop","1"),
+                    result("delete"), result("absent")]):
+                report=run_sequence("native",None,Path(tmp),exe)
+            self.assertTrue(report["passed"])
+            self.assertEqual(report["registration_poll_attempts"],2)
+            sleep.assert_called_once()
 
     def test_existing_service_not_modified(self):
         with tempfile.TemporaryDirectory() as tmp:
