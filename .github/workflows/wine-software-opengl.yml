@@ -7,6 +7,7 @@ on:
       - 'scripts/stage_zink.py'
       - 'tests/test_stage_zink.py'
       - 'probes/wgl_probe.c'
+      - 'probes/cad_geometry_probe.c'
       - 'scripts/build-wgl-probe.sh'
       - 'swcompat/cli.py'
   workflow_dispatch:
@@ -113,6 +114,14 @@ jobs:
           MESA_LOADER_DRIVER_OVERRIDE: llvmpipe
           LIBGL_ALWAYS_SOFTWARE: '1'
         run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/wine-software" --logs-dir build/logs probe-wgl --exe build/wgl_pixel_probe.exe
+      - name: Validate occluding 3D triangles and depth buffer on Linux Wine
+        shell: bash
+        env:
+          WINEDLLOVERRIDES: opengl32,libgallium_wgl,libglapi=n,b
+          GALLIUM_DRIVER: llvmpipe
+          MESA_LOADER_DRIVER_OVERRIDE: llvmpipe
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/wine-software" --logs-dir build/logs probe-wgl --exe build/cad_geometry_probe.exe
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -169,6 +178,7 @@ jobs:
           python -m swcompat --prefix "$RUNNER_TEMP/wine-software" --logs-dir build/logs probe-win32
           python -m swcompat --prefix "$RUNNER_TEMP/wine-software" --logs-dir build/logs probe-wgl
           python -m swcompat --prefix "$RUNNER_TEMP/wine-software" --logs-dir build/logs probe-wgl --exe build/wgl_pixel_probe.exe
+          python -m swcompat --prefix "$RUNNER_TEMP/wine-software" --logs-dir build/logs probe-wgl --exe build/cad_geometry_probe.exe
       - name: Summarize actual context result
         if: always()
         shell: bash
@@ -184,6 +194,11 @@ jobs:
             echo "OpenGL pixel readback: **PASS**" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "OpenGL pixel readback: **FAIL or not run**" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if grep -l '^SWCOMPAT_CAD_GEOMETRY=PASS' build/logs/*-wgl-*.log; then
+            echo "3D triangle occlusion and depth pixels: **PASS**" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "3D triangle occlusion and depth pixels: **FAIL or not run**" >> "$GITHUB_STEP_SUMMARY"
           fi
       - uses: actions/upload-artifact@v4
         if: always()
