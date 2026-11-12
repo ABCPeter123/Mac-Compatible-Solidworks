@@ -2,7 +2,7 @@ name: Experimental macOS Wine execution
 
 on:
   push:
-    paths: ['.github/workflows/wine-macos-experimental.yml', 'probes/wgl_probe.c', 'swcompat/cli.py']
+    paths: ['.github/workflows/wine-macos-experimental.yml', 'probes/wgl_probe.c', 'probes/cgl_probe.c', 'swcompat/cli.py']
   workflow_dispatch:
 
 permissions:
@@ -70,6 +70,15 @@ jobs:
           fi
           echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
           echo "Wine executable: $WINE_BIN"
+      - name: Probe native macOS CGL before invoking Wine
+        shell: bash
+        run: |
+          xcrun clang -Wno-deprecated-declarations probes/cgl_probe.c -framework OpenGL -o build/cgl_probe
+          if ./build/cgl_probe | tee build/cgl-probe.txt; then
+            echo "Native macOS OpenGL context is available"
+          else
+            echo "Native macOS OpenGL is unavailable. This host may lack graphics capabilities."
+          fi
       - name: Check Wine runtime and host
         shell: bash
         run: |
@@ -99,6 +108,7 @@ jobs:
           name: wine-macos-${{ matrix.os }}-logs
           path: |
             build/*.json
+            build/*.txt
             build/logs/*.log
           if-no-files-found: warn
           retention-days: 7
