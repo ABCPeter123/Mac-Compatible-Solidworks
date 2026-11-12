@@ -21,6 +21,23 @@ The first probe mislabeled the failure as `SetPixelFormat` because it checked `C
 
 **Do not interpret the original 1400 result as the root cause.** It was produced by the original combined error check.
 
+## Native host OpenGL results
+
+Both Intel and Apple Silicon cloud runners independently created native OpenGL contexts using Apple's software renderer:
+
+- `SWCOMPAT_CGL=PASS`
+- `SWCOMPAT_CGL_RENDERER=Apple Software Renderer`
+- `SWCOMPAT_CGL_VERSION=2.1 APPLE-21.1.1`
+- Wine 11.21 reported `SWCOMPAT_PIXELFORMAT_COUNT=12` on both.
+- The first Wine format has descriptor flags `0x78`, identifying it as bitmap-capable, GDI-compatible, OpenGL-capable, and generic, **without** the required window-drawing flag.
+- All five tested WGL selection criteria returned `0`.
+
+This rules out a complete absence of host OpenGL. It does **not** prove that the hosted graphics system offers any onscreen OpenGL formats. The enumeration of all 12 formats is designed to distinguish those cases.
+
+We are also testing offscreen bitmap rendering under Wine. Even if that succeeds, it will not establish an interactive SOLIDWORKS viewport.
+
+Evidence: [experiment 43242045116](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43242045116).
+
 ## Diagnostics added in follow-up
 
 - `DescribePixelFormat` reports how many WGL formats Wine exposes.
