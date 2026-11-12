@@ -18,6 +18,19 @@ It refuses to overwrite an unexpectedly existing service. The cleanup handler at
 
 The [CI workflow](../.github/workflows/windows-service-ci.yml) compares native Windows Server 2025, Linux Wine and Wine 11.21 running on Apple Silicon macOS. Test results are stored as JSON artifacts.
 
+## Service process lifetime and Wine client persistence
+
+The first comparison run exposed two failures under Wine but not native Windows:
+
+- Linux Wine 9.0: `CreateServiceW` and `StartServiceW` reported success; immediately afterward, a different controller process saw `SERVICE_STOPPED` with process ID zero, and `ControlService(STOP)` returned error 1062.
+- Apple Silicon macOS Wine 11.21: service registration initially appeared successful, but later controllers intermittently returned error 1060 (`ERROR_SERVICE_DOES_NOT_EXIST`).
+
+The [persistent-client follow-up run](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43294124739) runs the same test while a separate harmless Windows executable remains alive in the same Wine prefix. Linux Wine now passes the full lifecycle, including a nonzero service process ID, STOP and deletion. The Apple Silicon result must be assessed independently.
+
+The harness exposes `--keepalive`, which starts `service_smoke.exe hold` before the controller sequence and terminates it afterward. This avoids reliance on the `wineserver -p` command, which failed to initialize when called directly on the Ubuntu runner. The hold process performs no Windows registry changes, service operations or background work.
+
+**Interpretation:** The before/after comparison supports Wine client/server lifetime as the cause of the Linux failure. It is not proof that all Windows service types work in a production Wine session. The exact mechanism and macOS behavior require separate confirmation.
+
 ## Scope
 
 A passing test establishes only these Service Control Manager operations. It does not prove compatibility with kernel drivers, system-level license services, SOLIDWORKS background components, Windows service accounts, or CAD functionality.
