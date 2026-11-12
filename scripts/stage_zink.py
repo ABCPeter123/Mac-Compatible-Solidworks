@@ -60,7 +60,16 @@ def stage(source: Path, destination: Path) -> dict:
     manifest = {"architecture": "x86_64", "dlls": []}
     for name, original in selected.items():
         dest = destination / name
-        shutil.copy2(original, dest)
+        # Wine prefixes can contain symlinks into the Wine installation.
+        # Never follow those links or overwrite the shared Wine runtime.
+        if dest.is_symlink():
+            dest.unlink()
+        elif dest.exists():
+            backup = destination / (name + ".swcompat-backup")
+            if backup.exists() or backup.is_symlink():
+                raise ValueError(f"Backup already exists, refusing overwrite: {backup}")
+            dest.rename(backup)
+        shutil.copy2(original, dest, follow_symlinks=False)
         sha = hashlib.sha256(dest.read_bytes()).hexdigest()
         manifest["dlls"].append({
             "name": name, "source": str(original.relative_to(source)),
