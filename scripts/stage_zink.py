@@ -29,7 +29,7 @@ def pe_machine(path: Path) -> int | None:
                 return None
             stream.seek(offset)
             record = stream.read(6)
-        return struct.unpack_from("<H", record, 4)[0] if record[:4] == b"PE\\0\\0" else None
+        return struct.unpack_from("<H", record, 4)[0] if record[:4] == b"PE\0\0" else None
     except (OSError, struct.error):
         return None
 
