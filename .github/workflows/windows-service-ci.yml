@@ -7,6 +7,8 @@ on:
       - 'probes/win_service_smoke.c'
       - 'scripts/service_smoke.py'
       - 'tests/test_service_smoke.py'
+      - 'scripts/service_single_report.py'
+      - 'tests/test_service_single_report.py'
   pull_request:
     paths:
       - '.github/workflows/windows-service-ci.yml'
@@ -33,7 +35,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Run service harness tests
-        run: python -m unittest tests.test_service_smoke -v
+        run: python -m unittest tests.test_service_smoke tests.test_service_single_report -v
       - name: Install MinGW-w64 compiler
         run: |
           sudo apt-get update
@@ -142,19 +144,24 @@ jobs:
           echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
       - name: Initialize isolated Wine prefix
         run: python -m swcompat --prefix "$RUNNER_TEMP/service-prefix" --logs-dir build/logs init
-      - name: Verify Service Control Manager behavior
-        run: python -m scripts.service_smoke --host wine --prefix "$RUNNER_TEMP/service-prefix" --keepalive --diagnose-access --exe build/service_smoke.exe --output build/service-result.json
-      - name: Initialize independent Wine prefix for same-process SCM diagnostic
-        if: always()
-        run: python -m swcompat --prefix "$RUNNER_TEMP/service-single-prefix" --logs-dir build/single-logs init
-      - name: Diagnose service lifecycle with one open SCM handle
-        if: always()
-        shell: bash
+      - name: Record known cross-process SCM limitation
         continue-on-error: true
+        run: python -m scripts.service_smoke --host wine --prefix "$RUNNER_TEMP/service-prefix" --keepalive --diagnose-access --exe build/service_smoke.exe --output build/service-result.json
+      - name: Initialize clean Wine prefix for strict single-process SCM check
+        run: python -m swcompat --prefix "$RUNNER_TEMP/service-single-prefix" --logs-dir build/single-logs init
+      - name: Run original service with one retained SCM handle
+        shell: bash
         run: |
-          set -o pipefail
+          set +e
           export WINEPREFIX="$RUNNER_TEMP/service-single-prefix" WINEARCH=win64 WINEDEBUG=-all
-          "$SWCOMPAT_WINE" "$PWD/build/service_smoke.exe" single-roundtrip | tee build/service-single-roundtrip.log
+          "$SWCOMPAT_WINE" "$PWD/build/service_smoke.exe" single-roundtrip > build/service-single-roundtrip.log 2>&1
+          RESULT=$?
+          echo "SWCOMPAT_SERVICE_SINGLE_PROCESS_EXIT=$RESULT"
+          printf 'SWCOMPAT_SINGLE_EXIT_CODE=%s\n' "$RESULT" >> "$GITHUB_ENV"
+          cat build/service-single-roundtrip.log
+          exit 0
+      - name: Assert complete SCM lifecycle and process ID
+        run: python -m scripts.service_single_report --input build/service-single-roundtrip.log --exit-code "$SWCOMPAT_SINGLE_EXIT_CODE" --output build/service-single-result.json --summary "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -162,5 +169,6 @@ jobs:
           path: |
             build/service-result.json
             build/service-single-roundtrip.log
+            build/service-single-result.json
           if-no-files-found: warn
           retention-days: 7
