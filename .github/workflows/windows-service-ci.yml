@@ -1,0 +1,138 @@
+name: Windows service lifecycle compatibility
+
+on:
+  push:
+    paths:
+      - '.github/workflows/windows-service-ci.yml'
+      - 'probes/win_service_smoke.c'
+      - 'scripts/service_smoke.py'
+      - 'tests/test_service_smoke.py'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build original Windows x64 service and controller
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run service harness tests
+        run: python -m unittest tests.test_service_smoke -v
+      - name: Install MinGW-w64 compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+      - name: Compile Windows service
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra -municode \
+            probes/win_service_smoke.c -o build/service_smoke.exe -ladvapi32
+          file build/service_smoke.exe
+          test -s build/service_smoke.exe
+          x86_64-w64-mingw32-objdump -p build/service_smoke.exe | grep -qi 'ADVAPI32.dll'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swcompat-original-windows-service
+          path: build/service_smoke.exe
+          retention-days: 7
+
+  windows-reference:
+    name: Native Windows SCM start-stop reference
+    runs-on: windows-2025
+    needs: build
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: swcompat-original-windows-service
+          path: build
+      - name: Verify service creation, running state and cleanup
+        shell: pwsh
+        run: python -m scripts.service_smoke --host native --exe build/service_smoke.exe --output build/service-result.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: swcompat-service-native-windows
+          path: build/service-result.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  linux-wine:
+    name: Linux Wine SCM create-start-stop-delete
+    runs-on: ubuntu-24.04
+    needs: build
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: swcompat-original-windows-service
+          path: build
+      - name: Install Wine and virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine wine64 xvfb xauth
+      - name: Initialize isolated Wine prefix
+        run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/service-prefix" --logs-dir build/logs init
+      - name: Verify Service Control Manager behavior
+        run: xvfb-run -a python -m scripts.service_smoke --host wine --prefix "$RUNNER_TEMP/service-prefix" --exe build/service_smoke.exe --output build/service-result.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: swcompat-service-linux-wine
+          path: build/service-result.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  macos-wine:
+    name: Apple Silicon Wine SCM create-start-stop-delete
+    runs-on: macos-15
+    needs: build
+    timeout-minutes: 21
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: swcompat-original-windows-service
+          path: build
+      - name: Download checksum-pinned Wine 11.21
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-devel-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-devel-11.21-osx64.tar.xz"
+          echo "9909b486657e10ab66c7279371ae1f990345b596b3b1b3a0cf21f28af24fa0ce  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-build"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-build"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Initialize isolated Wine prefix
+        run: python -m swcompat --prefix "$RUNNER_TEMP/service-prefix" --logs-dir build/logs init
+      - name: Verify Service Control Manager behavior
+        run: python -m scripts.service_smoke --host wine --prefix "$RUNNER_TEMP/service-prefix" --exe build/service_smoke.exe --output build/service-result.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: swcompat-service-apple-silicon
+          path: build/service-result.json
+          if-no-files-found: warn
+          retention-days: 7
