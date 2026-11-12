@@ -72,20 +72,22 @@ int main(void) {
     glClearColor(0.08f, 0.10f, 0.16f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    /* Draw far green triangle first. */
-    glColor3f(0.1f, 0.85f, 0.15f);
-    glBegin(GL_TRIANGLES);
-    glVertex3f(-0.75f, -0.75f, 0.5f);
-    glVertex3f( 0.75f, -0.75f, 0.5f);
-    glVertex3f( 0.0f,   0.75f, 0.5f);
-    glEnd();
-
-    /* Draw near red triangle; its center must occlude the green triangle. */
+    /* Draw near red geometry FIRST. The far green geometry drawn
+       afterwards must not overwrite it if depth testing works. */
     glColor3f(0.92f, 0.15f, 0.15f);
     glBegin(GL_TRIANGLES);
     glVertex3f(-0.80f, -0.80f, -0.5f);
     glVertex3f( 0.80f, -0.80f, -0.5f);
     glVertex3f( 0.0f,   0.80f, -0.5f);
+    glEnd();
+
+    /* Far green triangle is last. A missing depth buffer would make
+       the center green, failing our expected red pixel check. */
+    glColor3f(0.1f, 0.85f, 0.15f);
+    glBegin(GL_TRIANGLES);
+    glVertex3f(-0.75f, -0.75f, 0.5f);
+    glVertex3f( 0.75f, -0.75f, 0.5f);
+    glVertex3f( 0.0f,   0.75f, 0.5f);
     glEnd();
     glFinish();
 
