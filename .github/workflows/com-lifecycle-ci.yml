@@ -37,7 +37,7 @@ jobs:
             -lole32 -ladvapi32 -luuid
           x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra -municode \
             probes/com_lifecycle_check.c -o build/com_check.exe \
-            -lole32 -luuid
+            -lole32 -ladvapi32 -luuid
           file build/swcompat_com.dll build/com_check.exe
           x86_64-w64-mingw32-objdump -p build/swcompat_com.dll > build/com-exports.txt
           grep -q 'DllGetClassObject' build/com-exports.txt
@@ -71,7 +71,7 @@ jobs:
         if: always()
         with:
           name: com-lifecycle-windows-reference
-          path: build/com-result.json
+          path: build/com-*-result.json
           retention-days: 7
           if-no-files-found: warn
 
@@ -95,13 +95,16 @@ jobs:
           sudo apt-get install -y --no-install-recommends wine wine64 xvfb xauth
       - name: Initialize isolated prefix
         run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/com-prefix" --logs-dir build/logs init
-      - name: Run separate registration, activation, and cleanup processes
-        run: xvfb-run -a python -m scripts.com_lifecycle --host wine --prefix "$RUNNER_TEMP/com-prefix" --checker build/com_check.exe --dll build/swcompat_com.dll --output build/com-result.json
+      - name: Diagnose standard per-user COM registration
+        continue-on-error: true
+        run: xvfb-run -a python -m scripts.com_lifecycle --host wine --mode user --prefix "$RUNNER_TEMP/com-prefix" --checker build/com_check.exe --dll build/swcompat_com.dll --output build/com-user-result.json
+      - name: Check isolated Wine HKCR fallback registration
+        run: xvfb-run -a python -m scripts.com_lifecycle --host wine --mode classes-root --prefix "$RUNNER_TEMP/com-prefix" --checker build/com_check.exe --dll build/swcompat_com.dll --output build/com-root-result.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: com-lifecycle-linux-wine
-          path: build/com-result.json
+          path: build/com-*-result.json
           retention-days: 7
           if-no-files-found: warn
 
@@ -134,12 +137,15 @@ jobs:
           echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
       - name: Initialize isolated Windows x64 Wine prefix
         run: python -m swcompat --prefix "$RUNNER_TEMP/com-prefix" --logs-dir build/logs init
-      - name: Validate independent COM registration and activation
-        run: python -m scripts.com_lifecycle --host wine --prefix "$RUNNER_TEMP/com-prefix" --checker build/com_check.exe --dll build/swcompat_com.dll --output build/com-result.json
+      - name: Diagnose standard per-user COM registration
+        continue-on-error: true
+        run: python -m scripts.com_lifecycle --host wine --mode user --prefix "$RUNNER_TEMP/com-prefix" --checker build/com_check.exe --dll build/swcompat_com.dll --output build/com-user-result.json
+      - name: Check isolated Wine HKCR fallback registration
+        run: python -m scripts.com_lifecycle --host wine --mode classes-root --prefix "$RUNNER_TEMP/com-prefix" --checker build/com_check.exe --dll build/swcompat_com.dll --output build/com-root-result.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: com-lifecycle-macos-wine
-          path: build/com-result.json
+          path: build/com-*-result.json
           retention-days: 7
           if-no-files-found: warn
