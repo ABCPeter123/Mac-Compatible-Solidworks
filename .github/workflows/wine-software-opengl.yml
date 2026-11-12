@@ -4,6 +4,11 @@ on:
   push:
     paths:
       - '.github/workflows/wine-software-opengl.yml'
+      - 'scripts/stage_zink.py'
+      - 'tests/test_stage_zink.py'
+      - 'probes/wgl_probe.c'
+      - 'scripts/build-wgl-probe.sh'
+      - 'swcompat/cli.py'
   workflow_dispatch:
 
 permissions:
