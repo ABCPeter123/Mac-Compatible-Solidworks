@@ -2,7 +2,7 @@ name: Experimental macOS Wine execution
 
 on:
   push:
-    paths: ['.github/workflows/wine-macos-experimental.yml']
+    paths: ['.github/workflows/wine-macos-experimental.yml', 'probes/wgl_probe.c', 'swcompat/cli.py']
   workflow_dispatch:
 
 permissions:
@@ -76,15 +76,12 @@ jobs:
           "$SWCOMPAT_WINE" --version
           python -m swcompat doctor --json | tee build/doctor.json
       - name: Initialize isolated Wine prefix
-        continue-on-error: true
         shell: bash
         run: python -m swcompat --prefix "$RUNNER_TEMP/swcompat-prefix" --logs-dir build/logs init
       - name: Run x64 Win32 process
-        continue-on-error: true
         shell: bash
         run: python -m swcompat --prefix "$RUNNER_TEMP/swcompat-prefix" --logs-dir build/logs probe-win32
       - name: Run x64 WGL viewport probe
-        continue-on-error: true
         shell: bash
         run: python -m swcompat --prefix "$RUNNER_TEMP/swcompat-prefix" --logs-dir build/logs probe-wgl
       - name: Summarize reproducible diagnostics
@@ -94,7 +91,7 @@ jobs:
           echo "## Experimental Wine on ${{ matrix.os }}" >> "$GITHUB_STEP_SUMMARY"
           echo "Upstream Wine 11.21 devel, checksum-pinned. No SOLIDWORKS binaries involved." >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Probe steps are permitted to fail to preserve evidence. Inspect log artifacts for the actual outcome." >> "$GITHUB_STEP_SUMMARY"
+          echo "Probe failures mark this experimental job failed. Logs and host reports upload even after failures." >> "$GITHUB_STEP_SUMMARY"
           python -m scripts.ci_report --require-macos --output build/host.json || true
       - uses: actions/upload-artifact@v4
         if: always()
