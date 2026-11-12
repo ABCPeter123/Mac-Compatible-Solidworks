@@ -34,6 +34,16 @@ Our [macOS and Linux experiment](https://github.com/ABCPeter123/Mac-Compatible-S
 
 See [software OpenGL installation and launching](docs/SOFTWARE_OPENGL.md) for a reproducible test configuration and `scripts.software_launch` launcher. This is still experimental, potentially slow CPU rendering. **The actual SOLIDWORKS installer, activation, and CAD functions have not been tested.**
 
+## Event-driven Windows GUI compatibility probe
+
+The original [Win32 GUI/WGL session test](docs/GUI_SESSION.md) exercises a real Windows window and child button, a message pump, synthetic mouse/selection input, viewport resize, two pixel-verified OpenGL frames and Win32 state save/reopen. It runs using the existing Mesa llvmpipe path on Linux Wine and Apple Silicon Wine. Compile it with `sh scripts/build-wgl-probe.sh`, then run:
+
+```sh
+python3 -m swcompat --prefix "$SWPREFIX" probe-wgl --exe build/win_gui_session_probe.exe
+```
+
+A passing test does not demonstrate physical Mac input, the SOLIDWORKS GUI or a real CAD document.
+
 ## SOLIDWORKS installer prerequisites research
 
 The [installation prerequisite reconnaissance workflow](.github/workflows/installer-prereq-ci.yml) builds a small read-only Windows x64 executable. It checks Windows Installer, COM, service manager access, VC++ runtime indicators, .NET Framework registry signals, and basic host information on native Windows, Linux Wine, and Apple Silicon Wine.
