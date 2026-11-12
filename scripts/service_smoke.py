@@ -58,7 +58,20 @@ def _run_sequence(host: str, wine: str | None, prefix: Path, exe: Path) -> dict:
                 time.sleep(0.4)
 
             if succeeded(report["registration_visibility"], "status"):
-                report["start"] = run("start")
+                # Wine's service database can briefly return 1055 (locked)
+                # or 1060 (not visible) while services.exe finishes startup.
+                # Only retry these diagnosed transients; do not mask failures.
+                for attempt in range(12):
+                    report["start"] = run("start")
+                    report["startup_attempts"] = attempt + 1
+                    if succeeded(report["start"], "start"):
+                        break
+                    markers = set(report["start"].get("output", "").splitlines())
+                    if not ({"SWCOMPAT_SERVICE_ERROR=1055",
+                             "SWCOMPAT_SERVICE_ERROR=1060"} & markers):
+                        break
+                    if attempt < 11:
+                        time.sleep(4.0)
                 if succeeded(report["start"], "start"):
                     report["after_start"] = run("status")
                     if succeeded(report["after_start"], "status"):

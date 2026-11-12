@@ -41,6 +41,14 @@ A same-process PASS with a cross-process FAIL would indicate a registry/SCM visi
 
 The [same-process diagnostic](../probes/win_service_smoke.c) also queries the SCM database lock status when service startup returns Windows error 1055 and retries the start operation a bounded number of times. The lock query reports only locked state and duration, never the identity of the lock owner.
 
+## Apple Silicon start-lock breakthrough
+
+The [Mac lock-diagnostic run](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43296397170) established that the original Windows service **can** run on Apple Silicon Wine 11.21. The initial same-process `StartServiceW` call returned error 1055 (service database locked). The `QueryServiceLockStatusW` query also returned error 1055, so it could not report a lock owner. Four more startup attempts returned 1055. The fifth succeeded, producing `SERVICE_RUNNING` with process ID 640. STOP, service removal, and final absence checks passed.
+
+The regular cross-process test still failed with error 1060. A follow-up therefore makes **bounded, narrowly scoped retries** for Win32 errors 1055 and 1060 on service startup, without retrying unrelated failures. Each startup attempt and its result remain visible in the JSON log. No result is reported as passing unless the service is observed running and can stop and deregister successfully.
+
+Microsoft documents `QUERY_SERVICE_LOCK_STATUS.dwLockDuration` in **seconds**. The diagnostic marker reports the correct unit.
+
 ## Scope
 
 A passing test establishes only these Service Control Manager operations. It does not prove compatibility with kernel drivers, system-level license services, SOLIDWORKS background components, Windows service accounts, or CAD functionality.

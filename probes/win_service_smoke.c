@@ -220,7 +220,7 @@ static int single_process_roundtrip(void) {
             LPQUERY_SERVICE_LOCK_STATUSW lock = (LPQUERY_SERVICE_LOCK_STATUSW)lockbuffer;
             printf("SWCOMPAT_SERVICE_SINGLE_DATABASE_LOCKED=%d\n",
                    lock->fIsLocked ? 1 : 0);
-            printf("SWCOMPAT_SERVICE_SINGLE_LOCK_DURATION_MS=%lu\n",
+            printf("SWCOMPAT_SERVICE_SINGLE_LOCK_DURATION_SECONDS=%lu\n",
                    (unsigned long)lock->dwLockDuration);
         }
         fflush(stdout);

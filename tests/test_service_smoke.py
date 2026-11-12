@@ -85,6 +85,38 @@ class ServiceSmokeTests(unittest.TestCase):
             keeper.wait.assert_called_once()
             run.assert_called_once()
 
+    def test_bounded_startup_retry_for_locked_service_database(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exe=Path(tmp)/"service_smoke.exe"
+            exe.touch()
+            transient={"exit_code":1,
+                       "output":"SWCOMPAT_SERVICE_PHASE=start\\nSWCOMPAT_SERVICE_ERROR=1055\\nSWCOMPAT_SERVICE_CHECK=FAIL\\n"}
+            with patch("scripts.service_smoke.time.sleep") as sleep, \
+                 patch("scripts.service_smoke.execute",side_effect=[
+                    result("absent"),result("install"),result("status","1"),
+                    transient,result("start","4"),result("status","4"),
+                    result("stop","1"),result("delete"),result("absent")]):
+                report=run_sequence("native",None,Path(tmp),exe)
+            self.assertTrue(report["passed"])
+            self.assertEqual(report["startup_attempts"],2)
+            sleep.assert_called_once_with(4.0)
+
+    def test_does_not_retry_unrelated_start_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exe=Path(tmp)/"service_smoke.exe"
+            exe.touch()
+            denied={"exit_code":1,
+                    "output":"SWCOMPAT_SERVICE_PHASE=start\\nSWCOMPAT_SERVICE_ERROR=5\\nSWCOMPAT_SERVICE_CHECK=FAIL\\n"}
+            with patch("scripts.service_smoke.time.sleep") as sleep, \
+                 patch("scripts.service_smoke.execute",side_effect=[
+                    result("absent"),result("install"),result("status","1"),
+                    denied,result("stop","1"),result("delete"),result("absent")]) as execute:
+                report=run_sequence("native",None,Path(tmp),exe)
+            self.assertFalse(report["passed"])
+            self.assertEqual(report["startup_attempts"],1)
+            self.assertEqual(execute.call_count,7)
+            sleep.assert_not_called()
+
     def test_existing_service_not_modified(self):
         with tempfile.TemporaryDirectory() as tmp:
             exe=Path(tmp)/"service_smoke.exe"
