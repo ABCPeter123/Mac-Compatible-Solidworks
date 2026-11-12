@@ -84,6 +84,15 @@ Gcenx also publishes `wine-staging-11.21-osx64.tar.xz` (SHA-256: `d7bcd5abf4df27
 
 Source: https://github.com/Gcenx/macOS_Wine_builds/releases/tag/11.21
 
+## Wine Staging comparison
+
+The [Wine Staging 11.21 Apple Silicon run](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43300033831) reproduced the development build's results. The same original service binary under the checksum-pinned Staging release:
+
+- Failed cross-process `OpenServiceW` for all six tested access masks with error 1060.
+- Succeeded at same-process creation, service start after retry 5, running state, stop, and deletion.
+
+Both Wine development 11.21 and Wine Staging 11.21 therefore have the same observable cross-process service-object visibility issue on the tested GitHub-hosted Mac. Changing only the Wine flavor is **not** a confirmed fix. We are retaining both test traces rather than switching the production compatibility baseline.
+
 ## Scope
 
 A passing test establishes only these Service Control Manager operations. It does not prove compatibility with kernel drivers, system-level license services, SOLIDWORKS background components, Windows service accounts, or CAD functionality.
