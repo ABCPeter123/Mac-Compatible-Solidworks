@@ -92,7 +92,7 @@ jobs:
         run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/wine-software" --logs-dir build/logs init
       - name: Stage Mesa OpenGL DLLs
         run: python -m scripts.stage_zink --source build/mesa-payload --prefix "$RUNNER_TEMP/wine-software" --manifest build/mesa-stage.json
-      - name: Run Windows WGL using llvmpipe, no Vulkan backend
+      - name: Run basic Windows WGL using llvmpipe, no Vulkan backend
         shell: bash
         env:
           WINEDLLOVERRIDES: opengl32,libgallium_wgl,libglapi=n,b
@@ -100,6 +100,14 @@ jobs:
           MESA_LOADER_DRIVER_OVERRIDE: llvmpipe
           LIBGL_ALWAYS_SOFTWARE: '1'
         run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/wine-software" --logs-dir build/logs probe-wgl
+      - name: Validate actual framebuffer pixels under Linux Wine
+        shell: bash
+        env:
+          WINEDLLOVERRIDES: opengl32,libgallium_wgl,libglapi=n,b
+          GALLIUM_DRIVER: llvmpipe
+          MESA_LOADER_DRIVER_OVERRIDE: llvmpipe
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/wine-software" --logs-dir build/logs probe-wgl --exe build/wgl_pixel_probe.exe
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -155,6 +163,7 @@ jobs:
         run: |
           python -m swcompat --prefix "$RUNNER_TEMP/wine-software" --logs-dir build/logs probe-win32
           python -m swcompat --prefix "$RUNNER_TEMP/wine-software" --logs-dir build/logs probe-wgl
+          python -m swcompat --prefix "$RUNNER_TEMP/wine-software" --logs-dir build/logs probe-wgl --exe build/wgl_pixel_probe.exe
       - name: Summarize actual context result
         if: always()
         shell: bash
@@ -165,6 +174,11 @@ jobs:
             echo "WGL context: **PASS**" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "WGL context: **FAIL or not run**" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if grep -l '^SWCOMPAT_PIXEL_READBACK=PASS' build/logs/*-wgl-*.log; then
+            echo "OpenGL pixel readback: **PASS**" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "OpenGL pixel readback: **FAIL or not run**" >> "$GITHUB_STEP_SUMMARY"
           fi
       - uses: actions/upload-artifact@v4
         if: always()
