@@ -69,6 +69,59 @@ jobs:
           path: build/zink-payload/*.dll
           retention-days: 3
 
+  linux-zink-reference:
+    name: Windows Mesa Zink through Linux Wine and Vulkan lavapipe
+    needs: [windows-probes, mesa-payload]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: zink-windows-probes
+          path: build
+      - uses: actions/download-artifact@v4
+        with:
+          name: zink-x64-dlls
+          path: build/zink-payload
+      - name: Install Wine, Mesa Vulkan software ICD and Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine wine64 mesa-vulkan-drivers libvulkan1 vulkan-tools xvfb xauth
+      - name: Verify Vulkan software ICD exists
+        run: |
+          ls -la /usr/share/vulkan/icd.d/
+          test -f /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+      - name: Initialize isolated Wine prefix
+        run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/zink-linux-prefix" --logs-dir build/logs init
+      - name: Verify Windows Vulkan physical device via lavapipe
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+        run: |
+          xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/zink-linux-prefix" --logs-dir build/logs probe-vulkan
+      - name: Stage exact Windows x64 Mesa Zink DLLs
+        run: python -m scripts.stage_zink --source build/zink-payload --prefix "$RUNNER_TEMP/zink-linux-prefix" --manifest build/zink-stage-linux.json
+      - name: Test Windows WGL using Mesa Zink and Vulkan lavapipe
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+          WINEDLLOVERRIDES: opengl32,libgallium_wgl,libglapi=n,b
+          GALLIUM_DRIVER: zink
+          MESA_LOADER_DRIVER_OVERRIDE: zink
+        run: |
+          xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/zink-linux-prefix" --logs-dir build/logs probe-wgl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zink-linux-reference-logs
+          path: |
+            build/zink-stage-linux.json
+            build/logs/*.log
+          if-no-files-found: warn
+          retention-days: 7
+
   macos-zink:
     name: Mesa Zink on Apple Silicon Wine
     runs-on: macos-15
