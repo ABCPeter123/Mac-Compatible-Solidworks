@@ -39,6 +39,8 @@ It creates, starts, queries, stops and deletes the same harmless Windows service
 
 A same-process PASS with a cross-process FAIL would indicate a registry/SCM visibility issue between processes. A same-process FAIL would instead point to service startup or process management itself. Neither result should be treated as evidence about proprietary SOLIDWORKS licensing.
 
+The [same-process diagnostic](../probes/win_service_smoke.c) also queries the SCM database lock status when service startup returns Windows error 1055 and retries the start operation a bounded number of times. The lock query reports only locked state and duration, never the identity of the lock owner.
+
 ## Scope
 
 A passing test establishes only these Service Control Manager operations. It does not prove compatibility with kernel drivers, system-level license services, SOLIDWORKS background components, Windows service accounts, or CAD functionality.

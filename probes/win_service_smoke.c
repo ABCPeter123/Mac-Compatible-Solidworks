@@ -182,7 +182,7 @@ static int single_process_roundtrip(void) {
         return result("single-module-path", GetLastError(), 0, FALSE);
     }
     SC_HANDLE scm = OpenSCManagerW(NULL, NULL,
-        SC_MANAGER_CREATE_SERVICE | SC_MANAGER_CONNECT);
+        SC_MANAGER_CREATE_SERVICE | SC_MANAGER_CONNECT | SC_MANAGER_QUERY_LOCK_STATUS);
     if (!scm) return result("single-open-scm", GetLastError(), 0, FALSE);
     wchar_t cmd[MAX_PATH + 16] = {0};
     swprintf(cmd, MAX_PATH + 16, L"\"%ls\" run", exe);
@@ -202,6 +202,38 @@ static int single_process_roundtrip(void) {
     DWORD running = 0, stopped = 0, process_id = 0;
     BOOL started = StartServiceW(handle, 0, NULL);
     if (!started) start_error = GetLastError();
+    printf("SWCOMPAT_SERVICE_SINGLE_INITIAL_START_ERROR=%lu\n",
+           (unsigned long)start_error);
+
+    /* Distinguish stale SCM database locking from a permanent start failure. */
+    if (!started && start_error == ERROR_SERVICE_DATABASE_LOCKED) {
+        BYTE lockbuffer[1024] = {0};
+        DWORD required = 0, lock_error = 0;
+        BOOL queried = QueryServiceLockStatusW(scm,
+                 (LPQUERY_SERVICE_LOCK_STATUSW)lockbuffer,
+                 sizeof(lockbuffer), &required);
+        if (!queried) lock_error = GetLastError();
+        printf("SWCOMPAT_SERVICE_SINGLE_LOCK_QUERY=%d\n", queried ? 1 : 0);
+        printf("SWCOMPAT_SERVICE_SINGLE_LOCK_QUERY_ERROR=%lu\n",
+               (unsigned long)lock_error);
+        if (queried) {
+            LPQUERY_SERVICE_LOCK_STATUSW lock = (LPQUERY_SERVICE_LOCK_STATUSW)lockbuffer;
+            printf("SWCOMPAT_SERVICE_SINGLE_DATABASE_LOCKED=%d\n",
+                   lock->fIsLocked ? 1 : 0);
+            printf("SWCOMPAT_SERVICE_SINGLE_LOCK_DURATION_MS=%lu\n",
+                   (unsigned long)lock->dwLockDuration);
+        }
+        fflush(stdout);
+        for (int attempt = 1; attempt <= 5 && !started; attempt++) {
+            Sleep(900);
+            started = StartServiceW(handle, 0, NULL);
+            start_error = started ? 0 : GetLastError();
+            printf("SWCOMPAT_SERVICE_SINGLE_RETRY_%d_ERROR=%lu\n",
+                   attempt, (unsigned long)start_error);
+            fflush(stdout);
+            if (start_error != ERROR_SERVICE_DATABASE_LOCKED) break;
+        }
+    }
     if (started) {
         running = await_state(handle, SERVICE_RUNNING);
         SERVICE_STATUS_PROCESS state = {0};

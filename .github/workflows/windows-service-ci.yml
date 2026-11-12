@@ -70,6 +70,11 @@ jobs:
       - name: Verify service creation, running state and cleanup
         shell: pwsh
         run: python -m scripts.service_smoke --host native --exe build/service_smoke.exe --output build/service-result.json
+      - name: Validate same-process reference controller
+        shell: pwsh
+        run: |
+          & .\build\service_smoke.exe single-roundtrip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
