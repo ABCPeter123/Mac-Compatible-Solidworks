@@ -1,0 +1,174 @@
+/* Self-authored Win64 service and SCM controller.
+ * No SOLIDWORKS components or real licensing services are involved.
+ * CI uses a disposable Wine prefix or an ephemeral Windows runner.
+ */
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <winsvc.h>
+#include <stdio.h>
+#include <wchar.h>
+
+static const wchar_t *SERVICE_NAME = L"SWCompatOriginalServiceTest";
+static SERVICE_STATUS_HANDLE service_handle;
+static HANDLE stop_event;
+static SERVICE_STATUS status;
+
+static void set_state(DWORD state, DWORD controls, DWORD hint) {
+    status.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
+    status.dwCurrentState = state;
+    status.dwControlsAccepted = controls;
+    status.dwWin32ExitCode = NO_ERROR;
+    status.dwServiceSpecificExitCode = 0;
+    status.dwCheckPoint = state == SERVICE_START_PENDING || state == SERVICE_STOP_PENDING ? 1 : 0;
+    status.dwWaitHint = hint;
+    SetServiceStatus(service_handle, &status);
+}
+
+static VOID WINAPI control_handler(DWORD control) {
+    if (control == SERVICE_CONTROL_STOP || control == SERVICE_CONTROL_SHUTDOWN) {
+        set_state(SERVICE_STOP_PENDING, 0, 3000);
+        if (stop_event) SetEvent(stop_event);
+    }
+}
+
+static VOID WINAPI service_main(DWORD count, LPWSTR *args) {
+    (void)count; (void)args;
+    service_handle = RegisterServiceCtrlHandlerW(SERVICE_NAME, control_handler);
+    if (!service_handle) return;
+    set_state(SERVICE_START_PENDING, 0, 3000);
+    stop_event = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!stop_event) {
+        set_state(SERVICE_STOPPED, 0, 0);
+        return;
+    }
+    set_state(SERVICE_RUNNING, SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN, 0);
+    WaitForSingleObject(stop_event, INFINITE);
+    set_state(SERVICE_STOPPED, 0, 0);
+    CloseHandle(stop_event);
+    stop_event = NULL;
+}
+
+static int result(const char *phase, DWORD error, DWORD observed, BOOL success) {
+    printf("SWCOMPAT_SERVICE_PHASE=%s\n", phase);
+    printf("SWCOMPAT_SERVICE_ERROR=%lu\n", (unsigned long)error);
+    printf("SWCOMPAT_SERVICE_STATE=%lu\n", (unsigned long)observed);
+    printf("SWCOMPAT_SERVICE_CHECK=%s\n", success ? "PASS" : "FAIL");
+    fflush(stdout);
+    return success ? 0 : 1;
+}
+
+static DWORD await_state(SC_HANDLE handle, DWORD required) {
+    for (int i = 0; i < 80; i++) {
+        SERVICE_STATUS_PROCESS current = {0};
+        DWORD bytes = 0;
+        if (!QueryServiceStatusEx(handle, SC_STATUS_PROCESS_INFO,
+                                  (BYTE*)&current, sizeof(current), &bytes))
+            return 0;
+        if (current.dwCurrentState == required) return required;
+        if (current.dwCurrentState == SERVICE_STOPPED && required != SERVICE_STOPPED)
+            return current.dwCurrentState;
+        Sleep(125);
+    }
+    SERVICE_STATUS_PROCESS current = {0};
+    DWORD bytes = 0;
+    if (QueryServiceStatusEx(handle, SC_STATUS_PROCESS_INFO,
+                             (BYTE*)&current, sizeof(current), &bytes))
+        return current.dwCurrentState;
+    return 0;
+}
+
+static int manage(const wchar_t *action, const wchar_t *exe) {
+    const char *phase = "unknown";
+    if (!wcscmp(action, L"absent")) phase = "absent";
+    else if (!wcscmp(action, L"install")) phase = "install";
+    else if (!wcscmp(action, L"start")) phase = "start";
+    else if (!wcscmp(action, L"stop")) phase = "stop";
+    else if (!wcscmp(action, L"delete")) phase = "delete";
+    else return 2;
+
+    DWORD scm_rights = !wcscmp(action,L"install")
+                       ? SC_MANAGER_CREATE_SERVICE | SC_MANAGER_CONNECT : SC_MANAGER_CONNECT;
+    SC_HANDLE scm = OpenSCManagerW(NULL, NULL, scm_rights);
+    if (!scm) return result(phase, GetLastError(), 0, FALSE);
+    DWORD state = 0, error = 0;
+    BOOL ok = FALSE;
+    SC_HANDLE handle = NULL;
+
+    if (!wcscmp(action, L"install")) {
+        if (!exe || !*exe) {
+            CloseServiceHandle(scm);
+            return result(phase, ERROR_INVALID_PARAMETER, 0, FALSE);
+        }
+        size_t len = wcslen(exe);
+        if (len > 2500) {
+            CloseServiceHandle(scm);
+            return result(phase, ERROR_INSUFFICIENT_BUFFER, 0, FALSE);
+        }
+        wchar_t command[2600] = {0};
+        swprintf(command, 2600, L"\"%ls\" run", exe);
+        handle = CreateServiceW(scm, SERVICE_NAME, L"SWCompat Independent Test Service",
+                    SERVICE_ALL_ACCESS, SERVICE_WIN32_OWN_PROCESS,
+                    SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL, command,
+                    NULL, NULL, NULL, NULL, NULL);
+        ok = handle != NULL;
+        if (!ok) error = GetLastError();
+    } else if (!wcscmp(action, L"absent")) {
+        handle = OpenServiceW(scm, SERVICE_NAME, SERVICE_QUERY_STATUS);
+        if (!handle) {
+            error = GetLastError();
+            ok = error == ERROR_SERVICE_DOES_NOT_EXIST;
+        } else {
+            error = ERROR_SERVICE_EXISTS;
+            ok = FALSE;
+        }
+    } else {
+        DWORD rights = SERVICE_QUERY_STATUS;
+        if (!wcscmp(action, L"start")) rights |= SERVICE_START;
+        if (!wcscmp(action, L"stop")) rights |= SERVICE_STOP;
+        if (!wcscmp(action, L"delete")) rights |= DELETE;
+        handle = OpenServiceW(scm, SERVICE_NAME, rights);
+        if (!handle) error = GetLastError();
+        else if (!wcscmp(action, L"start")) {
+            ok = StartServiceW(handle, 0, NULL);
+            if (!ok) error = GetLastError();
+            if (ok) {
+                state = await_state(handle, SERVICE_RUNNING);
+                ok = state == SERVICE_RUNNING;
+                if (!ok) error = ERROR_SERVICE_REQUEST_TIMEOUT;
+            }
+        } else if (!wcscmp(action, L"stop")) {
+            SERVICE_STATUS current = {0};
+            ok = ControlService(handle, SERVICE_CONTROL_STOP, &current);
+            if (!ok) error = GetLastError();
+            if (ok) {
+                state = await_state(handle, SERVICE_STOPPED);
+                ok = state == SERVICE_STOPPED;
+                if (!ok) error = ERROR_SERVICE_REQUEST_TIMEOUT;
+            }
+        } else {
+            ok = DeleteService(handle);
+            if (!ok) error = GetLastError();
+        }
+    }
+
+    if (handle) CloseServiceHandle(handle);
+    CloseServiceHandle(scm);
+    return result(phase, error, state, ok);
+}
+
+int wmain(int argc, wchar_t **argv) {
+    if (argc < 2) {
+        fputs("Usage: service_smoke.exe run|absent|install <path>|start|stop|delete\n",stderr);
+        return 2;
+    }
+    if (!wcscmp(argv[1], L"run")) {
+        SERVICE_TABLE_ENTRYW dispatch[] = {
+            {(LPWSTR)SERVICE_NAME, service_main},
+            {NULL, NULL}
+        };
+        if (!StartServiceCtrlDispatcherW(dispatch))
+            return result("run", GetLastError(), 0, FALSE);
+        return 0;
+    }
+    return manage(argv[1], argc > 2 ? argv[2] : NULL);
+}
