@@ -1,0 +1,161 @@
+name: SOLIDWORKS prerequisite reconnaissance
+
+on:
+  push:
+    paths:
+      - '.github/workflows/installer-prereq-ci.yml'
+      - 'probes/win_prereq_probe.c'
+      - 'config/prerequisites_2026.json'
+      - 'scripts/prereq_report.py'
+      - 'tests/test_prereq_report.py'
+      - 'swcompat/cli.py'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prereq-\${{ github.workflow }}-\${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    name: Compile independent Windows x64 prerequisite probe
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MinGW-w64
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+      - name: Compile Win32 MSI COM SCM diagnostics
+        run: |
+          mkdir -p build
+          x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra \
+            probes/win_prereq_probe.c -o build/win_prereq_probe.exe \
+            -lole32 -ladvapi32 -luuid
+          file build/win_prereq_probe.exe
+          x86_64-w64-mingw32-objdump -p build/win_prereq_probe.exe > build/prereq-imports.txt
+          grep -qi 'DLL Name: OLE32.dll' build/prereq-imports.txt
+          grep -qi 'DLL Name: ADVAPI32.dll' build/prereq-imports.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-prereq-win64
+          path: build/win_prereq_probe.exe
+          retention-days: 7
+
+  windows-reference:
+    name: Windows Server API reference
+    needs: compile
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: installer-prereq-win64
+          path: build
+      - name: Execute read-only Windows API checks
+        shell: pwsh
+        run: |
+          & .\build\win_prereq_probe.exe | Tee-Object -FilePath build/prereq.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m scripts.prereq_report --input build/prereq.log --output build/prereq.json --host windows-server-2025 --summary "$env:GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: prereq-windows-reference
+          path: |
+            build/prereq.json
+            build/prereq.log
+          retention-days: 7
+          if-no-files-found: warn
+
+  wine-linux:
+    name: Linux Wine prerequisite signals
+    needs: compile
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: installer-prereq-win64
+          path: build
+      - name: Install Wine and Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine wine64 xvfb xauth
+      - name: Initialize isolated Wine prefix
+        run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/prereq-prefix" --logs-dir build/logs init
+      - name: Check installer APIs without SOLIDWORKS files
+        run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/prereq-prefix" --logs-dir build/logs probe-prereqs
+      - name: Generate scoped evidence report
+        shell: bash
+        run: |
+          set -euo pipefail
+          LOG="$(find build/logs -maxdepth 1 -name '*-prereqs-*.log' -print -quit)"
+          test -n "$LOG"
+          python -m scripts.prereq_report --input "$LOG" --output build/prereq.json --host ubuntu-24.04-wine --summary "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: prereq-linux-wine
+          path: |
+            build/prereq.json
+            build/logs/*-prereqs-*.log
+          retention-days: 7
+          if-no-files-found: warn
+
+  wine-macos:
+    name: Apple Silicon Wine prerequisite signals
+    needs: compile
+    runs-on: macos-15
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: installer-prereq-win64
+          path: build
+      - name: Download checksum-verified macOS Wine 11.21
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-devel-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-devel-11.21-osx64.tar.xz"
+          echo "9909b486657e10ab66c7279371ae1f990345b596b3b1b3a0cf21f28af24fa0ce  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-build"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-build"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Initialize isolated Wine prefix
+        run: python -m swcompat --prefix "$RUNNER_TEMP/prereq-prefix" --logs-dir build/logs init
+      - name: Check installer APIs without SOLIDWORKS files
+        run: python -m swcompat --prefix "$RUNNER_TEMP/prereq-prefix" --logs-dir build/logs probe-prereqs
+      - name: Generate scoped evidence report
+        shell: bash
+        run: |
+          set -euo pipefail
+          LOG="$(find build/logs -maxdepth 1 -name '*-prereqs-*.log' -print -quit)"
+          test -n "$LOG"
+          python -m scripts.prereq_report --input "$LOG" --output build/prereq.json --host macos-15-apple-silicon-wine --summary "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: prereq-macos-wine
+          path: |
+            build/prereq.json
+            build/logs/*-prereqs-*.log
+          retention-days: 7
+          if-no-files-found: warn
