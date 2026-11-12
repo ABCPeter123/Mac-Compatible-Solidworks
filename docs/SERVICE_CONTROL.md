@@ -76,6 +76,14 @@ In the same-process diagnostic, startup initially returned 1055 (`ERROR_SERVICE_
 
 This finding is limited to the GitHub-hosted macOS 15 Apple Silicon runner and the pinned Gcenx Wine 11.21 distribution. It does not establish the behavior of other macOS Wine builds or physical hardware.
 
+## Staging runtime comparison
+
+The Wine development build `wine-devel-11.21-osx64.tar.xz` consistently fails cross-process service discovery on GitHub-hosted Apple Silicon even though the same process can create, start, stop and remove the original Windows service.
+
+Gcenx also publishes `wine-staging-11.21-osx64.tar.xz` (SHA-256: `d7bcd5abf4df27aae397a7898aef074fea4a2e0b51e0a55aa9659517bbf9d452`). The SCM CI now tests this **separate upstream Staging build** in an isolated prefix with the identical service executable and harness. It is an experiment; passing would require further regression tests for MSI, COM, .NET and OpenGL before a project-wide runtime switch.
+
+Source: https://github.com/Gcenx/macOS_Wine_builds/releases/tag/11.21
+
 ## Scope
 
 A passing test establishes only these Service Control Manager operations. It does not prove compatibility with kernel drivers, system-level license services, SOLIDWORKS background components, Windows service accounts, or CAD functionality.
