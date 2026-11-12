@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="{EB00D74E-5D24-49C6-BFB1-FF694AE23719}"
+           Name="SWCompat Independent Installer Test" Language="1033"
+           Version="1.0.0" Manufacturer="SWCompat"
+           UpgradeCode="{FD34E5F3-45EA-475C-BE0F-F61F8A760253}">
+    <Package InstallerVersion="200" Compressed="yes" InstallScope="perUser" />
+    <MediaTemplate EmbedCab="yes" />
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="INSTALLDIR" Name="SWCompatProbe">
+          <Component Id="ProbeComponent" Guid="{D7C73AB6-CF11-40D2-9757-81F8217AAF8C}">
+            <File Id="ProbeMarker" Name="probe-marker.txt"
+                  Source="probes/msi_payload.txt" />
+            <RegistryValue Root="HKCU" Key="Software\SWCompat\InstallerProbe"
+                           Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+    <Feature Id="ProbeFeature" Title="SWCompat Probe" Level="1">
+      <ComponentRef Id="ProbeComponent" />
+    </Feature>
+  </Product>
+</Wix>
