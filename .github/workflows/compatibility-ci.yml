@@ -49,13 +49,23 @@ jobs:
           xcrun swiftc probes/metal_probe.swift -o build/metal_probe
       - name: Run probe
         run: ./build/metal_probe | tee build/metal-probe.txt
+      - name: Probe native CGL pixel formats
+        run: |
+          xcrun clang -Wno-deprecated-declarations probes/cgl_probe.c -framework OpenGL -o build/cgl_probe
+          if ./build/cgl_probe | tee build/cgl-probe.txt; then
+            echo "Native CGL OpenGL available"
+          else
+            echo "Native CGL OpenGL unavailable on this hosted runner"
+          fi
       - name: Write report
         run: python -m scripts.ci_report --require-macos --output "build/host.json"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: macos-diagnostics-${{ matrix.os }}
-          path: build/*.json
+          path: |
+            build/*.json
+            build/*.txt
           if-no-files-found: warn
           retention-days: 14
 
