@@ -28,7 +28,15 @@ The initial functional experiment, [run 43282487098](https://github.com/ABCPeter
 
 Windows normally merges `HKCU\\Software\\Classes` into `HKCR`. We now log both key views in the client to distinguish missing COM registry visibility from DLL loading or class-factory failures. A separate **Wine-only** test attempts direct registration through the virtual `HKEY_CLASSES_ROOT` view of a disposable Wine prefix. That route must not be used against a real Windows installation or a system prefix.
 
-Neither root cause nor workaround is considered confirmed until the diagnostic experiment finishes.
+**Confirmed** by [macOS, Linux and native Windows workflow 43283413308](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43283413308):
+
+| Environment | HKCU user-registration test | Isolated Wine HKCR registration |
+| --- | --- | --- |
+| Windows Server 2025 | PASS | Not run, intentionally prohibited |
+| Linux Wine 9.0 | FAIL: HKCU key visible, HKCR key missing | PASS: CoCreateInstance, QueryInterface and cleanup |
+| Apple Silicon macOS Wine 11.21 | FAIL: HKCU key visible, HKCR key missing | PASS: CoCreateInstance, QueryInterface and cleanup |
+
+The observable cause is missing `HKCR` visibility of our per-user class registration in these Wine environments. Direct registration in the disposable Wine prefix's classes-root view restores activation of this test COM DLL. This is not evidence that every proprietary SOLIDWORKS COM class can be registered or activated, and it is not a request to modify a real Windows machine's global COM registry.
 
 ## Limits
 
