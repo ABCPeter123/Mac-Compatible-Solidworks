@@ -8,6 +8,11 @@ on:
       - 'scripts/service_smoke.py'
       - 'tests/test_service_smoke.py'
   pull_request:
+    paths:
+      - '.github/workflows/windows-service-ci.yml'
+      - 'probes/win_service_smoke.c'
+      - 'scripts/service_smoke.py'
+      - 'tests/test_service_smoke.py'
   workflow_dispatch:
 
 permissions:
