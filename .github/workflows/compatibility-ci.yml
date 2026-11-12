@@ -1,0 +1,110 @@
+name: Compatibility foundation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Print environment
+        run: python -m swcompat doctor --json
+
+  native-macos:
+    name: Native Metal diagnostic (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile Swift/Metal capability probe
+        run: |
+          mkdir -p build
+          xcrun swiftc probes/metal_probe.swift -o build/metal_probe
+      - name: Run probe
+        run: ./build/metal_probe | tee build/metal-probe.txt
+      - name: Write report
+        run: python -m scripts.ci_report --require-macos --output "build/host.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-diagnostics-${{ matrix.os }}
+          path: build/*.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  build-wgl:
+    name: Build Windows x64 OpenGL probe
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MinGW-w64
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
+      - name: Build WGL executable
+        run: sh scripts/build-wgl-probe.sh
+      - name: Verify Windows binary and imports
+        run: |
+          file build/wgl_probe.exe
+          x86_64-w64-mingw32-objdump -p build/wgl_probe.exe > build/imports.txt
+          grep -qi 'DLL Name: OPENGL32.dll' build/imports.txt
+          grep -qi 'DLL Name: USER32.dll' build/imports.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-wgl-probe
+          path: build/wgl_probe.exe
+          retention-days: 14
+
+  wine-smoke-linux:
+    name: Experimental Linux Wine + WGL smoke
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Wine, MinGW, Xvfb and Mesa
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine wine64 gcc-mingw-w64-x86-64 xvfb xauth libgl1-mesa-dri
+      - name: Build WGL executable
+        run: sh scripts/build-wgl-probe.sh
+      - name: Initialize Wine
+        run: python -m swcompat --prefix "$RUNNER_TEMP/wineprefix" --logs-dir build/logs init
+      - name: Smoke test Win32 and graphics
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: |
+          xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/wineprefix" --logs-dir build/logs probe-win32
+          xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/wineprefix" --logs-dir build/logs probe-wgl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-wine-logs
+          path: build/logs/*.log
+          if-no-files-found: ignore
+          retention-days: 7
