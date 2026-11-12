@@ -57,7 +57,7 @@ jobs:
           # The extracted distribution has a prefix-relative library path.
           # Make the CI-local copy absolute, without patching the driver.
           data["ICD"]["library_path"] = str(driver)
-          manifest.write_text(json.dumps(data, indent=2) + "\\n")
+          manifest.write_text(json.dumps(data, indent=2))
           print("Resolved ICD driver:", driver)
           PY
           echo "Resolved KosmicKrisp ICD contents:"
