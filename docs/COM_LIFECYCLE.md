@@ -22,6 +22,14 @@ The [COM lifecycle workflow](../.github/workflows/com-lifecycle-ci.yml) builds t
 
 Each Wine run uses a disposable prefix. Results are kept as JSON CI artifacts.
 
+## Observed Wine registry discrepancy
+
+The initial functional experiment, [run 43282487098](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43282487098), passed on native Windows Server 2025. Both Linux Wine 9.0 and Apple Silicon Wine 11.21 returned `S_OK` from the user-scoped `DllRegisterServer`, but a separate process then failed `CoCreateInstance` with `REGDB_E_CLASSNOTREG (0x80040154)`. Unregistration succeeded.
+
+Windows normally merges `HKCU\\Software\\Classes` into `HKCR`. We now log both key views in the client to distinguish missing COM registry visibility from DLL loading or class-factory failures. A separate **Wine-only** test attempts direct registration through the virtual `HKEY_CLASSES_ROOT` view of a disposable Wine prefix. That route must not be used against a real Windows installation or a system prefix.
+
+Neither root cause nor workaround is considered confirmed until the diagnostic experiment finishes.
+
 ## Limits
 
 A passing COM lifecycle test **does not** establish compatibility with SOLIDWORKS, which uses many other COM interfaces, threading models, registration styles, add-ins and automation objects. Nor does it demonstrate that a licensed installation works. Our test uses no proprietary SOLIDWORKS files, Windows installation media, or activation data.
