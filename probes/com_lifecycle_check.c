@@ -23,8 +23,11 @@ static int report(const char *phase, HRESULT hr, int pass) {
 static int registration(const char *phase, const wchar_t *path, int uninstall) {
     HMODULE module = LoadLibraryW(path);
     if (!module) return report(phase, HRESULT_FROM_WIN32(GetLastError()), 0);
-    registration_fn action = (registration_fn)(void *)GetProcAddress(
-        module, uninstall ? "DllUnregisterServer" : "DllRegisterServer");
+    int root_mode = strstr(phase, "-root") != NULL;
+    const char *symbol = (uninstall
+        ? (root_mode ? "SWCompatUnregisterClassesRoot" : "DllUnregisterServer")
+        : (root_mode ? "SWCompatRegisterClassesRoot" : "DllRegisterServer"));
+    registration_fn action = (registration_fn)(void *)GetProcAddress(module, symbol);
     HRESULT hr = action ? action() : E_NOTIMPL;
     FreeLibrary(module);
     return report(phase, hr, SUCCEEDED(hr));
@@ -37,13 +40,27 @@ int wmain(int argc, wchar_t **argv) {
     }
     char phase[20] = {0};
     WideCharToMultiByte(CP_UTF8, 0, argv[1], -1, phase, sizeof(phase), NULL, NULL);
-    if ((!strcmp(phase, "register") || !strcmp(phase, "unregister")) && argc == 3)
-        return registration(phase, argv[2], !strcmp(phase, "unregister"));
+    if ((!strcmp(phase, "register") || !strcmp(phase, "unregister") ||
+          !strcmp(phase, "register-root") || !strcmp(phase, "unregister-root")) && argc == 3)
+        return registration(phase, argv[2], !strncmp(phase, "unregister", 10));
     if (argc != 2 || (strcmp(phase, "activate") && strcmp(phase, "absent")))
         return 2;
 
     HRESULT init = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
     if (FAILED(init)) return report(phase, init, 0);
+
+    HKEY key = NULL;
+    LONG cu = RegOpenKeyExW(HKEY_CURRENT_USER,
+        L"Software\\Classes\\CLSID\\{99FCFDA0-3C7A-4909-AB39-67C40C772F15}",
+        0, KEY_READ, &key);
+    if (cu == ERROR_SUCCESS) RegCloseKey(key);
+    key = NULL;
+    LONG cr = RegOpenKeyExW(HKEY_CLASSES_ROOT,
+        L"CLSID\\{99FCFDA0-3C7A-4909-AB39-67C40C772F15}",
+        0, KEY_READ, &key);
+    if (cr == ERROR_SUCCESS) RegCloseKey(key);
+    printf("SWCOMPAT_COM_HKCU_REGISTRY_STATUS=%ld\n", cu);
+    printf("SWCOMPAT_COM_HKCR_REGISTRY_STATUS=%ld\n", cr);
 
     IUnknown *object = NULL;
     HRESULT hr = CoCreateInstance(&CLSID_SWCompat, NULL, CLSCTX_INPROC_SERVER,
