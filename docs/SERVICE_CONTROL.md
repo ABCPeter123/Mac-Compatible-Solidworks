@@ -31,6 +31,14 @@ The harness exposes `--keepalive`, which starts `service_smoke.exe hold` before 
 
 **Interpretation:** The before/after comparison supports Wine client/server lifetime as the cause of the Linux failure. It is not proof that all Windows service types work in a production Wine session. The exact mechanism and macOS behavior require separate confirmation.
 
+## Single-process service diagnostic
+
+Because macOS Wine still returns `ERROR_SERVICE_DOES_NOT_EXIST` from later SCM controller processes even with an unrelated Wine client held open, we added a separate diagnostic mode: `service_smoke.exe single-roundtrip`.
+
+It creates, starts, queries, stops and deletes the same harmless Windows service while retaining **one** Service Control Manager connection and service handle. It runs in another fresh Wine prefix, outside the primary test. The output includes Win32 startup/stop errors, service process ID, and deletion status.
+
+A same-process PASS with a cross-process FAIL would indicate a registry/SCM visibility issue between processes. A same-process FAIL would instead point to service startup or process management itself. Neither result should be treated as evidence about proprietary SOLIDWORKS licensing.
+
 ## Scope
 
 A passing test establishes only these Service Control Manager operations. It does not prove compatibility with kernel drivers, system-level license services, SOLIDWORKS background components, Windows service accounts, or CAD functionality.

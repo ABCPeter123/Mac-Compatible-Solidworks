@@ -139,10 +139,23 @@ jobs:
         run: python -m swcompat --prefix "$RUNNER_TEMP/service-prefix" --logs-dir build/logs init
       - name: Verify Service Control Manager behavior
         run: python -m scripts.service_smoke --host wine --prefix "$RUNNER_TEMP/service-prefix" --keepalive --exe build/service_smoke.exe --output build/service-result.json
+      - name: Initialize independent Wine prefix for same-process SCM diagnostic
+        if: always()
+        run: python -m swcompat --prefix "$RUNNER_TEMP/service-single-prefix" --logs-dir build/single-logs init
+      - name: Diagnose service lifecycle with one open SCM handle
+        if: always()
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          export WINEPREFIX="$RUNNER_TEMP/service-single-prefix" WINEARCH=win64 WINEDEBUG=-all
+          "$SWCOMPAT_WINE" "$PWD/build/service_smoke.exe" single-roundtrip | tee build/service-single-roundtrip.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: swcompat-service-apple-silicon
-          path: build/service-result.json
+          path: |
+            build/service-result.json
+            build/service-single-roundtrip.log
           if-no-files-found: warn
           retention-days: 7
