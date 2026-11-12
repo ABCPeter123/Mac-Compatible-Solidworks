@@ -27,8 +27,8 @@ class GraphicsComparisonTests(unittest.TestCase):
                "SWCOMPAT_BITMAP_OPENGL_FORMATS": "12"}
         result = interpret(cgl, wgl)
         self.assertIn("no pixel formats capable of drawing", result)
-        data = report("SWCOMPAT_CGL=PASS\\n",
-                      "SWCOMPAT_WGL=FAIL\\nSWCOMPAT_ONSCREEN_OPENGL_FORMATS=0\\n")
+        data = report("SWCOMPAT_CGL=PASS\n",
+                      "SWCOMPAT_WGL=FAIL\nSWCOMPAT_ONSCREEN_OPENGL_FORMATS=0\n")
         self.assertEqual(data["wine_onscreen_gl_formats"], "0")
 
     def test_success_does_not_claim_solidworks(self):
