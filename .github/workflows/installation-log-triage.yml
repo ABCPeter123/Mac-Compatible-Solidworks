@@ -1,0 +1,69 @@
+name: SOLIDWORKS Installation Manager log triage
+
+on:
+  push:
+    paths:
+      - '.github/workflows/installation-log-triage.yml'
+      - 'scripts/solidworks_log_triage.py'
+      - 'tests/test_solidworks_log_triage.py'
+  pull_request:
+    paths:
+      - '.github/workflows/installation-log-triage.yml'
+      - 'scripts/solidworks_log_triage.py'
+      - 'tests/test_solidworks_log_triage.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  safe-log-parser:
+    name: Synthetic log triage (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate bounded ZIP parsing and no private data in reports
+        run: python -m unittest discover -s tests -p "test_solidworks_log_triage.py" -v
+      - name: Exercise offline CLI with synthetic sensitive log contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import zipfile
+          dest = Path("build")
+          dest.mkdir(exist_ok=True)
+          with zipfile.ZipFile(dest / "IM_Logs.zip", "w", zipfile.ZIP_DEFLATED) as z:
+              z.writestr("SummaryIMLog_SECRET_SERIAL.txt",
+                         "C:\\Users\\PRIVATE_ACCOUNT\\license-secret.dat\n"
+                         "sample@example.com key=secrettoken\n"
+                         "Error 1603\n0x80040154\n0xDEADBEEF\n")
+          PY
+          python -m scripts.solidworks_log_triage \
+            --logs build/IM_Logs.zip --output build/redacted-log-report.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path("build/redacted-log-report.json").read_text())
+          assert data["potential_issue_counts"]["msi_fatal_1603"] == 1
+          assert data["potential_issue_counts"]["com_class_not_registered"] == 1
+          assert data["log_files_examined"] == 1
+          output = json.dumps(data)
+          for private in ("PRIVATE_ACCOUNT", "sample@example.com", "secrettoken",
+                          "SECRET_SERIAL", "0xDEADBEEF"):
+              assert private not in output, private
+          print("No raw log content leaked: PASS")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-redacted-log-report-${{ matrix.os }}
+          path: build/redacted-log-report.json
+          if-no-files-found: error
+          retention-days: 7
