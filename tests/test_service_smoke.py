@@ -42,7 +42,7 @@ class ServiceSmokeTests(unittest.TestCase):
                 report=run_sequence("native",None,Path(tmp),exe)
             self.assertFalse(report["passed"])
             self.assertIn("cleanup_stop",report)
-            self.assertEqual(execute.call_count,6)
+            self.assertEqual(execute.call_count,7)
 
     def test_retries_cross_process_service_discovery(self):
         with tempfile.TemporaryDirectory() as tmp:
