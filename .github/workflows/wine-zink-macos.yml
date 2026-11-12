@@ -1,0 +1,150 @@
+name: macOS Mesa Zink OpenGL feasibility
+
+on:
+  push:
+    paths:
+      - .github/workflows/wine-zink-macos.yml
+      - scripts/stage_zink.py
+      - probes/wgl_probe.c
+      - probes/win32_vulkan_probe.c
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-zink-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-probes:
+    name: Compile Windows x64 graphics probes
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MinGW cross compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+      - run: sh scripts/build-wgl-probe.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zink-windows-probes
+          path: build/*.exe
+          retention-days: 3
+
+  mesa-payload:
+    name: Verify and stage Mesa 26.2.6 Windows x64 files
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install sevenzip
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends p7zip-full
+      - name: Verify Mesa release SHA-256
+        run: |
+          set -euo pipefail
+          mkdir -p build/mesa-extract build/zink-payload
+          curl --fail --location --retry 3 \
+            -o "$RUNNER_TEMP/mesa.7z" \
+            "https://github.com/pal1000/mesa-dist-win/releases/download/26.2.6/mesa3d-26.2.6-release-mingw.7z"
+          echo "da0f71d9181b672c1918f3c342f11118c687f6059a46b16502845160733cc388  $RUNNER_TEMP/mesa.7z" | sha256sum -c -
+          7z x -y -o"build/mesa-extract" "$RUNNER_TEMP/mesa.7z" >/dev/null
+      - name: Select only x64 Windows Mesa DLLs
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import shutil
+          from scripts.stage_zink import select_dlls
+          source = Path("build/mesa-extract")
+          target = Path("build/zink-payload")
+          for name, path in select_dlls(source).items():
+              shutil.copy2(path, target / name)
+              print(f"STAGED {name}: {path} ({path.stat().st_size} bytes)")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zink-x64-dlls
+          path: build/zink-payload/*.dll
+          retention-days: 3
+
+  macos-zink:
+    name: Mesa Zink on Apple Silicon Wine
+    runs-on: macos-15
+    needs: [windows-probes, mesa-payload]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: zink-windows-probes
+          path: build
+      - uses: actions/download-artifact@v4
+        with:
+          name: zink-x64-dlls
+          path: build/zink-payload
+      - name: Verify Wine 11.21 download checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-devel-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-devel-11.21-osx64.tar.xz"
+          echo "9909b486657e10ab66c7279371ae1f990345b596b3b1b3a0cf21f28af24fa0ce  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-build"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-build"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Initialize clean Wine prefix
+        shell: bash
+        run: python -m swcompat --prefix "$RUNNER_TEMP/zinkprefix" --logs-dir build/logs init
+      - name: Inject x64 Mesa OpenGL DLLs into disposable prefix
+        shell: bash
+        run: |
+          python -m scripts.stage_zink --source build/zink-payload --prefix "$RUNNER_TEMP/zinkprefix" --manifest build/zink-stage.json
+      - name: Probe Windows graphics with Zink over Vulkan/MoltenVK
+        id: zink
+        continue-on-error: true
+        shell: bash
+        env:
+          WINEDLLOVERRIDES: opengl32,libgallium_wgl,libglapi=n,b
+          GALLIUM_DRIVER: zink
+          MESA_LOADER_DRIVER_OVERRIDE: zink
+          LIBGL_ALWAYS_SOFTWARE: '0'
+          MVK_CONFIG_RESUME_LOST_DEVICE: '1'
+          MVK_CONFIG_FULL_IMAGE_VIEW_SWIZZLE: '1'
+        run: |
+          python -m swcompat --prefix "$RUNNER_TEMP/zinkprefix" --logs-dir build/logs probe-win32
+          python -m swcompat --prefix "$RUNNER_TEMP/zinkprefix" --logs-dir build/logs probe-wgl
+      - name: Summarize and retain failures as evidence
+        if: always()
+        shell: bash
+        run: |
+          echo "## Mesa Zink experimental result" >> "$GITHUB_STEP_SUMMARY"
+          echo "Wine 11.21 with native x64 Mesa 26.2.6 DLLs, Vulkan/MoltenVK on hosted Apple Silicon." >> "$GITHUB_STEP_SUMMARY"
+          echo "No SOLIDWORKS files or activation involved." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if grep -l '^SWCOMPAT_WGL=PASS' build/logs/*-wgl-*.log; then
+            echo "WGL probe: **PASS**" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "WGL probe: **FAIL or not run**. Inspect logs." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zink-macos-diagnostics
+          path: |
+            build/zink-stage.json
+            build/logs/*.log
+          retention-days: 7
+          if-no-files-found: warn
+      - name: Require successful Windows OpenGL execution
+        if: always()
+        shell: bash
+        run: |
+          grep -l '^SWCOMPAT_WGL=PASS' build/logs/*-wgl-*.log
