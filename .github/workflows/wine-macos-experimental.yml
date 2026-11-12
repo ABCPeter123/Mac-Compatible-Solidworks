@@ -1,0 +1,107 @@
+name: Experimental macOS Wine execution
+
+on:
+  push:
+    paths: ['.github/workflows/wine-macos-experimental.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-probe:
+    name: Build independent Windows x64 probe
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MinGW-w64
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+      - run: sh scripts/build-wgl-probe.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: experimental-wgl-probe
+          path: build/wgl_probe.exe
+          retention-days: 3
+
+  macos-wine:
+    name: Wine 11.21 (${{ matrix.os }})
+    needs: windows-probe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15-intel, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: experimental-wgl-probe
+          path: build
+      - name: Detect architecture and Rosetta
+        shell: bash
+        run: |
+          uname -a
+          sysctl -n machdep.cpu.brand_string || true
+          if [ "$(uname -m)" = arm64 ]; then
+            arch -x86_64 /usr/bin/true
+            echo "Rosetta x86_64 execution available"
+          fi
+      - name: Download and checksum-pin upstream Wine macOS bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-devel-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-devel-11.21-osx64.tar.xz"
+          echo "9909b486657e10ab66c7279371ae1f990345b596b3b1b3a0cf21f28af24fa0ce  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-build"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-build"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
+          if [ -z "$WINE_BIN" ] || [ ! -x "$WINE_BIN" ]; then
+            echo "Wine executable missing from verified archive"
+            find "$RUNNER_TEMP/wine-build" -maxdepth 4 -type d | head -40
+            exit 1
+          fi
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+          echo "Wine executable: $WINE_BIN"
+      - name: Check Wine runtime and host
+        shell: bash
+        run: |
+          "$SWCOMPAT_WINE" --version
+          python -m swcompat doctor --json | tee build/doctor.json
+      - name: Initialize isolated Wine prefix
+        continue-on-error: true
+        shell: bash
+        run: python -m swcompat --prefix "$RUNNER_TEMP/swcompat-prefix" --logs-dir build/logs init
+      - name: Run x64 Win32 process
+        continue-on-error: true
+        shell: bash
+        run: python -m swcompat --prefix "$RUNNER_TEMP/swcompat-prefix" --logs-dir build/logs probe-win32
+      - name: Run x64 WGL viewport probe
+        continue-on-error: true
+        shell: bash
+        run: python -m swcompat --prefix "$RUNNER_TEMP/swcompat-prefix" --logs-dir build/logs probe-wgl
+      - name: Summarize reproducible diagnostics
+        if: always()
+        shell: bash
+        run: |
+          echo "## Experimental Wine on ${{ matrix.os }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Upstream Wine 11.21 devel, checksum-pinned. No SOLIDWORKS binaries involved." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Probe steps are permitted to fail to preserve evidence. Inspect log artifacts for the actual outcome." >> "$GITHUB_STEP_SUMMARY"
+          python -m scripts.ci_report --require-macos --output build/host.json || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wine-macos-${{ matrix.os }}-logs
+          path: |
+            build/*.json
+            build/logs/*.log
+          if-no-files-found: warn
+          retention-days: 7
