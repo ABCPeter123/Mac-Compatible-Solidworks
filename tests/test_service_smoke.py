@@ -90,7 +90,7 @@ class ServiceSmokeTests(unittest.TestCase):
             exe=Path(tmp)/"service_smoke.exe"
             exe.touch()
             transient={"exit_code":1,
-                       "output":"SWCOMPAT_SERVICE_PHASE=start\\nSWCOMPAT_SERVICE_ERROR=1055\\nSWCOMPAT_SERVICE_CHECK=FAIL\\n"}
+                       "output":"SWCOMPAT_SERVICE_PHASE=start\nSWCOMPAT_SERVICE_ERROR=1055\nSWCOMPAT_SERVICE_CHECK=FAIL\n"}
             with patch("scripts.service_smoke.time.sleep") as sleep, \
                  patch("scripts.service_smoke.execute",side_effect=[
                     result("absent"),result("install"),result("status","1"),
@@ -106,7 +106,7 @@ class ServiceSmokeTests(unittest.TestCase):
             exe=Path(tmp)/"service_smoke.exe"
             exe.touch()
             denied={"exit_code":1,
-                    "output":"SWCOMPAT_SERVICE_PHASE=start\\nSWCOMPAT_SERVICE_ERROR=5\\nSWCOMPAT_SERVICE_CHECK=FAIL\\n"}
+                    "output":"SWCOMPAT_SERVICE_PHASE=start\nSWCOMPAT_SERVICE_ERROR=5\nSWCOMPAT_SERVICE_CHECK=FAIL\n"}
             with patch("scripts.service_smoke.time.sleep") as sleep, \
                  patch("scripts.service_smoke.execute",side_effect=[
                     result("absent"),result("install"),result("status","1"),
