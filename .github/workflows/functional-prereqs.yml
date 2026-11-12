@@ -1,0 +1,247 @@
+name: Functional Windows installer and managed-runtime smoke
+
+on:
+  push:
+    paths:
+      - '.github/workflows/functional-prereqs.yml'
+      - 'probes/installer_probe.wxs'
+      - 'probes/msi_payload.txt'
+      - 'probes/win_installer_check.c'
+      - 'probes/dotnet_framework_smoke.cs'
+      - 'scripts/functional_smoke.py'
+      - 'tests/test_functional_smoke.py'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-msi:
+    name: Build independent Windows Installer package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install wixl and MinGW
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wixl gcc-mingw-w64-x86-64
+      - name: Build original harmless MSI and checker
+        run: |
+          mkdir -p build
+          wixl -a x64 -o build/msi_probe.msi probes/installer_probe.wxs
+          x86_64-w64-mingw32-gcc -std=c11 -Wall -Wextra -O2 \
+            probes/win_installer_check.c -o build/msi_check.exe -lmsi
+          file build/msi_probe.msi build/msi_check.exe
+          test -s build/msi_probe.msi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swcompat-original-msi-fixture
+          path: |
+            build/msi_probe.msi
+            build/msi_check.exe
+          retention-days: 5
+
+  build-managed:
+    name: Compile self-authored .NET Framework 4.x executable
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile against Windows .NET Framework
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build | Out-Null
+          $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+          if (!(Test-Path $csc)) { throw 'Windows .NET Framework compiler not available' }
+          & $csc /nologo /target:exe /reference:System.Xml.dll /reference:System.Core.dll /out:build\dotnet_smoke.exe probes\dotnet_framework_smoke.cs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Test-Path build\dotnet_smoke.exe)) { throw 'Managed executable was not generated' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swcompat-original-dotnet-fixture
+          path: build/dotnet_smoke.exe
+          retention-days: 5
+
+  native-windows:
+    name: Windows Server functional reference
+    needs: [build-msi, build-managed]
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: swcompat-original-msi-fixture
+          path: build
+      - uses: actions/download-artifact@v4
+        with:
+          name: swcompat-original-dotnet-fixture
+          path: build
+      - name: Test MSI install and uninstall, including file and product state
+        shell: pwsh
+        run: python -m scripts.functional_smoke msi --host native --output build/msi-functional.json
+      - name: Run actual managed CLR / BCL operations
+        shell: pwsh
+        run: python -m scripts.functional_smoke managed --host native --output build/dotnet-functional.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: swcompat-functional-windows-reference
+          path: build/*-functional.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  linux-wine:
+    name: Linux Wine functional prerequisites
+    needs: [build-msi, build-managed]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: swcompat-original-msi-fixture
+          path: build
+      - uses: actions/download-artifact@v4
+        with:
+          name: swcompat-original-dotnet-fixture
+          path: build
+      - name: Install Wine and virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine wine64 xvfb xauth
+      - name: Initialize disposable Win64 prefix
+        run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/smoke-prefix" --logs-dir build/logs init
+      - name: Test MSI install, registration, uninstall and payload removal
+        continue-on-error: true
+        run: xvfb-run -a python -m scripts.functional_smoke msi --host wine --prefix "$RUNNER_TEMP/smoke-prefix" --output build/msi-functional.json
+      - name: Test real .NET Framework managed execution
+        continue-on-error: true
+        run: xvfb-run -a python -m scripts.functional_smoke managed --host wine --prefix "$RUNNER_TEMP/smoke-prefix" --output build/dotnet-functional.json
+      - name: Download and verify Wine Mono 11.3.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --output build/wine-mono-11.3.0-x86.msi "https://github.com/wine-mono/wine-mono/releases/download/wine-mono-11.3.0/wine-mono-11.3.0-x86.msi"
+          echo "df2dfc1665c2511882e7cabd56eafd0c0a3d94e5a7e86f969277f6c189d418d3  build/wine-mono-11.3.0-x86.msi" | sha256sum -c -
+      - name: Install open-source Wine Mono in disposable Wine prefix
+        continue-on-error: true
+        shell: bash
+        run: |
+          export WINEPREFIX="$RUNNER_TEMP/smoke-prefix" WINEARCH=win64 WINEDEBUG=-all
+          MSI="$(python -c 'from pathlib import Path; from scripts.functional_smoke import wine_path; print(wine_path(Path("build/wine-mono-11.3.0-x86.msi")))')"
+          xvfb-run -a wine msiexec.exe /i "$MSI" /qn /norestart
+      - name: Repeat functional managed test with Wine Mono 11.3.0
+        continue-on-error: true
+        run: xvfb-run -a python -m scripts.functional_smoke managed --host wine --runtime-label wine-mono-11.3.0 --prefix "$RUNNER_TEMP/smoke-prefix" --output build/dotnet-mono-functional.json
+      - name: Preserve results and state limitations
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as fp:
+              fp.write("## Linux Wine functional prerequisite checks\n\n")
+              for scenario in ("msi","dotnet","dotnet-mono"):
+                  file=Path(f"build/{scenario}-functional.json")
+                  result=json.loads(file.read_text()) if file.exists() else {}
+                  fp.write(f"- {scenario}: **{'PASS' if result.get('passed') else 'FAIL / NOT RUN'}**\n")
+              fp.write("\nNo SOLIDWORKS application, installer or license data used.\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: swcompat-functional-linux-wine
+          path: build/*-functional.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Enforce MSI and managed execution with Wine Mono
+        if: always()
+        run: python -c 'import json; from pathlib import Path; assert all(json.loads(Path(f"build/{s}-functional.json").read_text()).get("passed") for s in ["msi","dotnet-mono"])'
+
+  macos-wine:
+    name: Apple Silicon Wine functional prerequisites
+    needs: [build-msi, build-managed]
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: swcompat-original-msi-fixture
+          path: build
+      - uses: actions/download-artifact@v4
+        with:
+          name: swcompat-original-dotnet-fixture
+          path: build
+      - name: Download checksum-pinned Wine 11.21
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-devel-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-devel-11.21-osx64.tar.xz"
+          echo "9909b486657e10ab66c7279371ae1f990345b596b3b1b3a0cf21f28af24fa0ce  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-build"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-build"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Initialize disposable Win64 Wine prefix
+        run: python -m swcompat --prefix "$RUNNER_TEMP/smoke-prefix" --logs-dir build/logs init
+      - name: Test MSI install, registration, uninstall and payload removal
+        continue-on-error: true
+        run: python -m scripts.functional_smoke msi --host wine --prefix "$RUNNER_TEMP/smoke-prefix" --output build/msi-functional.json
+      - name: Test .NET managed tasks, XML, hashing and file IO
+        continue-on-error: true
+        run: python -m scripts.functional_smoke managed --host wine --prefix "$RUNNER_TEMP/smoke-prefix" --output build/dotnet-functional.json
+      - name: Download and verify Wine Mono 11.3.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --output build/wine-mono-11.3.0-x86.msi "https://github.com/wine-mono/wine-mono/releases/download/wine-mono-11.3.0/wine-mono-11.3.0-x86.msi"
+          echo "df2dfc1665c2511882e7cabd56eafd0c0a3d94e5a7e86f969277f6c189d418d3  build/wine-mono-11.3.0-x86.msi" | shasum -a 256 -c -
+      - name: Install open-source Wine Mono in disposable Wine prefix
+        continue-on-error: true
+        shell: bash
+        run: |
+          export WINEPREFIX="$RUNNER_TEMP/smoke-prefix" WINEARCH=win64 WINEDEBUG=-all
+          MSI="$(python -c 'from pathlib import Path; from scripts.functional_smoke import wine_path; print(wine_path(Path("build/wine-mono-11.3.0-x86.msi")))')"
+          "$SWCOMPAT_WINE" msiexec.exe /i "$MSI" /qn /norestart
+      - name: Repeat functional managed test with Wine Mono 11.3.0
+        continue-on-error: true
+        run: python -m scripts.functional_smoke managed --host wine --runtime-label wine-mono-11.3.0 --prefix "$RUNNER_TEMP/smoke-prefix" --output build/dotnet-mono-functional.json
+      - name: Summarize actual runtime behavior
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as fp:
+              fp.write("## Apple Silicon macOS Wine functional prerequisite checks\n\n")
+              for scenario in ("msi","dotnet","dotnet-mono"):
+                  file=Path(f"build/{scenario}-functional.json")
+                  result=json.loads(file.read_text()) if file.exists() else {}
+                  fp.write(f"- {scenario}: **{'PASS' if result.get('passed') else 'FAIL / NOT RUN'}**\n")
+              fp.write("\nThis measures standalone Windows features, not SOLIDWORKS compatibility.\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: swcompat-functional-macos-wine
+          path: build/*-functional.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Enforce MSI and Wine Mono managed smoke success
+        if: always()
+        run: python -c 'import json; from pathlib import Path; assert all(json.loads(Path(f"build/{s}-functional.json").read_text()).get("passed") for s in ["msi","dotnet-mono"])'

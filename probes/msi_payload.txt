@@ -1,0 +1,2 @@
+SWCOMPAT_MSI_PAYLOAD_V1
+This is an original independent Windows Installer test file.
