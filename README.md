@@ -16,6 +16,12 @@ Go to [Actions](../../actions) and select **Compatibility foundation**, or see [
 
 Hosted test runners have limited GPU, interactivity, and licensing capabilities. Passing CI **does not mean SOLIDWORKS works**. Eventually we need a licensed physical Mac or equivalent suitable interactive environment.
 
+## Experimental Wine execution on hosted Macs
+
+The separate [macOS Wine experiment](.github/workflows/wine-macos-experimental.yml) downloads the upstream Wine 11.21 development bundle on hosted Intel and Apple Silicon machines. The exact 225 MB archive is pinned to its SHA-256 digest and is not committed to this repository. This workflow tries actual Win32 execution and a WGL/OpenGL context under Wine, collecting logs even if either operation fails.
+
+[Inspect the experiment's workflow runs](../../actions/workflows/wine-macos-experimental.yml). A passing dependency or download step is not equivalent to a passing WGL probe, and neither proves SOLIDWORKS compatibility.
+
 ## Local development
 
 Requires Python 3.10+:
