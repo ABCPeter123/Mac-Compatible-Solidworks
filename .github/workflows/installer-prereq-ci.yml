@@ -102,12 +102,24 @@ jobs:
           LOG="$(find build/logs -maxdepth 1 -name '*-prereqs-*.log' -print -quit)"
           test -n "$LOG"
           python -m scripts.prereq_report --input "$LOG" --output build/prereq.json --host ubuntu-24.04-wine --summary "$GITHUB_STEP_SUMMARY"
+      - name: Set Wine's reported OS to Windows 11 (isolated prefix)
+        run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/prereq-prefix" --logs-dir build/logs set-winver win11
+      - name: Verify Windows 11 profile and re-run prerequisites
+        run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/prereq-prefix" --logs-dir build/logs probe-prereqs
+      - name: Classify Windows 11 profile separately from actual API support
+        shell: bash
+        run: |
+          set -euo pipefail
+          LOG="$(ls -t build/logs/*-prereqs-*.log | head -1)"
+          python -m scripts.prereq_report --input "$LOG" --output build/prereq-win11.json --host ubuntu-24.04-wine-win11-profile --summary "$GITHUB_STEP_SUMMARY"
+          python -c 'import json; d=json.load(open("build/prereq-win11.json")); build=int(d["windows_reported_version"]["build"]); print("Wine reports Windows build", build); assert build >= 22000, "Windows 11 version profile did not apply"'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: prereq-linux-wine
           path: |
             build/prereq.json
+            build/prereq-win11.json
             build/logs/*-prereqs-*.log
           retention-days: 7
           if-no-files-found: warn
@@ -150,12 +162,24 @@ jobs:
           LOG="$(find build/logs -maxdepth 1 -name '*-prereqs-*.log' -print -quit)"
           test -n "$LOG"
           python -m scripts.prereq_report --input "$LOG" --output build/prereq.json --host macos-15-apple-silicon-wine --summary "$GITHUB_STEP_SUMMARY"
+      - name: Set Wine's reported OS to Windows 11 (isolated prefix)
+        run: python -m swcompat --prefix "$RUNNER_TEMP/prereq-prefix" --logs-dir build/logs set-winver win11
+      - name: Verify Windows 11 profile and re-run prerequisites
+        run: python -m swcompat --prefix "$RUNNER_TEMP/prereq-prefix" --logs-dir build/logs probe-prereqs
+      - name: Classify Windows 11 profile separately from actual API support
+        shell: bash
+        run: |
+          set -euo pipefail
+          LOG="$(ls -t build/logs/*-prereqs-*.log | head -1)"
+          python -m scripts.prereq_report --input "$LOG" --output build/prereq-win11.json --host macos-15-apple-silicon-wine-win11-profile --summary "$GITHUB_STEP_SUMMARY"
+          python -c 'import json; d=json.load(open("build/prereq-win11.json")); build=int(d["windows_reported_version"]["build"]); print("Wine reports Windows build", build); assert build >= 22000, "Windows 11 version profile did not apply"'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: prereq-macos-wine
           path: |
             build/prereq.json
+            build/prereq-win11.json
             build/logs/*-prereqs-*.log
           retention-days: 7
           if-no-files-found: warn
