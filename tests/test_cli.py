@@ -37,7 +37,7 @@ class CLITests(unittest.TestCase):
         return code, output.getvalue()
 
     def test_discovery(self):
-        self.assertEqual(find_wine(str(self.wine)), self.wine)
+        self.assertEqual(find_wine(str(self.wine)), self.wine.resolve())
         self.assertIsNone(find_wine("/a/nonexistent/file/that/is-not-wine"))
 
     def test_doctor(self):
