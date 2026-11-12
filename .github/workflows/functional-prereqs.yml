@@ -11,6 +11,14 @@ on:
       - 'scripts/functional_smoke.py'
       - 'tests/test_functional_smoke.py'
   pull_request:
+    paths:
+      - '.github/workflows/functional-prereqs.yml'
+      - 'probes/installer_probe.wxs'
+      - 'probes/msi_payload.txt'
+      - 'probes/win_installer_check.c'
+      - 'probes/dotnet_framework_smoke.cs'
+      - 'scripts/functional_smoke.py'
+      - 'tests/test_functional_smoke.py'
   workflow_dispatch:
 
 permissions:

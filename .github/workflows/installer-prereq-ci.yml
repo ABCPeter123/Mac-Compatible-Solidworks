@@ -10,6 +10,13 @@ on:
       - 'tests/test_prereq_report.py'
       - 'swcompat/cli.py'
   pull_request:
+    paths:
+      - '.github/workflows/installer-prereq-ci.yml'
+      - 'probes/win_prereq_probe.c'
+      - 'config/prerequisites_2026.json'
+      - 'scripts/prereq_report.py'
+      - 'tests/test_prereq_report.py'
+      - 'swcompat/cli.py'
   workflow_dispatch:
 
 permissions:
