@@ -58,6 +58,18 @@ python3 -m scripts.installer_media_preflight \
 
 The inventory identifies the Installation Manager entrypoint, official prerequisite filenames, and broad Windows PE import categories. It does not run the installer, expose user paths in JSON, or claim the installation media is complete. See [local media preflight and privacy controls](docs/INSTALLER_MEDIA_PREFLIGHT.md) and its [synthetic-media CI tests](.github/workflows/installer-media-preflight.yml).
 
+## Local SOLIDWORKS installation-log analysis
+
+When an authorized Installation Manager run produces `IM_Logs.zip`, you can generate a redacted, **offline** diagnostic report:
+
+```sh
+python3 -m scripts.solidworks_log_triage \
+  --logs "/path/to/IM_Logs.zip" \
+  --output "$HOME/swcompat-log-report.json"
+```
+
+The tool recognizes a fixed set of MSI, COM, service, runtime, and WebView2 error patterns. It never exports raw log lines, user paths, license tokens, or unknown error codes. See [log collection and safe triage](docs/INSTALLATION_LOG_TRIAGE.md). A recognized error remains a possible diagnostic, not proof of its root cause.
+
 ## Local development
 
 Requires Python 3.10+:
