@@ -81,6 +81,7 @@ static int manage(const wchar_t *action, const wchar_t *exe) {
     const char *phase = "unknown";
     if (!wcscmp(action, L"absent")) phase = "absent";
     else if (!wcscmp(action, L"install")) phase = "install";
+    else if (!wcscmp(action, L"status")) phase = "status";
     else if (!wcscmp(action, L"start")) phase = "start";
     else if (!wcscmp(action, L"stop")) phase = "stop";
     else if (!wcscmp(action, L"delete")) phase = "delete";
@@ -128,6 +129,21 @@ static int manage(const wchar_t *action, const wchar_t *exe) {
         if (!wcscmp(action, L"delete")) rights |= DELETE;
         handle = OpenServiceW(scm, SERVICE_NAME, rights);
         if (!handle) error = GetLastError();
+        else if (!wcscmp(action, L"status")) {
+            SERVICE_STATUS_PROCESS process = {0};
+            DWORD bytes = 0;
+            ok = QueryServiceStatusEx(handle, SC_STATUS_PROCESS_INFO,
+                                      (BYTE*)&process, sizeof(process), &bytes);
+            if (ok) {
+                state = process.dwCurrentState;
+                printf("SWCOMPAT_SERVICE_PID=%lu\n",
+                       (unsigned long)process.dwProcessId);
+                printf("SWCOMPAT_SERVICE_WIN32_EXIT=%lu\n",
+                       (unsigned long)process.dwWin32ExitCode);
+            } else {
+                error = GetLastError();
+            }
+        }
         else if (!wcscmp(action, L"start")) {
             ok = StartServiceW(handle, 0, NULL);
             if (!ok) error = GetLastError();
@@ -158,7 +174,7 @@ static int manage(const wchar_t *action, const wchar_t *exe) {
 
 int wmain(int argc, wchar_t **argv) {
     if (argc < 2) {
-        fputs("Usage: service_smoke.exe run|absent|install <path>|start|stop|delete\n",stderr);
+        fputs("Usage: service_smoke.exe run|absent|install <path>|status|start|stop|delete\n",stderr);
         return 2;
     }
     if (!wcscmp(argv[1], L"run")) {
