@@ -111,7 +111,7 @@ In [hosted CI run 43346665424](https://github.com/ABCPeter123/Mac-Compatible-Sol
 
 ## Chromium Canvas 2D internal pixel isolation
 
-The [Canvas 2D experiment](docs/WEBVIEW2_CANVAS.md) now tests `fillRect`, real `getImageData` RGBA pixels, and browser-internal PNG encoding independently of WebView2 screenshot APIs or the macOS compositor. These are separate evidence stages: correct Canvas pixels **do not** prove that the window displays them. A new fail-closed Canvas report is required for the existing screenshot-blocker classification.
+The [Canvas 2D experiment](docs/WEBVIEW2_CANVAS.md) **verified** original Chromium Canvas `fillRect`, actual `getImageData` RGBA samples, and browser-internal PNG encoding on hosted Apple Silicon Wine in [CI run 43367914050](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43367914050). This narrows the observed incompatibility to later window presentation or capture behavior. Correct internal Canvas pixels **do not** prove the WebView2 window displays them: screenshot APIs still time out and GDI window pixels remain unverified. The fail-closed Canvas report is required for the known screenshot-blocker diagnostic classification.
 
 ## WebView2 HTML, DOM, screenshot, and compositor diagnostics
 
