@@ -23,6 +23,27 @@ Each Linux Wine and Apple Silicon Wine job:
 
 The original controller executable runs against the official WebView2 SDK and DLL. The installer is never modified. The test does not patch Wine's security checks or circumvent Microsoft or SOLIDWORKS licensing.
 
+## Verified results, November 12, 2026
+
+[GitHub Actions run 43346665424](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43346665424) completed its Windows-source verification, Ubuntu Wine installation attempt and Apple Silicon Wine installation attempt.
+
+| Host | Installer execution | Runtime before | Runtime after | Environment after | Controller after |
+| --- | --- | --- | --- | --- | --- |
+| Ubuntu 24.04 Wine | EXIT_NONZERO, exit code 1 | NOT_DISCOVERED | NOT_DISCOVERED | REQUEST_FAILED | NOT_REACHED |
+| Apple Silicon macOS 15 Wine 11.21 | EXIT_ZERO, exit code 0 | NOT_DISCOVERED | VERSION_FOUND | READY | READY |
+
+**Apple Silicon finding:** The genuine, publisher-verified Microsoft WebView2 Evergreen x64 standalone installer succeeded in a fresh Wine prefix, and a real WebView2 controller was created afterward. This is a positive Microsoft WebView2 runtime compatibility result, stronger than merely loading its SDK DLL.
+
+**Linux finding:** The same installer failed with exit code 1 on this Ubuntu Wine configuration, and the runtime/controller state did not change. This does not establish why the installer failed or whether an alternative Wine configuration would succeed.
+
+The exact official x64 installer used in this run was **215,195,856 bytes**, SHA-256:
+
+    1d1c838e5971343c060415da7c630c3c1ca7ad33fbb61cca660f3c1122f4cca8
+
+The Windows CI runner verified that the file's Authenticode signature was valid and signed by Microsoft Corporation. The archive is not committed to the repository, and Microsoft may update the Evergreen download link to newer, different bytes.
+
+No HTML page rendering, JavaScript execution, real end-user input, SOLIDWORKS installation, activation or CAD editing was demonstrated in this test.
+
 ## Status semantics
 
 A CI job returning success means only that both independent WebView2 probes produced coherent diagnostics. A **successful installer** is not assumed from a zero exit code or from a green CI job.
