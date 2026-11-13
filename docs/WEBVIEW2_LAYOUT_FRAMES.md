@@ -35,6 +35,25 @@ The [signed WebView2 CI workflow](../.github/workflows/webview2-runtime-install-
 
 No WebView2 screenshot content, user HTML, proprietary installer, license information, or unfiltered process output is uploaded.
 
+## Verified results, November 13, 2026
+
+[Hosted GitHub Actions run 43378297592](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43378297592) completed the authentic Microsoft-signed WebView2 Runtime installation and all CI jobs. The original same Windows x64 probe was executed on native Windows Server 2025 and macOS 15 Apple Silicon under Wine 11.21.
+
+| Stage | Native Windows | Apple Silicon Wine |
+| --- | --- | --- |
+| WebView2 Runtime environment / controller | READY | READY |
+| HTML navigation / DOM JavaScript | PASS | PASS |
+| CSS box geometry and elementFromPoint | PASS | **PASS** |
+| requestAnimationFrame callback counter | TICKED | **TICKED** |
+| Canvas getImageData RGBA and PNG encoding | PASS | PASS |
+| WebView2/browser screenshot pixel evidence | VERIFIED | NOT_VERIFIED (`CDP_TIMEOUT`) |
+| GDI display pixel evidence | VERIFIED | NOT_VERIFIED |
+| Classification | Native pixel verification | `KNOWN_CAPTURE_BLOCKER` |
+
+**Finding:** The browser's CSS layout engine, element hit testing, internal Canvas 2D readback and normal animation-frame scheduling work in this tested Apple Silicon Wine configuration. This rules out a blanket lack of requestAnimationFrame callbacks or an inability to calculate the static test page's layout. It does **not** prove that any frame reaches an onscreen macOS window or rule out all compositor-related defects.
+
+In the CI run, 14 layout-report tests and 26 stricter renderer-classifier tests passed on native Windows. The hosted Mac rendering diagnostic completed and still reported `browser_pixels=NOT_VERIFIED`; strict `require_macos_pixels=true` therefore remains unmet.
+
 ## Interpretation and next step
 
 If Canvas, CSS geometry and requestAnimationFrame all work while screenshot/GDI fail, the blocker is more likely in surface composition, capture or macOS window presentation, but these tests cannot isolate a specific Wine or Chromium implementation fault. If requestAnimationFrame stalls while CSS geometry succeeds, test with an interactive Mac window server before treating scheduling as broken.
