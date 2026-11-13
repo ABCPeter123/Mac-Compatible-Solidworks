@@ -23,6 +23,24 @@ On Apple Silicon the new Canvas test must pass before the previous known screens
 
 The [fail-closed renderer classifier](../scripts/webview2_render_gate.py) now consumes four independent reports: verified runtime/controller, internal browser Canvas, browser screenshot, and GDI window readback. It must never reinterpret successful Canvas drawing as physical window pixels.
 
+## Verified CI results, November 12, 2026 (Toronto time)
+
+[GitHub Actions run 43367914050](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43367914050) completed all three jobs successfully: native Windows build and reference, Ubuntu Wine diagnostics, and Apple Silicon macOS Wine diagnostics.
+
+| Stage | Native Windows Server 2025 | Apple Silicon macOS 15, Wine 11.21 |
+| --- | --- | --- |
+| WebView2 runtime/controller | READY | READY after signed Runtime installation |
+| Inline HTML navigation / DOM JS | PASS | PASS |
+| Canvas 2D `getImageData` known RGBA samples | PASS | **PASS** |
+| Canvas `toDataURL('image/png')` encoding | PASS | **PASS** |
+| Browser window screenshot pixels | PASS | NOT_VERIFIED (`CDP_TIMEOUT`) |
+| GDI framebuffer pixels | VERIFIED | NOT_VERIFIED |
+| Overall diagnostic state | Native reference successful | `KNOWN_CAPTURE_BLOCKER` |
+
+**Finding:** Under Apple Silicon Wine, Chromium's Canvas 2D backing store correctly paints two independent RGB colors, returns the expected RGBA pixel bytes, and can encode the Canvas to a PNG data URL, even while the real browser window screenshot and GDI display readback fail.
+
+Canvas success is proof of a **specific internal 2D rendering subsystem**, not confirmation of general Chromium paint/compositing, WebGL, CAD graphics, onscreen browser presentation, physical interaction, or SOLIDWORKS compatibility. The previously observed screen-capture and GDI limitations remain unresolved.
+
 ## Interpretation
 
 | Canvas readback and PNG encoding | Browser screenshot / GDI | Conclusion |
