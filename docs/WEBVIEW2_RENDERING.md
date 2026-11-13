@@ -29,6 +29,10 @@ The workflow separately continues to report the previously verified *negative* L
 
 Initial Apple Silicon CI [run 43352756493](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43352756493) reached a genuine Chromium page but WebView2 CapturePreview timed out. That means browser controller creation and DOM execution are not sufficient to prove the preview API or actual pixels work. The independent CDP screenshot fallback tests whether the Chromium page image can be captured even though Wine's WebView2 CapturePreview completion callback did not fire.
 
+The next verified Apple Silicon attempt ([run 43354162956](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43354162956)) also timed out at the independent Chromium DevTools Page.captureScreenshot callback. Both screenshot APIs failed to complete in the default hosted Wine/Chromium graphics configuration, although the DOM test had already returned the expected result. **No macOS framebuffer-pixel success has yet been demonstrated.**
+
+The next diagnostic sets the documented WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS override to disable GPU acceleration, GPU compositing and Vulkan for the synthetic browser only. These are test-only rendering flags, not a production recommendation. They do not disable browser security protections or affect SOLIDWORKS binaries.
+
 A completed controller test is not interchangeable with a successful local HTML/DOM/pixel test. Native and macOS rendering test steps must **fail CI** if the DOM marker, CapturePreview call, PNG decode or either pixel sample fails.
 
 ## Outcome classification
