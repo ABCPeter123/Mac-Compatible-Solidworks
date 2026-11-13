@@ -111,7 +111,7 @@ In [hosted CI run 43346665424](https://github.com/ABCPeter123/Mac-Compatible-Sol
 
 ## Chromium CSS layout and frame scheduling diagnostics
 
-The [CSS layout and animation frame experiment](docs/WEBVIEW2_LAYOUT_FRAMES.md) tests real browser box geometry, element hit testing, computed CSS and requestAnimationFrame callbacks independently of window screenshot capture. It records whether frames tick or stall while preserving the difference between internal page behavior and actual macOS window pixels. This test does **not** prove SOLIDWORKS or WebView2 display compatibility.
+The [CSS layout and animation frame experiment](docs/WEBVIEW2_LAYOUT_FRAMES.md) **verified** Chromium's CSS box geometry, `elementFromPoint` hit testing and ticking `requestAnimationFrame` callbacks on hosted Apple Silicon Wine ([CI 43378297592](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43378297592)). These browser-internal functions work despite the ongoing screenshot `CDP_TIMEOUT` and unverified GDI window pixels. They **do not** prove visible WebView2 window output or SOLIDWORKS compatibility.
 
 ## Chromium Canvas 2D internal pixel isolation
 
