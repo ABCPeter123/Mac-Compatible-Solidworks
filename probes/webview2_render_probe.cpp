@@ -9,10 +9,12 @@
 #include <windows.h>
 #include <objbase.h>
 #include <wrl.h>
+#include <wincrypt.h>
 #include <WebView2.h>
 #include <cstdio>
 #include <cwchar>
 #include <string>
+#include <vector>
 
 using Microsoft::WRL::Callback;
 using Microsoft::WRL::ComPtr;
@@ -27,11 +29,14 @@ struct Result {
     bool navigation_done = false;
     bool script_done = false;
     bool preview_done = false;
+    bool cdp_done = false;
     HRESULT environment_hr = E_UNEXPECTED;
     HRESULT controller_hr = E_UNEXPECTED;
     HRESULT navigation_hr = E_UNEXPECTED;
     HRESULT script_hr = E_UNEXPECTED;
     HRESULT preview_hr = E_UNEXPECTED;
+    HRESULT cdp_hr = E_UNEXPECTED;
+    std::wstring cdp_reply;
     bool dom_ok = false;
     ComPtr<ICoreWebView2Environment> environment;
     ComPtr<ICoreWebView2Controller> controller;
@@ -112,6 +117,49 @@ static bool save_preview(IStream *stream) {
     if (!CloseHandle(file)) good = false;
     if (!good) DeleteFileW(L"swcompat-webview2-preview.png");
     return good;
+}
+
+/* The Chromium DevTools protocol returns a JSON object containing base64 PNG.
+ * Parse only its fixed "data" string, reject unexpectedly sized responses,
+ * and decode using Windows Crypt32. This is not an external-browser download.
+ */
+static bool save_cdp_preview(const std::wstring &reply) {
+    if (reply.size() > 24 * 1024 * 1024) return false;
+    size_t at = reply.find(L"\"data\"");
+    if (at == std::wstring::npos) return false;
+    at = reply.find(L':', at + 6);
+    if (at == std::wstring::npos) return false;
+    ++at;
+    while (at < reply.size() && (reply[at] == L' ' || reply[at] == L'\t')) ++at;
+    if (at >= reply.size() || reply[at] != L'"') return false;
+    size_t begin = ++at;
+    while (at < reply.size() &&
+           ((reply[at] >= L'A' && reply[at] <= L'Z') ||
+            (reply[at] >= L'a' && reply[at] <= L'z') ||
+            (reply[at] >= L'0' && reply[at] <= L'9') ||
+            reply[at] == L'+' || reply[at] == L'/' || reply[at] == L'=')) {
+        ++at;
+    }
+    if (at >= reply.size() || reply[at] != L'"' || at - begin < 64) return false;
+    std::wstring encoded = reply.substr(begin, at - begin);
+    DWORD size = 0;
+    if (!CryptStringToBinaryW(encoded.c_str(), static_cast<DWORD>(encoded.size()),
+                              CRYPT_STRING_BASE64, nullptr, &size, nullptr, nullptr) ||
+        size < 64 || size > 16 * 1024 * 1024) return false;
+    std::vector<BYTE> bytes(size);
+    if (!CryptStringToBinaryW(encoded.c_str(), static_cast<DWORD>(encoded.size()),
+                              CRYPT_STRING_BASE64, bytes.data(), &size, nullptr, nullptr)) return false;
+    const unsigned char signature[] = {137, 80, 78, 71, 13, 10, 26, 10};
+    if (size < sizeof(signature) ||
+        memcmp(bytes.data(), signature, sizeof(signature)) != 0) return false;
+    HANDLE out = CreateFileW(L"swcompat-webview2-preview.png", GENERIC_WRITE, 0,
+                              nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (out == INVALID_HANDLE_VALUE) return false;
+    DWORD written = 0;
+    bool ok = WriteFile(out, bytes.data(), size, &written, nullptr) && written == size;
+    if (!CloseHandle(out)) ok = false;
+    if (!ok) DeleteFileW(L"swcompat-webview2-preview.png");
+    return ok;
 }
 
 int main() {
@@ -237,20 +285,49 @@ int main() {
             result.preview_done = true;
             return S_OK;
         });
+    const char *capture_status = "PASS";
+    const char *method = "CAPTURE_PREVIEW";
     hr = result.webview->CapturePreview(
         COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, png.Get(), preview_cb.Get());
-    if (FAILED(hr)) return fail("PREVIEW_REQUEST", hr);
-    if (!wait_for(result.preview_done, 30000))
-        return fail("PREVIEW_TIMEOUT", HRESULT_FROM_WIN32(ERROR_TIMEOUT));
-    if (FAILED(result.preview_hr)) return fail("PREVIEW_CALLBACK", result.preview_hr);
-    if (!save_preview(png.Get())) return fail("PREVIEW_WRITE", E_FAIL);
+    bool native_capture_ok = false;
+    if (FAILED(hr)) {
+        capture_status = "REQUEST_FAILED";
+    } else if (!wait_for(result.preview_done, 15000)) {
+        capture_status = "TIMEOUT";
+    } else if (FAILED(result.preview_hr)) {
+        capture_status = "CALLBACK_FAILED";
+    } else if (!save_preview(png.Get())) {
+        capture_status = "WRITE_FAILED";
+    } else {
+        native_capture_ok = true;
+    }
+
+    if (!native_capture_ok) {
+        method = "CDP_FALLBACK";
+        auto cdp_cb = Callback<ICoreWebView2CallDevToolsProtocolMethodCompletedHandler>(
+            [&result](HRESULT code, LPCWSTR reply) -> HRESULT {
+                result.cdp_done = true;
+                result.cdp_hr = code;
+                if (SUCCEEDED(code) && reply) result.cdp_reply = reply;
+                return S_OK;
+            });
+        hr = result.webview->CallDevToolsProtocolMethod(
+            L"Page.captureScreenshot", L"{\"format\":\"png\",\"captureBeyondViewport\":false}",
+            cdp_cb.Get());
+        if (FAILED(hr)) return fail("CDP_REQUEST", hr);
+        if (!wait_for(result.cdp_done, 30000))
+            return fail("CDP_TIMEOUT", HRESULT_FROM_WIN32(ERROR_TIMEOUT));
+        if (FAILED(result.cdp_hr)) return fail("CDP_CALLBACK", result.cdp_hr);
+        if (!save_cdp_preview(result.cdp_reply)) return fail("CDP_DECODE", E_FAIL);
+    }
 
     puts("SWCOMPAT_WV2_RENDER_SCHEMA=1");
     puts("SWCOMPAT_WV2_RENDER_ENVIRONMENT=READY");
     puts("SWCOMPAT_WV2_RENDER_CONTROLLER=READY");
     puts("SWCOMPAT_WV2_RENDER_NAVIGATION=PASS");
     puts("SWCOMPAT_WV2_RENDER_DOM=PASS");
-    puts("SWCOMPAT_WV2_RENDER_PREVIEW=PASS");
+    std::printf("SWCOMPAT_WV2_RENDER_CAPTURE_PREVIEW=%s\n", capture_status);
+    std::printf("SWCOMPAT_WV2_RENDER_PREVIEW=%s\n", method);
     puts("SWCOMPAT_WV2_RENDER_PROBE=PASS");
     std::fflush(stdout);
     result.webview.Reset();
