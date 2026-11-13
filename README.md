@@ -109,11 +109,15 @@ The [Evergreen standalone runtime experiment](docs/WEBVIEW2_RUNTIME_INSTALL.md) 
 
 In [hosted CI run 43346665424](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43346665424), the Apple Silicon installation **succeeded**, and the WebView2 environment/controller became READY. The same installer exited with code 1 under Linux Wine and did not produce a runtime. A created controller is not proof of rendered HTML or SOLIDWORKS UI compatibility.
 
-## WebView2 HTML, JavaScript DOM, and real browser pixel rendering
+## WebView2 HTML, DOM, screenshot, and compositor diagnostics
 
-The [WebView2 inline HTML rendering experiment](docs/WEBVIEW2_RENDERING.md) adds a real navigation, asynchronous JavaScript DOM verification and browser PNG screenshot test, with a separate Chromium DevTools fallback for a timed-out CapturePreview call. It verifies both a blue page background and an independently rendered green rectangle using a bounded standard-library PNG decoder. A WebView2 controller alone does not pass this test. Native Windows and the official-runtime Apple Silicon Wine pathway run the same original Windows x64 program.
+The [Win32 WebView2 rendering experiment](docs/WEBVIEW2_RENDERING.md) tests inline HTML navigation, JavaScript DOM execution, WebView2 CapturePreview, Chromium DevTools screenshots, and independent GDI readback from the window and desktop. It decodes the PNG and checks two actual pixel colors on native Windows.
 
-No user HTML, external network navigation, screenshot artifacts or SOLIDWORKS installer data are involved. Successful rendering of this synthetic page does **not** establish that SOLIDWORKS works on a Mac.
+**Verified outcome:** The signed Microsoft WebView2 Runtime installs and supports controller creation, HTML navigation and DOM execution on hosted Apple Silicon Wine. However, WebView2 screenshot callbacks time out, GDI window readback returns NO_MATCH, and GDI desktop readback fails. **No WebView2 display pixels have been verified on macOS.**
+
+The default macOS CI run distinguishes a complete known-negative compositor diagnostic from unexpected regressions. A manual workflow run with `require_macos_pixels=true` enforces real screenshot or GDI pixel proof and **fails** on the current Mac configuration. A green *diagnostic* does not establish rendering or SOLIDWORKS compatibility.
+
+All pages and pixel colors are synthetic. No external pages, user data, screenshot artifacts or SOLIDWORKS installer files are involved.
 
 ## Local development
 
