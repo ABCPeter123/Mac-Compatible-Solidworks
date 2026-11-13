@@ -76,6 +76,19 @@ The subsequent Win32 window census improves that evidence: while the same authen
 
 The sanitized diagnostic fields are `installer_window_census`, `census_samples_complete`, `candidate_installer_processes_max`, and `candidate_visible_windows_max`. `CANDIDATE_WINDOW_SEEN` establishes only that the Wine Win32 window API detected a sufficiently large, visible, installer-associated top-level window in the hosted CI environment. It does **not** establish that the window's pixels were painted on a macOS screen. `NO_CANDIDATE_WINDOW_OBSERVED` may miss helper processes or delayed windows and is not proof that installation UI never exists. The `installation_manager_ui` field remains `NOT_VERIFIED` in either case.
 
+## Verified installer window evidence and new responsiveness/pixel diagnostics
+
+[Original installer manual workflow 43497081980](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43497081980) **passed all four jobs**. The authentic, publisher-verified SOLIDWORKS bootstrapper was downloaded and executed on hosted Apple Silicon Wine. It remained active to the bounded 120-second timeout. Crucially, the original Win32 process/window census reported `CANDIDATE_WINDOW_SEEN`, with a maximum of **one visible, installer-associated HWND**.
+
+That indicates the Wine Win32 window model recognizes a visible top-level window associated with the genuine installer or an installer child process. It does **not** establish that a physical macOS screen displayed the window, that the contents painted, or that SOLIDWORKS installed.
+
+The next read-only diagnostic distinguishes three layers:
+- **Window census**: a visible, sufficiently large Win32 installer-associated HWND exists.
+- **Message-loop responsiveness**: a `SendMessageTimeoutW(WM_NULL)` returned within one second. This is only an instantaneous liveness signal. It does not prove that installation is progressing or that UI interaction works.
+- **GDI client-area variation**: a 32×32 transient, in-memory bitmap sampled from the center of the HWND's client DC via `StretchBlt` contained at least two distinct RGB values (`NONUNIFORM`) or fewer (`UNIFORM`). `READBACK_FAILED` indicates the GDI surface could not be read. This is a coarse surface heuristic, **not** proof that the installer content or any macOS desktop pixels were rendered. No bitmap, RGB values, title, paths or image can leave the diagnostic executable.
+
+Each state is independently exported as a fixed allowlisted enum: `installer_hwnd_responsiveness` and `installer_gdi_client_variation`. `macos_onscreen_pixels` remains `NOT_VERIFIED` even when GDI produces a nonuniform surface. The native Windows CI reference uses a **new original synthetic two-color test HWND** to verify that the probe's own responsiveness and readback algorithm works before we trust its diagnostics on Wine.
+
 ## What the workflow actually tests
 
 On native Windows Server, it downloads the executable over HTTPS, verifies its full SHA-256 and PE structure, and checks that the Authenticode publisher is valid and identifies SOLIDWORKS or Dassault. **It does not execute the installer on Windows.** A mismatch aborts the Mac test.
