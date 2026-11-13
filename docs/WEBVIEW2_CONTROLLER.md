@@ -57,6 +57,8 @@ python3 -m scripts.webview2_controller_report \
 
 Use --require-controller when a real controller is required, as on the native Windows reference. Without that flag, a COMPLETE diagnostic may still show REQUEST_FAILED, CALLBACK_FAILED, TIMEOUT, or NOT_REACHED. Such outcomes must never be reported as WebView2 compatibility PASS.
 
+The official standalone installer test now lives in [WebView2 Evergreen runtime installation](WEBVIEW2_RUNTIME_INSTALL.md). It verifies the Microsoft publisher signature on Windows and compares runtime/controller status before and after an installation attempt in isolated Wine prefixes.
+
 ## Next acceptance gate
 
 If the Wine prefix cannot discover a runtime, use an official Microsoft WebView2 Runtime installer in a legitimately authorized, isolated host test and record whether it installs and starts. A loader and COM callback test is not a substitute for browser engine startup. Once an embedded controller works, add a local HTML navigation and DOM verification test before attributing any SOLIDWORKS UI compatibility to WebView2.
