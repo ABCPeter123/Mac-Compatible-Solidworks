@@ -97,6 +97,12 @@ Either input report is optional if unavailable. The output contains only known d
 
 The [Windows WebView2 SDK loader probe](docs/WEBVIEW2_LOADER.md) tests the genuine Microsoft loader's browser-version API on Windows Server, Linux Wine, and Apple Silicon Wine using the independent x64 executable. It distinguishes a callable SDK loader from a runtime that could not be discovered. This is a narrower prerequisite check, **not** a WebView2 browser-controller test or a SOLIDWORKS installation.
 
+## WebView2 environment and controller creation test
+
+The [WebView2 Win32 controller compatibility experiment](docs/WEBVIEW2_CONTROLLER.md) now tests real asynchronous COM environment creation, controller creation inside an HWND, and access to the controller's WebView2 interface. It builds an independent Windows x64 executable against Microsoft's checksum-pinned SDK, then compares native Windows Server with Linux Wine and Apple Silicon Wine.
+
+The report distinguishes an API test that **completed** from a browser controller that actually reached **READY**. No HTML rendering, SOLIDWORKS installation, licensing or CAD workflows are claimed.
+
 ## Local development
 
 Requires Python 3.10+:

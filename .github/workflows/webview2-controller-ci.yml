@@ -1,0 +1,196 @@
+name: WebView2 environment and controller Win32 compatibility
+
+on:
+  push:
+    paths:
+      - '.github/workflows/webview2-controller-ci.yml'
+      - 'probes/webview2_controller_probe.cpp'
+      - 'probes/webview2/CMakeLists.txt'
+      - 'scripts/webview2_controller_report.py'
+      - 'tests/test_webview2_controller_report.py'
+  pull_request:
+    paths:
+      - '.github/workflows/webview2-controller-ci.yml'
+      - 'probes/webview2_controller_probe.cpp'
+      - 'probes/webview2/CMakeLists.txt'
+      - 'scripts/webview2_controller_report.py'
+      - 'tests/test_webview2_controller_report.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: webview2-controller-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  report-tests:
+    name: Validate sanitized probe reporting (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s tests -p "test_webview2_controller_report.py" -v
+
+  compile:
+    name: Build with real Microsoft WebView2 SDK and MSVC
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download and SHA-256 validate official WebView2 C++ SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          $url = "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.4314.35/microsoft.web.webview2.1.0.4314.35.nupkg"
+          curl.exe --fail --location --retry 3 --output build/sdk.zip $url
+          if ($LASTEXITCODE -ne 0) { throw "Official WebView2 NuGet download failed" }
+          $sha = (Get-FileHash build/sdk.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($sha -ne "90778deb1b77e36292828b4b5833c9255c27533f40e0ddd55891ae718944edc4") {
+            throw "NuGet SHA-256 mismatch"
+          }
+          Expand-Archive -LiteralPath build/sdk.zip -DestinationPath build/sdk -Force
+          Copy-Item build/sdk/runtimes/win-x64/native/WebView2Loader.dll build/WebView2Loader.dll
+          $dllsha = (Get-FileHash build/WebView2Loader.dll -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($dllsha -ne "d3fce90bdeecb08596e377dea6a316354dd8949e32ff09b89d51be00c14e21b6") {
+            throw "Loader SHA-256 mismatch"
+          }
+          if (!(Test-Path build/sdk/build/native/include/WebView2.h)) {
+            throw "WebView2 SDK headers not found in authenticated package"
+          }
+          Write-Output "Official SDK and Windows x64 loader SHA-256: PASS"
+      - name: Build original x64 C++ probe using Visual Studio 2026
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sdk = (Resolve-Path build/sdk/build/native/include).Path
+          cmake -S probes/webview2 -B build/msvc -G "Visual Studio 18 2026" -A x64 "-DWEBVIEW2_SDK_INCLUDE=$sdk"
+          if ($LASTEXITCODE -ne 0) { throw "MSVC CMake configure failed" }
+          cmake --build build/msvc --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "MSVC C++ compilation failed" }
+          Copy-Item build/msvc/Release/webview2_controller_probe.exe build/webview2_controller_probe.exe
+          if (!(Test-Path build/webview2_controller_probe.exe)) { throw "Missing test executable" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: original-webview2-controller-probe-x64
+          path: |
+            build/webview2_controller_probe.exe
+            build/WebView2Loader.dll
+          retention-days: 3
+
+  windows-reference:
+    name: Native Windows environment and controller reference
+    runs-on: windows-2025
+    needs: compile
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: original-webview2-controller-probe-x64
+          path: build
+      - name: Require actual asynchronous environment and controller creation
+        shell: pwsh
+        run: |
+          & .\build\webview2_controller_probe.exe 2>&1 | Out-File build\webview2-controller.log -Encoding utf8
+          $code = $LASTEXITCODE
+          python -m scripts.webview2_controller_report --input build/webview2-controller.log --exit-code $code --output build/webview2-controller.json --require-controller
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: webview2-controller-windows-sanitized
+          path: build/webview2-controller.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  linux-wine:
+    name: Linux Wine controller creation and failure classification
+    runs-on: ubuntu-24.04
+    needs: compile
+    timeout-minutes: 16
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: original-webview2-controller-probe-x64
+          path: build
+      - name: Install Wine and Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine wine64 xvfb xauth
+      - name: Initialize clean isolated Wine prefix
+        run: xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/webview2-controller-prefix" --logs-dir build/logs init
+      - name: Exercise asynchronous environment and controller APIs
+        shell: bash
+        run: |
+          set +e
+          export WINEPREFIX="$RUNNER_TEMP/webview2-controller-prefix" WINEARCH=win64 WINEDEBUG=-all
+          timeout 70s xvfb-run -a wine "$PWD/build/webview2_controller_probe.exe" > build/webview2-controller.log 2>&1
+          code=$?
+          python -m scripts.webview2_controller_report --input build/webview2-controller.log --exit-code "$code" --output build/webview2-controller.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: webview2-controller-linux-wine-sanitized
+          path: build/webview2-controller.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  apple-silicon-wine:
+    name: Apple Silicon Wine 11.21 controller failure classification
+    runs-on: macos-15
+    needs: compile
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: original-webview2-controller-probe-x64
+          path: build
+      - name: Download verified Wine 11.21
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-devel-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-devel-11.21-osx64.tar.xz"
+          echo "9909b486657e10ab66c7279371ae1f990345b596b3b1b3a0cf21f28af24fa0ce  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-build"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-build"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Initialize isolated Wine prefix
+        run: python -m swcompat --prefix "$RUNNER_TEMP/webview2-controller-prefix" --logs-dir build/logs init
+      - name: Exercise genuine WebView2 COM environment/controller APIs
+        shell: bash
+        run: |
+          set +e
+          export WINEPREFIX="$RUNNER_TEMP/webview2-controller-prefix" WINEARCH=win64 WINEDEBUG=-all
+          "$SWCOMPAT_WINE" "$PWD/build/webview2_controller_probe.exe" > build/webview2-controller.log 2>&1
+          code=$?
+          python -m scripts.webview2_controller_report --input build/webview2-controller.log --exit-code "$code" --output build/webview2-controller.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: webview2-controller-apple-silicon-sanitized
+          path: build/webview2-controller.json
+          if-no-files-found: warn
+          retention-days: 7
