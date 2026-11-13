@@ -23,6 +23,49 @@ The repository is **public**. Never commit SOLIDWORKS installation media, instal
 
 You can delete both secrets and private storage object after testing. The workflow never exposes the signed URL, uploads binary bytes or captures screenshot/log data. Only sanitized JSON diagnostics are uploaded.
 
+## Troubleshooting an HTTP 404 from a private R2 URL
+
+[GitHub Actions run 43492860260](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43492860260) reached the original-install media download on native Windows but R2 or the configured download endpoint returned **HTTP 404**. The program never downloaded the installer, and the Apple Silicon launch was correctly skipped. A valid SHA-256 does **not** fix a missing object or a broken temporary URL.
+
+Before starting another run, check the private R2 object key on your **own Windows PC**. In PowerShell, using the R2 AWS CLI profile and endpoint created earlier:
+
+```powershell
+$endpoint = "https://YOUR_ACCOUNT_ID.r2.cloudflarestorage.com"
+$bucket = "swcompat-installer-private"
+$key = "SolidworksSetup.exe"
+
+aws s3api head-object --bucket $bucket --key $key `
+  --endpoint-url $endpoint --profile swcompat-r2
+```
+
+This must succeed. If the returned object is not found, open Cloudflare R2, check the **exact case-sensitive object name and subfolder**, and update `$key` to match. For example, an object uploaded under `downloads/SolidworksSetup.exe` needs `$key = "downloads/SolidworksSetup.exe"`.
+
+Generate a **new** signed GET URL for the confirmed key and endpoint:
+
+```powershell
+$url = aws s3 presign "s3://$bucket/$key" `
+  --endpoint-url $endpoint --profile swcompat-r2 `
+  --region auto --expires-in 21600
+```
+
+Verify the actual executable transfer *on your computer* **before** storing the URL in GitHub. This avoids repeatedly starting a CI job for a broken link:
+
+```powershell
+$trial = Join-Path $env:TEMP "swcompat-installer-url-test.exe"
+try {
+    Invoke-WebRequest -Uri $url -OutFile $trial -ErrorAction Stop
+    Get-FileHash -Path $trial -Algorithm SHA256
+} finally {
+    Remove-Item -LiteralPath $trial -ErrorAction SilentlyContinue
+}
+```
+
+Confirm the calculated hash matches the original installer SHA-256. Never paste the signed `$url`, R2 credentials, installer, or personal license number into a public GitHub issue, commit, or chat.
+
+Update the `SWCOMPAT_INSTALLER_URL` value in **Settings → Secrets and variables → Actions**: delete the existing secret and recreate it with the new complete signed URL, or edit it if GitHub provides that control. Do **not** change `SWCOMPAT_INSTALLER_SHA256` unless you have downloaded a genuinely different installer and calculated its new hash. Re-run the workflow from `main` before the signed URL expires.
+
+The workflow now uses `scripts/solidworks_private_media_fetch.py` on both Windows and Apple Silicon. It distinguishes `HTTP_404_NOT_FOUND`, `HTTP_403_FORBIDDEN`, `PRESIGNED_URL_EXPIRED`, `TRANSPORT_ERROR`, and a successful download in sanitized artifacts. It does not retry a definitive 404 and never prints signed URLs or response bodies. This diagnostic fix cannot make a missing private object available by itself.
+
 ## What the workflow actually tests
 
 On native Windows Server, it downloads the executable over HTTPS, verifies its full SHA-256 and PE structure, and checks that the Authenticode publisher is valid and identifies SOLIDWORKS or Dassault. **It does not execute the installer on Windows.** A mismatch aborts the Mac test.

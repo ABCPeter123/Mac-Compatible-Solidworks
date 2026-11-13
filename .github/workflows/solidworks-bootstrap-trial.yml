@@ -5,11 +5,15 @@ on:
       - '.github/workflows/solidworks-bootstrap-trial.yml'
       - 'scripts/solidworks_bootstrap_trial.py'
       - 'tests/test_solidworks_bootstrap_trial.py'
+      - 'scripts/solidworks_private_media_fetch.py'
+      - 'tests/test_solidworks_private_media_fetch.py'
   pull_request:
     paths:
       - '.github/workflows/solidworks-bootstrap-trial.yml'
       - 'scripts/solidworks_bootstrap_trial.py'
       - 'tests/test_solidworks_bootstrap_trial.py'
+      - 'scripts/solidworks_private_media_fetch.py'
+      - 'tests/test_solidworks_private_media_fetch.py'
   workflow_dispatch:
 permissions:
   contents: read
@@ -30,6 +34,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m unittest discover -s tests -p "test_solidworks_bootstrap_trial.py" -v
+      - run: python -m unittest discover -s tests -p "test_solidworks_private_media_fetch.py" -v
   verify-signed-media:
     name: Verify original SOLIDWORKS publisher and digest
     if: github.event_name == 'workflow_dispatch'
@@ -44,14 +49,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Fetch authentic installer and verify Authenticode
+      - name: Fetch private installer and classify missing R2 object or expired signed URL
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          python -m scripts.solidworks_private_media_fetch --destination build/SolidworksSetup.exe --output build/solidworks-windows-fetch.json
+          if ($LASTEXITCODE -ne 0) { throw "Private installer download failed; inspect sanitized fetch status" }
+      - name: Verify exact SHA256, original PE and Dassault Authenticode signature
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          if (-not $env:SWCOMPAT_INSTALLER_URL -or -not $env:SWCOMPAT_INSTALLER_SHA256) { throw "Set private installer URL and SHA256 GitHub secrets" }
-          New-Item -ItemType Directory -Force -Path build | Out-Null
-          curl.exe --fail --silent --show-error --location --retry 2 --max-time 720 --proto '=https' --proto-redir '=https' --output build/SolidworksSetup.exe $env:SWCOMPAT_INSTALLER_URL
-          if ($LASTEXITCODE -ne 0) { throw "Private installer retrieval failed" }
+          if (-not $env:SWCOMPAT_INSTALLER_SHA256) { throw "Set SWCOMPAT_INSTALLER_SHA256 repository secret" }
           python -m scripts.solidworks_bootstrap_trial --installer build/SolidworksSetup.exe --sha256 $env:SWCOMPAT_INSTALLER_SHA256 --output build/solidworks-windows-media.json
           if ($LASTEXITCODE -ne 0) { throw "SHA256 or Windows PE invalid" }
           $signature = Get-AuthenticodeSignature -LiteralPath build/SolidworksSetup.exe
@@ -59,10 +67,13 @@ jobs:
           if ($null -eq $signature.SignerCertificate -or $signature.SignerCertificate.Subject -notmatch '(?i)SOLIDWORKS|DASSAULT') { throw "Unexpected executable publisher" }
           Write-Output "Original SOLIDWORKS publisher and SHA256: VERIFIED"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: solidworks-bootstrap-windows-preflight-sanitized
-          path: build/solidworks-windows-media.json
-          if-no-files-found: error
+          path: |
+            build/solidworks-windows-fetch.json
+            build/solidworks-windows-media.json
+          if-no-files-found: warn
           retention-days: 3
       - name: Delete proprietary installer
         if: always()
@@ -103,13 +114,17 @@ jobs:
           python3 -m swcompat --wine "$SWCOMPAT_WINE_BIN" --prefix "$PREFIX" --logs-dir "$RUNNER_TEMP/swcompat-internal-logs" set-winver win11
           test -d "$PREFIX/drive_c" && test -f "$PREFIX/system.reg"
           touch "$PREFIX/.swcompat-solidworks-installer-disposable"
-      - name: Fetch same authentic installer and verify its full SHA256
+      - name: Fetch same private installer and classify HTTP failures
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$SWCOMPAT_INSTALLER_URL" && test -n "$SWCOMPAT_INSTALLER_SHA256"
           mkdir -p build
-          curl --fail --silent --show-error --location --retry 2 --max-time 720 --proto '=https' --proto-redir '=https' --output build/SolidworksSetup.exe "$SWCOMPAT_INSTALLER_URL"
+          python3 -m scripts.solidworks_private_media_fetch --destination build/SolidworksSetup.exe --output build/solidworks-macos-fetch.json
+      - name: Verify full SHA256 and PE structure before any execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SWCOMPAT_INSTALLER_SHA256"
           python3 -m scripts.solidworks_bootstrap_trial --installer build/SolidworksSetup.exe --sha256 "$SWCOMPAT_INSTALLER_SHA256" --output build/solidworks-macos-preflight.json
       - name: Execute first bounded Wine launch without serial entry
         shell: bash
@@ -137,6 +152,7 @@ jobs:
         with:
           name: solidworks-bootstrap-apple-silicon-sanitized
           path: |
+            build/solidworks-macos-fetch.json
             build/solidworks-macos-preflight.json
             build/solidworks-macos-trial.json
           if-no-files-found: warn
