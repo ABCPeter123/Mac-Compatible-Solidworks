@@ -243,6 +243,8 @@ jobs:
               f.write("\n## Local WebView2 HTML / DOM / PNG pixel test\n")
               f.write("Render result: **" + result["result"] + "**\n")
               f.write("Pixel verification: **" + result["screenshot_pixel_validation"] + "**\n")
+              f.write("PNG method: **" + result["png_capture_method"] + "**\n")
+              f.write("CapturePreview API: **" + result["capture_preview_api"] + "**\n")
               f.write("Failure stage: **" + result["failure_stage"] + "**\n")
               f.write("SOLIDWORKS compatibility: **NOT DEMONSTRATED**\n")
           PY
