@@ -9,6 +9,12 @@ on:
       - 'scripts/webview2_controller_report.py'
       - 'probes/webview2_controller_probe.cpp'
       - 'probes/webview2/CMakeLists.txt'
+      - 'probes/webview2_render_probe.cpp'
+      - 'scripts/webview2_render_report.py'
+      - 'tests/test_webview2_render_report.py'
+      - 'probes/webview2_render_probe.cpp'
+      - 'scripts/webview2_render_report.py'
+      - 'tests/test_webview2_render_report.py'
   pull_request:
     paths:
       - '.github/workflows/webview2-runtime-install-ci.yml'
@@ -38,6 +44,8 @@ jobs:
           python-version: '3.12'
       - name: Test opt-in isolation and result reporting
         run: python -m unittest discover -s tests -p "test_webview2_runtime_trial.py" -v
+      - name: Test strict PNG screenshot and DOM report validation
+        run: python -m unittest discover -s tests -p "test_webview2_render_report.py" -v
       - name: Download checksum-pinned Microsoft WebView2 SDK
         shell: pwsh
         run: |
@@ -66,12 +74,22 @@ jobs:
           cmake --build build/msvc --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { throw "MSVC build failed" }
           Copy-Item build/msvc/Release/webview2_controller_probe.exe build/webview2_controller_probe.exe
+          Copy-Item build/msvc/Release/webview2_render_probe.exe build/webview2_render_probe.exe
       - name: Confirm native Windows reference creates actual browser controller
         shell: pwsh
         run: |
           & .\build\webview2_controller_probe.exe 2>&1 | Out-File build\windows-controller.log -Encoding utf8
           $result = $LASTEXITCODE
           python -m scripts.webview2_controller_report --input build/windows-controller.log --exit-code $result --output build/windows-controller.json --require-controller
+      - name: Require real native WebView2 HTML navigation DOM and screenshot pixels
+        shell: pwsh
+        run: |
+          & .\build\webview2_render_probe.exe 2>&1 | Out-File build\windows-render.log -Encoding utf8
+          $code = $LASTEXITCODE
+          python -m scripts.webview2_render_report --input build/windows-render.log --exit-code $code --screenshot swcompat-webview2-preview.png --output build/windows-render.json
+          $validation = $LASTEXITCODE
+          Remove-Item -ErrorAction SilentlyContinue -LiteralPath swcompat-webview2-preview.png
+          if ($validation -ne 0) { throw "Native WebView2 HTML render verification failed" }
       - name: Download official standalone x64 Evergreen Runtime installer
         shell: pwsh
         run: |
@@ -102,6 +120,7 @@ jobs:
             build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe
             build/evergreen-installer.sha256
             build/webview2_controller_probe.exe
+            build/webview2_render_probe.exe
             build/WebView2Loader.dll
           retention-days: 1
           compression-level: 0
@@ -109,7 +128,9 @@ jobs:
         if: always()
         with:
           name: webview2-native-reference-sanitized
-          path: build/windows-controller.json
+          path: |
+            build/windows-controller.json
+            build/windows-render.json
           if-no-files-found: warn
           retention-days: 7
 
@@ -189,6 +210,43 @@ jobs:
           else
             python3 -m scripts.webview2_runtime_trial "${ARGS[@]}"
           fi
+      - name: Verify local HTML DOM JavaScript and pixel-rendered WebView2 on Apple Silicon
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path("build/evergreen-install-trial.json").read_text())
+          if not result["browser_controller_confirmed"]:
+              raise SystemExit("Installed WebView2 controller not READY, cannot validate rendering")
+          PY
+          export WINEPREFIX="$RUNNER_TEMP/webview2-install-prefix" WINEARCH=win64 WINEDEBUG=-all
+          set +e
+          "$SWCOMPAT_WINE_BIN" "$PWD/build/webview2_render_probe.exe" > build/webview2-render.log 2>&1
+          code=$?
+          set -e
+          python3 -m scripts.webview2_render_report --input build/webview2-render.log --exit-code "$code" --screenshot swcompat-webview2-preview.png --output build/webview2-render.json
+          # Local test screenshot contains only synthetic colored rectangles.
+          rm -f swcompat-webview2-preview.png
+      - name: Record actual DOM and pixel evidence
+        if: runner.os == 'macOS' && always()
+        shell: bash
+        run: |
+          if [ -f build/webview2-render.json ]; then
+            python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          result = json.loads(Path("build/webview2-render.json").read_text())
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("\n## Local WebView2 HTML / DOM / PNG pixel test\n")
+              f.write("Render result: **" + result["result"] + "**\n")
+              f.write("Pixel verification: **" + result["screenshot_pixel_validation"] + "**\n")
+              f.write("Failure stage: **" + result["failure_stage"] + "**\n")
+              f.write("SOLIDWORKS compatibility: **NOT DEMONSTRATED**\n")
+          PY
+          fi
       - name: Summarize outcome without claiming browser compatibility
         if: always()
         shell: bash
@@ -216,6 +274,8 @@ jobs:
         if: always()
         with:
           name: webview2-evergreen-install-${{ matrix.os }}-sanitized
-          path: build/evergreen-install-trial.json
+          path: |
+            build/evergreen-install-trial.json
+            build/webview2-render.json
           if-no-files-found: warn
           retention-days: 7
