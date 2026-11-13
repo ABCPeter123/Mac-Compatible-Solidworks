@@ -17,7 +17,8 @@ MARKERS = "\n".join([
     "SWCOMPAT_WV2_RENDER_CONTROLLER=READY",
     "SWCOMPAT_WV2_RENDER_NAVIGATION=PASS",
     "SWCOMPAT_WV2_RENDER_DOM=PASS",
-    "SWCOMPAT_WV2_RENDER_PREVIEW=PASS",
+    "SWCOMPAT_WV2_RENDER_CAPTURE_PREVIEW=PASS",
+    "SWCOMPAT_WV2_RENDER_PREVIEW=CAPTURE_PREVIEW",
     "SWCOMPAT_WV2_RENDER_PROBE=PASS",
 ]) + "\n"
 
@@ -72,6 +73,33 @@ class RenderReportTests(unittest.TestCase):
         self.assertEqual(report["screenshot_height"], 180)
         self.assertEqual(report["screenshot_pixel_validation"], "PASS")
         self.assertEqual(report["solidworks_compatibility"], "NOT_DEMONSTRATED")
+
+    def test_cdp_fallback_can_validate_true_pixels_after_preview_timeout(self):
+        markers = (MARKERS.replace("SWCOMPAT_WV2_RENDER_CAPTURE_PREVIEW=PASS",
+                                   "SWCOMPAT_WV2_RENDER_CAPTURE_PREVIEW=TIMEOUT")
+                   .replace("SWCOMPAT_WV2_RENDER_PREVIEW=CAPTURE_PREVIEW",
+                            "SWCOMPAT_WV2_RENDER_PREVIEW=CDP_FALLBACK"))
+        result = summarize(markers, 0, make_png())
+        self.assertEqual(result["result"], "PASS")
+        self.assertEqual(result["png_capture_method"], "CDP_FALLBACK")
+        self.assertEqual(result["capture_preview_api"], "TIMEOUT")
+
+    def test_cdp_fallback_will_not_mask_blank_pixels(self):
+        markers = (MARKERS.replace("SWCOMPAT_WV2_RENDER_CAPTURE_PREVIEW=PASS",
+                                   "SWCOMPAT_WV2_RENDER_CAPTURE_PREVIEW=TIMEOUT")
+                   .replace("SWCOMPAT_WV2_RENDER_PREVIEW=CAPTURE_PREVIEW",
+                            "SWCOMPAT_WV2_RENDER_PREVIEW=CDP_FALLBACK"))
+        result = summarize(markers, 0, make_png(fg=(19, 83, 147)))
+        self.assertEqual(result["result"], "FAIL")
+        self.assertEqual(result["failure_stage"], "PIXEL_VALIDATION")
+
+    def test_invalid_capture_method_and_result_pair_rejected(self):
+        markers = MARKERS.replace("SWCOMPAT_WV2_RENDER_CAPTURE_PREVIEW=PASS",
+                                  "SWCOMPAT_WV2_RENDER_CAPTURE_PREVIEW=TIMEOUT")
+        self.assertEqual(summarize(markers, 0, make_png())["result"], "FAIL")
+        markers = MARKERS.replace("SWCOMPAT_WV2_RENDER_PREVIEW=CAPTURE_PREVIEW",
+                                  "SWCOMPAT_WV2_RENDER_PREVIEW=CDP_FALLBACK")
+        self.assertEqual(summarize(markers, 0, make_png())["result"], "FAIL")
 
     def test_png_rgba_supported(self):
         self.assertEqual(summarize(MARKERS, 0, make_png(alpha=True))["result"], "PASS")
