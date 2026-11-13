@@ -12,9 +12,13 @@ on:
       - 'probes/webview2_render_probe.cpp'
       - 'scripts/webview2_render_report.py'
       - 'tests/test_webview2_render_report.py'
+      - 'scripts/webview2_gdi_report.py'
+      - 'tests/test_webview2_gdi_report.py'
       - 'probes/webview2_render_probe.cpp'
       - 'scripts/webview2_render_report.py'
       - 'tests/test_webview2_render_report.py'
+      - 'scripts/webview2_gdi_report.py'
+      - 'tests/test_webview2_gdi_report.py'
   pull_request:
     paths:
       - '.github/workflows/webview2-runtime-install-ci.yml'
@@ -46,6 +50,8 @@ jobs:
         run: python -m unittest discover -s tests -p "test_webview2_runtime_trial.py" -v
       - name: Test strict PNG screenshot and DOM report validation
         run: python -m unittest discover -s tests -p "test_webview2_render_report.py" -v
+      - name: Test allowlisted GDI readback report and pixel evidence states
+        run: python -m unittest discover -s tests -p "test_webview2_gdi_report.py" -v
       - name: Download checksum-pinned Microsoft WebView2 SDK
         shell: pwsh
         run: |
@@ -88,6 +94,8 @@ jobs:
           $code = $LASTEXITCODE
           python -m scripts.webview2_render_report --input build/windows-render.log --exit-code $code --screenshot swcompat-webview2-preview.png --output build/windows-render.json
           $validation = $LASTEXITCODE
+          python -m scripts.webview2_gdi_report --input build/windows-render.log --output build/windows-gdi.json
+          if ($LASTEXITCODE -ne 0) { throw "Native GDI readback diagnostic was incomplete" }
           Remove-Item -ErrorAction SilentlyContinue -LiteralPath swcompat-webview2-preview.png
           if ($validation -ne 0) { throw "Native WebView2 HTML render verification failed" }
       - name: Download official standalone x64 Evergreen Runtime installer
@@ -131,6 +139,7 @@ jobs:
           path: |
             build/windows-controller.json
             build/windows-render.json
+            build/windows-gdi.json
           if-no-files-found: warn
           retention-days: 7
 
@@ -233,6 +242,31 @@ jobs:
           python3 -m scripts.webview2_render_report --input build/webview2-render.log --exit-code "$code" --screenshot swcompat-webview2-preview.png --output build/webview2-render.json
           # Local test screenshot contains only synthetic colored rectangles.
           rm -f swcompat-webview2-preview.png
+      - name: Record synthetic GDI HWND and desktop pixel readbacks independently
+        if: runner.os == 'macOS' && always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f build/webview2-render.log ]; then
+            python3 -m scripts.webview2_gdi_report --input build/webview2-render.log --output build/webview2-gdi.json
+          fi
+      - name: Summarize GDI framebuffer evidence separately from browser screenshot API
+        if: runner.os == 'macOS' && always()
+        shell: bash
+        run: |
+          if [ -f build/webview2-gdi.json ]; then
+            python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          result = json.loads(Path("build/webview2-gdi.json").read_text())
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("\n## WebView2 Win32 GDI synthetic framebuffer diagnostic\n")
+              f.write("Window client: **" + result["window_client_bitblt"] + "**\n")
+              f.write("Desktop: **" + result["desktop_bitblt"] + "**\n")
+              f.write("Actual synthetic pixels: **" + result["gdi_pixel_evidence"] + "**\n")
+              f.write("WebView2 screenshot APIs: **SEPARATELY TESTED**\n")
+          PY
+          fi
       - name: Record actual DOM and pixel evidence
         if: runner.os == 'macOS' && always()
         shell: bash
@@ -282,5 +316,6 @@ jobs:
           path: |
             build/evergreen-install-trial.json
             build/webview2-render.json
+            build/webview2-gdi.json
           if-no-files-found: warn
           retention-days: 7
