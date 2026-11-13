@@ -19,7 +19,9 @@ MAX_PNG_BYTES = 16 * 1024 * 1024
 MAX_PIXELS = 2048 * 2048
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 FIELDS = {"SCHEMA", "ENVIRONMENT", "CONTROLLER", "NAVIGATION",
-          "DOM", "PREVIEW", "PROBE"}
+          "DOM", "CAPTURE_PREVIEW", "PREVIEW", "PROBE"}
+CAPTURE_STATES = {"PASS", "REQUEST_FAILED", "TIMEOUT", "CALLBACK_FAILED", "WRITE_FAILED"}
+METHODS = {"CAPTURE_PREVIEW", "CDP_FALLBACK"}
 STAGES = {
     "LOADER", "LOADER_EXPORT", "COM", "WINDOW_CLASS", "WINDOW_CREATE",
     "TEMP_DIRECTORY", "ENVIRONMENT_REQUEST", "ENVIRONMENT_TIMEOUT",
@@ -29,11 +31,12 @@ STAGES = {
     "NAVIGATION_TIMEOUT", "NAVIGATION_CALLBACK", "SCRIPT_REQUEST",
     "SCRIPT_TIMEOUT", "SCRIPT_DOM", "PREVIEW_STREAM", "PREVIEW_REQUEST",
     "PREVIEW_TIMEOUT", "PREVIEW_CALLBACK", "PREVIEW_WRITE",
+    "CDP_REQUEST", "CDP_TIMEOUT", "CDP_CALLBACK", "CDP_DECODE",
 }
 HRESULT = re.compile(r"0x[0-9A-Fa-f]{8}\Z")
 
 
-def parse_markers(stdout: str, exit_code: int) -> tuple[bool, str]:
+def parse_markers(stdout: str, exit_code: int) -> tuple[bool, str, str, str]:
     values: dict[str, list[str]] = {}
     for line in stdout.splitlines():
         if not line.startswith("SWCOMPAT_WV2_RENDER_") or "=" not in line or len(line) > 160:
@@ -47,25 +50,30 @@ def parse_markers(stdout: str, exit_code: int) -> tuple[bool, str]:
         entries = values.get(key, [])
         return entries[0] if len(entries) == 1 else None
 
+    capture_state = once("CAPTURE_PREVIEW")
+    method = once("PREVIEW")
+    capture_consistent = (
+        capture_state in CAPTURE_STATES and method in METHODS
+        and ((method == "CAPTURE_PREVIEW") == (capture_state == "PASS"))
+    )
     passed = (
-        exit_code == 0 and
+        exit_code == 0 and capture_consistent and
         once("SCHEMA") == "1" and
         once("ENVIRONMENT") == "READY" and
         once("CONTROLLER") == "READY" and
         once("NAVIGATION") == "PASS" and
         once("DOM") == "PASS" and
-        once("PREVIEW") == "PASS" and
         once("PROBE") == "PASS" and
         "STAGE" not in values and "HRESULT" not in values
     )
     if passed:
-        return True, "NONE"
+        return True, "NONE", method, capture_state
     stage = once("STAGE")
     code = once("HRESULT")
     if (exit_code != 0 and once("PROBE") == "FAIL" and
             stage in STAGES and code is not None and HRESULT.fullmatch(code)):
-        return False, stage
-    return False, "UNKNOWN"
+        return False, stage, "UNKNOWN", "UNKNOWN"
+    return False, "UNKNOWN", "UNKNOWN", "UNKNOWN"
 
 
 def _paeth(a: int, b: int, c: int) -> int:
@@ -168,7 +176,7 @@ def _matches(actual: tuple[int, int, int], target: tuple[int, int, int]) -> bool
 
 
 def summarize(log: str, exit_code: int, screenshot: bytes | None) -> dict:
-    probe_pass, failure_stage = parse_markers(log, exit_code)
+    probe_pass, failure_stage, capture_method, capture_state = parse_markers(log, exit_code)
     width = height = None
     pixels_pass = False
     if probe_pass and screenshot is not None:
@@ -187,6 +195,8 @@ def summarize(log: str, exit_code: int, screenshot: bytes | None) -> dict:
         "local_html_navigation": "PASS" if probe_pass else "UNKNOWN",
         "javascript_dom_execution": "PASS" if probe_pass else "UNKNOWN",
         "png_capture": "PASS" if probe_pass else "UNKNOWN",
+        "png_capture_method": capture_method,
+        "capture_preview_api": capture_state,
         "screenshot_pixel_validation": "PASS" if pixels_pass else "FAIL",
         "screenshot_width": width,
         "screenshot_height": height,
