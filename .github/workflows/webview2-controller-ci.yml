@@ -67,12 +67,12 @@ jobs:
             throw "WebView2 SDK headers not found in authenticated package"
           }
           Write-Output "Official SDK and Windows x64 loader SHA-256: PASS"
-      - name: Build original x64 C++ probe using Visual Studio 2022
+      - name: Build original x64 C++ probe using Visual Studio 2026
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $sdk = (Resolve-Path build/sdk/build/native/include).Path
-          cmake -S probes/webview2 -B build/msvc -G "Visual Studio 17 2022" -A x64 "-DWEBVIEW2_SDK_INCLUDE=$sdk"
+          cmake -S probes/webview2 -B build/msvc -G "Visual Studio 18 2026" -A x64 "-DWEBVIEW2_SDK_INCLUDE=$sdk"
           if ($LASTEXITCODE -ne 0) { throw "MSVC CMake configure failed" }
           cmake --build build/msvc --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { throw "MSVC C++ compilation failed" }
