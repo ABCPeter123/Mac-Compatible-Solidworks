@@ -26,8 +26,8 @@ struct Probe {
     bool controller_callback = false;
     HRESULT env_hr = E_UNEXPECTED;
     HRESULT controller_hr = E_UNEXPECTED;
-    const char *environment = "NOT_REACHED";
-    const char *controller = "NOT_REACHED";
+    const char *environment_status = "NOT_REACHED";
+    const char *controller_status = "NOT_REACHED";
     ComPtr<ICoreWebView2Environment> env;
     ComPtr<ICoreWebView2Controller> controller;
     ComPtr<ICoreWebView2> webview;
@@ -150,16 +150,16 @@ int main() {
         });
 
     HRESULT request_hr = create(nullptr, user_dir.c_str(), nullptr, env_cb.Get());
-    probe.env_hr = request_hr;
+    if (!probe.env_callback) probe.env_hr = request_hr;
     if (FAILED(request_hr)) {
-        probe.environment = "REQUEST_FAILED";
+        probe.environment_status = "REQUEST_FAILED";
     } else if (!pump_until(probe.env_callback, 25000)) {
-        probe.environment = "TIMEOUT";
+        probe.environment_status = "TIMEOUT";
         probe.env_hr = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
     } else if (FAILED(probe.env_hr) || !probe.env) {
-        probe.environment = "CALLBACK_FAILED";
+        probe.environment_status = "CALLBACK_FAILED";
     } else {
-        probe.environment = "READY";
+        probe.environment_status = "READY";
         auto controller_cb = Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
             [&probe](HRESULT result, ICoreWebView2Controller *controller) -> HRESULT {
                 probe.controller_callback = true;
@@ -174,14 +174,14 @@ int main() {
 
         HRESULT controller_call = probe.env->CreateCoreWebView2Controller(
             window, controller_cb.Get());
-        probe.controller_hr = controller_call;
+        if (!probe.controller_callback) probe.controller_hr = controller_call;
         if (FAILED(controller_call)) {
-            probe.controller = "REQUEST_FAILED";
+            probe.controller_status = "REQUEST_FAILED";
         } else if (!pump_until(probe.controller_callback, 25000)) {
-            probe.controller = "TIMEOUT";
+            probe.controller_status = "TIMEOUT";
             probe.controller_hr = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
         } else if (FAILED(probe.controller_hr) || !probe.controller) {
-            probe.controller = "CALLBACK_FAILED";
+            probe.controller_status = "CALLBACK_FAILED";
         } else {
             HRESULT view_hr = probe.controller->get_CoreWebView2(&probe.webview);
             RECT bounds = {0, 0, 320, 240};
@@ -189,12 +189,12 @@ int main() {
             HRESULT visible_hr = probe.controller->put_IsVisible(TRUE);
             if (FAILED(view_hr) || !probe.webview ||
                 FAILED(bounds_hr) || FAILED(visible_hr)) {
-                probe.controller = "INTERFACE_FAILED";
+                probe.controller_status = "INTERFACE_FAILED";
                 probe.controller_hr = FAILED(view_hr) ? view_hr :
                                       FAILED(bounds_hr) ? bounds_hr :
                                       FAILED(visible_hr) ? visible_hr : E_POINTER;
             } else {
-                probe.controller = "READY";
+                probe.controller_status = "READY";
             }
         }
     }
@@ -203,10 +203,10 @@ int main() {
     puts("SWCOMPAT_WV2_WINDOW=PASS");
     std::printf("SWCOMPAT_WV2_RUNTIME=%s\n", discovered ? "VERSION_FOUND" : "NOT_DISCOVERED");
     print_hresult("RUNTIME", version_hr);
-    std::printf("SWCOMPAT_WV2_ENVIRONMENT=%s\n", probe.environment);
+    std::printf("SWCOMPAT_WV2_ENVIRONMENT=%s\n", probe.environment_status);
     print_hresult("ENVIRONMENT", probe.env_hr);
-    std::printf("SWCOMPAT_WV2_CONTROLLER=%s\n", probe.controller);
-    if (probe.controller != std::string("NOT_REACHED")) {
+    std::printf("SWCOMPAT_WV2_CONTROLLER=%s\n", probe.controller_status);
+    if (std::string(probe.controller_status) != "NOT_REACHED") {
         print_hresult("CONTROLLER", probe.controller_hr);
     }
     puts("SWCOMPAT_WV2_PROBE=COMPLETE");
