@@ -40,6 +40,25 @@ jobs:
       - run: python -m unittest discover -s tests -p "test_solidworks_bootstrap_trial.py" -v
       - run: python -m unittest discover -s tests -p "test_solidworks_private_media_fetch.py" -v
       - run: python -m unittest discover -s tests -p "test_solidworks_ui_census.py" -v
+      - name: Build and smoke-test original Win32 x64 installer UI census
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cmake -S probes/installer-ui -B build/installer-ui -G "Visual Studio 18 2026" -A x64
+          if ($LASTEXITCODE -ne 0) { throw "Win32 census CMake configure failed" }
+          cmake --build build/installer-ui --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "Win32 census MSVC build failed" }
+          & .\build\installer-ui\Release\solidworks_installer_ui_probe.exe
+          if ($LASTEXITCODE -ne 0) { throw "Win32 window census native smoke failed" }
+          Copy-Item build/installer-ui/Release/solidworks_installer_ui_probe.exe build/solidworks_installer_ui_probe.exe
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: swcompat-original-win32-installer-ui-probe
+          path: build/solidworks_installer_ui_probe.exe
+          if-no-files-found: error
+          retention-days: 1
   verify-signed-media:
     name: Verify original SOLIDWORKS publisher and digest
     if: github.event_name == 'workflow_dispatch'
@@ -71,21 +90,6 @@ jobs:
           if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) { throw "Invalid Authenticode signature" }
           if ($null -eq $signature.SignerCertificate -or $signature.SignerCertificate.Subject -notmatch '(?i)SOLIDWORKS|DASSAULT') { throw "Unexpected executable publisher" }
           Write-Output "Original SOLIDWORKS publisher and SHA256: VERIFIED"
-      - name: Build original x64 Win32 process/window census executable
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          cmake -S probes/installer-ui -B build/installer-ui -G "Visual Studio 18 2026" -A x64
-          if ($LASTEXITCODE -ne 0) { throw "Installer Win32 census CMake configuration failed" }
-          cmake --build build/installer-ui --config Release --parallel 2
-          if ($LASTEXITCODE -ne 0) { throw "Installer Win32 census MSVC compilation failed" }
-          Copy-Item build/installer-ui/Release/solidworks_installer_ui_probe.exe build/solidworks_installer_ui_probe.exe
-      - uses: actions/upload-artifact@v4
-        with:
-          name: swcompat-original-win32-installer-ui-probe
-          path: build/solidworks_installer_ui_probe.exe
-          if-no-files-found: error
-          retention-days: 1
       - uses: actions/upload-artifact@v4
         if: always()
         with:
