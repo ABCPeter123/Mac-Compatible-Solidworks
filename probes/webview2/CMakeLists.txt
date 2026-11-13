@@ -1,0 +1,18 @@
+cmake_minimum_required(VERSION 3.20)
+project(swcompat_webview2_controller LANGUAGES CXX)
+
+if(NOT WIN32)
+    message(FATAL_ERROR "The original Windows WebView2 probe must be built for Windows.")
+endif()
+if(NOT DEFINED WEBVIEW2_SDK_INCLUDE OR
+   NOT EXISTS "${WEBVIEW2_SDK_INCLUDE}/WebView2.h")
+    message(FATAL_ERROR "WEBVIEW2_SDK_INCLUDE must point to official NuGet build/native/include")
+endif()
+
+add_executable(webview2_controller_probe ../webview2_controller_probe.cpp)
+target_compile_features(webview2_controller_probe PRIVATE cxx_std_17)
+target_include_directories(webview2_controller_probe PRIVATE "${WEBVIEW2_SDK_INCLUDE}")
+target_link_libraries(webview2_controller_probe PRIVATE ole32 user32)
+if(MSVC)
+    target_compile_options(webview2_controller_probe PRIVATE /W4 /EHsc /utf-8)
+endif()
