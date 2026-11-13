@@ -14,6 +14,8 @@ from pathlib import Path
 import re
 import signal
 import subprocess
+import threading
+import re as regex
 
 from scripts.installer_media_preflight import analyze_pe
 
@@ -61,7 +63,58 @@ def validate_prefix(prefix: Path) -> None:
         raise ValueError("Wine prefix is not initialized")
 
 
-def attempt_launch(wine: Path, prefix: Path, installer: Path, *, timeout: int) -> dict:
+
+WINDOW_LINES = {
+    "SWCOMPAT_SW_UI_CANDIDATE_PROCESSES",
+    "SWCOMPAT_SW_UI_CANDIDATE_WINDOWS",
+    "SWCOMPAT_SW_UI_VISIBLE_LARGE_WINDOWS",
+}
+
+
+def parse_window_probe(text: str) -> dict | None:
+    """Accept a strict fixed-value Win32 report; never retain unknown output."""
+    if len(text) > 4096:
+        return None
+    values = {}
+    for line in text.splitlines():
+        if line == "SWCOMPAT_SW_UI_PROBE=COMPLETE":
+            if "COMPLETE" in values:
+                return None
+            values["COMPLETE"] = True
+        elif "=" in line:
+            key, value = line.split("=", 1)
+            if key not in WINDOW_LINES or key in values or not regex.fullmatch(r"[0-9]{1,5}", value):
+                return None
+            values[key] = int(value)
+        else:
+            return None
+    if len(values) != 4 or any(values[k] > 8192 for k in WINDOW_LINES):
+        return None
+    if values["SWCOMPAT_SW_UI_CANDIDATE_WINDOWS"] > values["SWCOMPAT_SW_UI_VISIBLE_LARGE_WINDOWS"]:
+        return None
+    return {
+        "candidate_processes": values["SWCOMPAT_SW_UI_CANDIDATE_PROCESSES"],
+        "candidate_windows": values["SWCOMPAT_SW_UI_CANDIDATE_WINDOWS"],
+    }
+
+
+def sample_window_census(wine: Path, probe: Path, prefix: Path, env: dict) -> dict | None:
+    """Execute our own Windows-only census without reading window titles or paths."""
+    try:
+        run = subprocess.run(
+            [str(wine), str(probe)], cwd=str(prefix), env=env,
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, timeout=15, check=False,
+            start_new_session=True,
+        )
+        if run.returncode != 0 or len(run.stdout) > 4096:
+            return None
+        return parse_window_probe(run.stdout.decode("ascii", errors="replace").strip())
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+
+
+def attempt_launch(wine: Path, prefix: Path, installer: Path, *, timeout: int, window_probe: Path | None = None) -> dict:
     """Run only inside marked disposable Wine, never native Windows."""
     if os.name == "nt":
         raise ValueError("Native Windows installer execution is forbidden")
@@ -70,12 +123,17 @@ def attempt_launch(wine: Path, prefix: Path, installer: Path, *, timeout: int) -
         raise ValueError("Wine executable is missing")
     if timeout < 10 or timeout > 180:
         raise ValueError("Timeout outside controlled 10..180 second window")
+    if window_probe is not None and (not window_probe.is_file() or window_probe.suffix.lower() != ".exe"):
+        raise ValueError("Missing original Win32 window census executable")
 
     env = os.environ.copy()
     env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64", "WINEDEBUG": "-all"})
     observation = "START_FAILED"
     process_started = False
     process = None
+    stop_monitor = threading.Event()
+    observations: list[dict] = []
+    monitor_thread = None
     try:
         process = subprocess.Popen(
             [str(wine), str(installer)],
@@ -87,6 +145,18 @@ def attempt_launch(wine: Path, prefix: Path, installer: Path, *, timeout: int) -
             start_new_session=True,
         )
         process_started = True
+        if window_probe is not None:
+            def observe() -> None:
+                # Multiple samples reduce false negatives from slow installer startups.
+                for interval in (8, 25, 30):
+                    if stop_monitor.wait(interval):
+                        return
+                    sample = sample_window_census(wine, window_probe, prefix, env)
+                    if sample is not None:
+                        observations.append(sample)
+
+            monitor_thread = threading.Thread(target=observe, daemon=True)
+            monitor_thread.start()
         try:
             rc = process.wait(timeout=timeout)
             observation = "EXIT_ZERO" if rc == 0 else "EXIT_NONZERO"
@@ -106,13 +176,28 @@ def attempt_launch(wine: Path, prefix: Path, installer: Path, *, timeout: int) -
                 process.wait(timeout=5)
     except OSError:
         observation = "START_FAILED"
+    finally:
+        stop_monitor.set()
+        if monitor_thread is not None:
+            monitor_thread.join(timeout=16)
 
+    max_candidate_windows = max((s["candidate_windows"] for s in observations), default=0)
+    max_candidate_processes = max((s["candidate_processes"] for s in observations), default=0)
+    window_evidence = (
+        "CANDIDATE_WINDOW_SEEN" if max_candidate_windows > 0
+        else "NO_CANDIDATE_WINDOW_OBSERVED" if observations
+        else "NOT_VERIFIED"
+    )
     return {
         "schema": 1,
         "component": "Genuine SOLIDWORKS bootstrapper initial Wine launch",
         "media_verification": "SHA256_VERIFIED",
         "wine_process_created": process_started,
         "bootstrapper_process": observation,
+        "installer_window_census": window_evidence,
+        "census_samples_complete": len(observations),
+        "candidate_installer_processes_max": max_candidate_processes,
+        "candidate_visible_windows_max": max_candidate_windows,
         "installation_manager_ui": "NOT_VERIFIED",
         "full_installation": "NOT_VERIFIED",
         "activation": "NOT_ATTEMPTED",
@@ -129,6 +214,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--wine", type=Path)
     parser.add_argument("--prefix", type=Path)
     parser.add_argument("--timeout-seconds", type=int, default=90)
+    parser.add_argument("--window-probe", type=Path, help="Original self-contained Win32 process/window census executable")
     parser.add_argument("--agree-disposable-prefix", action="store_true")
     args = parser.parse_args(argv)
     try:
@@ -137,13 +223,17 @@ def main(argv: list[str] | None = None) -> int:
         if installer.resolve() == output:
             raise ValueError("Refusing to overwrite installer")
         summary = verify_media(installer, args.sha256)
-        if args.wine or args.prefix or args.agree_disposable_prefix:
+        if args.wine or args.prefix or args.agree_disposable_prefix or args.window_probe:
             if not (args.wine and args.prefix and args.agree_disposable_prefix):
                 raise ValueError("Wine launch requires wine, prefix and explicit disposable-prefix agreement")
             prefix = args.prefix.expanduser().resolve()
             if output.is_relative_to(prefix):
                 raise ValueError("Sanitized report must be outside the disposable prefix")
-            observation = attempt_launch(args.wine.expanduser(), prefix, installer.resolve(), timeout=args.timeout_seconds)
+            observation = attempt_launch(
+                args.wine.expanduser(), prefix, installer.resolve(),
+                timeout=args.timeout_seconds,
+                window_probe=args.window_probe.expanduser().resolve() if args.window_probe else None,
+            )
             summary.update(observation)
         else:
             summary["component"] = "SOLIDWORKS bootstrapper static preflight only"
@@ -157,6 +247,9 @@ def main(argv: list[str] | None = None) -> int:
     print("Media verification:", summary["media_verification"])
     print("Wine executable started:", summary["wine_process_created"])
     print("Bootstrapper process:", summary["bootstrapper_process"])
+    if "installer_window_census" in summary:
+        print("Win32 installer window census:", summary["installer_window_census"])
+        print("Candidate visible windows (max):", summary["candidate_visible_windows_max"])
     print("SOLIDWORKS installation: NOT_VERIFIED")
     return 0 if summary["bootstrapper_process"] in {"NOT_EXECUTED", "EXIT_ZERO", "TIMEOUT"} else 1
 
