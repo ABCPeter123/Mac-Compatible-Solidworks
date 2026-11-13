@@ -223,6 +223,9 @@ jobs:
               raise SystemExit("Installed WebView2 controller not READY, cannot validate rendering")
           PY
           export WINEPREFIX="$RUNNER_TEMP/webview2-install-prefix" WINEARCH=win64 WINEDEBUG=-all
+          # Investigate Wine compositor/screenshot deadlocks without weakening
+          # browser sandbox or cross-origin protections. Applies only to this probe.
+          export WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--disable-gpu --disable-gpu-compositing --disable-features=Vulkan"
           set +e
           "$SWCOMPAT_WINE_BIN" "$PWD/build/webview2_render_probe.exe" > build/webview2-render.log 2>&1
           code=$?
