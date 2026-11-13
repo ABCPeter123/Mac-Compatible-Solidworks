@@ -1,5 +1,6 @@
 """Synthetic-only Apple Silicon Wine GDI control, privacy and failure semantics."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -18,6 +19,7 @@ def isolated_prefix(root: Path) -> Path:
     return prefix
 
 
+@unittest.skipIf(os.name == "nt", "Synthetic Wine reference cannot execute on native Windows")
 class ReferenceTests(unittest.TestCase):
     def run_case(self, returncode: int, output: bytes):
         with tempfile.TemporaryDirectory() as d:
