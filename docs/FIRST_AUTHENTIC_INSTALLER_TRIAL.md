@@ -89,6 +89,18 @@ The next read-only diagnostic distinguishes three layers:
 
 Each state is independently exported as a fixed allowlisted enum: `installer_hwnd_responsiveness` and `installer_gdi_client_variation`. `macos_onscreen_pixels` remains `NOT_VERIFIED` even when GDI produces a nonuniform surface. The native Windows CI reference uses a **new original synthetic two-color test HWND** to verify that the probe's own responsiveness and readback algorithm works before we trust its diagnostics on Wine.
 
+## Distinguishing a Wine GDI limitation from an installer-specific one
+
+A later authentic installer run, [#43499104522](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43499104522), confirmed a **responsive installer-associated Win32 window** (`installer_hwnd_responsiveness=RESPONSIVE`) but client-area GDI readback returned `READBACK_FAILED`. This does not demonstrate a frozen installer, and does not prove the user could see or operate the window on macOS.
+
+The next diagnostic runs our **original, synthetic two-color Win32 test window** under the same pinned Apple Silicon Wine environment **before downloading or executing SOLIDWORKS**. This is separate from the actual proprietary installer trial and has no access to installer contents. Its strict status is recorded as `REFERENCE_PASS`, `REFERENCE_FAILED`, `REFERENCE_TIMEOUT`, `REFERENCE_UNAVAILABLE` or `REFERENCE_UNEXPECTED`.
+
+- If synthetic GDI **passes** while genuine installer client GDI **fails**, investigate that installer's HWND, drawing/composition path, and windowless/child-window surfaces.
+- If both **fail**, investigate Wine's general Win32 GDI readback and hosted macOS display environment before drawing installer-specific conclusions.
+- In either case, passing GDI tests is **not equivalent to macOS onscreen pixel proof**, rendered or interactive Installation Manager UI, installation completion, activation, or CAD operation.
+
+The reference reports fixed allowlisted statuses. Neither full process output nor user paths, window text, screenshots, serial numbers, or RGB values are retained.
+
 ## What the workflow actually tests
 
 On native Windows Server, it downloads the executable over HTTPS, verifies its full SHA-256 and PE structure, and checks that the Authenticode publisher is valid and identifies SOLIDWORKS or Dassault. **It does not execute the installer on Windows.** A mismatch aborts the Mac test.
