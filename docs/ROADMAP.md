@@ -19,6 +19,8 @@
 ## M2: SOLIDWORKS installer and dependencies
 - [ ] Identify legitimate installer version and target requirements
 - [ ] Validate redistributable dependencies and COM services
+- [x] Install Microsoft-signed WebView2 Runtime and create a real controller in isolated Apple Silicon Wine; Linux Wine remains unsuccessful
+- [ ] Verify HTML/DOM rendering and genuine SOLIDWORKS installer behavior
 - [ ] Record crashes, missing exports, registry failures and unsupported APIs
 - [ ] Keep activation and software licensing intact
 
