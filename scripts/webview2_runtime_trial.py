@@ -133,7 +133,7 @@ def combine(before: dict, after: dict, termination: str, code: int | None) -> di
         "schema": 1,
         "component": "WebView2 Evergreen Standalone x64 runtime installer in disposable Wine",
         "scope": "OFFICIAL_INSTALLER_TRIAL_NOT_SOLIDWORKS",
-        "installer_signature": "VERIFIED_BY_WINDOWS_CI_BEFORE_STAGING",
+        "installer_signature": "EXTERNALLY_VERIFIED_IN_CI_NOT_BY_THIS_SCRIPT",
         "installer_sha256_verified": True,
         "installer_execution": termination,
         "installer_exit_code": code if termination in {"EXIT_ZERO", "EXIT_NONZERO"} else None,
@@ -142,6 +142,7 @@ def combine(before: dict, after: dict, termination: str, code: int | None) -> di
         "controller_transition": transition,
         "runtime_installation_confirmed": (
             termination == "EXIT_ZERO"
+            and before["runtime_discovery"] == "NOT_DISCOVERED"
             and after["runtime_discovery"] == "VERSION_FOUND"
             and after["probe_result"] == "COMPLETE"
         ),
