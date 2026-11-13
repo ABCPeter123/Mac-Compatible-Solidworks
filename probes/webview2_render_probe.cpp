@@ -163,6 +163,77 @@ static bool save_cdp_preview(const std::wstring &reply) {
     return ok;
 }
 
+
+/* Two independent GDI readbacks, not WebView2 screenshot APIs.
+ *
+ * GetDC(window) reads the HWND client area; GetDC(NULL) reads the desktop
+ * at the HWND's translated client coordinates. Chromium's composited
+ * surface may be invisible to one or both interfaces. Record each answer
+ * independently and never treat a BitBlt return value alone as pixel proof.
+ *
+ * Only the known synthetic page is ever sampled. No image is saved.
+ */
+static bool colors_match(BYTE *pixel, BYTE r, BYTE g, BYTE b) {
+    return abs(static_cast<int>(pixel[2]) - r) <= 20 &&
+           abs(static_cast<int>(pixel[1]) - g) <= 20 &&
+           abs(static_cast<int>(pixel[0]) - b) <= 20;
+}
+
+static const char *gdi_sample(HDC source, int left, int top) {
+    if (!source) return "API_FAILED";
+    const int w = 480, h = 320;
+    HDC buffer = CreateCompatibleDC(source);
+    if (!buffer) return "API_FAILED";
+    BITMAPINFO info = {};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = w;
+    info.bmiHeader.biHeight = -h;  // Top-down 32-bit BGRA.
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    void *bits = nullptr;
+    HBITMAP bitmap = CreateDIBSection(buffer, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!bitmap || !bits) {
+        if (bitmap) DeleteObject(bitmap);
+        DeleteDC(buffer);
+        return "API_FAILED";
+    }
+    HGDIOBJ previous = SelectObject(buffer, bitmap);
+    bool copied = previous && previous != HGDI_ERROR &&
+                  BitBlt(buffer, 0, 0, w, h, source, left, top, SRCCOPY | CAPTUREBLT);
+    bool matching = false;
+    if (copied) {
+        BYTE *data = static_cast<BYTE *>(bits);
+        BYTE *background = data + ((h / 10) * w + (w / 10)) * 4;
+        BYTE *foreground = data + ((h / 2) * w + (w / 2)) * 4;
+        matching = colors_match(background, 19, 83, 147) &&
+                   colors_match(foreground, 29, 205, 91);
+    }
+    if (previous && previous != HGDI_ERROR) SelectObject(buffer, previous);
+    DeleteObject(bitmap);
+    DeleteDC(buffer);
+    return !copied ? "API_FAILED" : (matching ? "PIXELS_MATCH" : "NO_MATCH");
+}
+
+static void capture_gdi_diagnostic(HWND window) {
+    HDC client = GetDC(window);
+    const char *client_result = gdi_sample(client, 0, 0);
+    if (client) ReleaseDC(window, client);
+
+    POINT origin = {0, 0};
+    const char *desktop_result = "API_FAILED";
+    if (ClientToScreen(window, &origin)) {
+        HDC desktop = GetDC(nullptr);
+        desktop_result = gdi_sample(desktop, origin.x, origin.y);
+        if (desktop) ReleaseDC(nullptr, desktop);
+    }
+    puts("SWCOMPAT_WV2_GDI_SCHEMA=1");
+    printf("SWCOMPAT_WV2_GDI_CLIENT=%s\n", client_result);
+    printf("SWCOMPAT_WV2_GDI_DESKTOP=%s\n", desktop_result);
+    puts("SWCOMPAT_WV2_GDI_PROBE=COMPLETE");
+    fflush(stdout);
+}
+
 int main() {
     HMODULE dll = LoadLibraryW(L"WebView2Loader.dll");
     if (!dll) return fail("LOADER", HRESULT_FROM_WIN32(GetLastError()));
@@ -276,7 +347,8 @@ int main() {
         return fail("SCRIPT_DOM", FAILED(result.script_hr) ? result.script_hr : E_FAIL);
 
     // Allow the compositor and host event loop to paint the static synthetic page.
-    pump_for(700);
+    pump_for(900);
+    capture_gdi_diagnostic(window);
     ComPtr<IStream> png;
     hr = CreateStreamOnHGlobal(nullptr, TRUE, &png);
     if (FAILED(hr) || !png) return fail("PREVIEW_STREAM", FAILED(hr) ? hr : E_POINTER);
