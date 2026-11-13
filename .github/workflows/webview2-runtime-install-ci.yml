@@ -1,0 +1,221 @@
+name: Official WebView2 Evergreen runtime installation trial on Wine
+
+on:
+  push:
+    paths:
+      - '.github/workflows/webview2-runtime-install-ci.yml'
+      - 'scripts/webview2_runtime_trial.py'
+      - 'tests/test_webview2_runtime_trial.py'
+      - 'scripts/webview2_controller_report.py'
+      - 'probes/webview2_controller_probe.cpp'
+      - 'probes/webview2/CMakeLists.txt'
+  pull_request:
+    paths:
+      - '.github/workflows/webview2-runtime-install-ci.yml'
+      - 'scripts/webview2_runtime_trial.py'
+      - 'tests/test_webview2_runtime_trial.py'
+      - 'scripts/webview2_controller_report.py'
+      - 'probes/webview2_controller_probe.cpp'
+      - 'probes/webview2/CMakeLists.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: webview2-evergreen-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  source-and-build:
+    name: Verify Microsoft Authenticode signature and build original controller
+    runs-on: windows-2025
+    timeout-minutes: 16
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test opt-in isolation and result reporting
+        run: python -m unittest discover -s tests -p "test_webview2_runtime_trial.py" -v
+      - name: Download checksum-pinned Microsoft WebView2 SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          $url = "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.4314.35/microsoft.web.webview2.1.0.4314.35.nupkg"
+          curl.exe --fail --location --retry 3 --output build/sdk.zip $url
+          if ($LASTEXITCODE -ne 0) { throw "Official WebView2 SDK download failed" }
+          $sha = (Get-FileHash build/sdk.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($sha -ne "90778deb1b77e36292828b4b5833c9255c27533f40e0ddd55891ae718944edc4") {
+            throw "Official SDK digest mismatch"
+          }
+          Expand-Archive -LiteralPath build/sdk.zip -DestinationPath build/sdk -Force
+          Copy-Item build/sdk/runtimes/win-x64/native/WebView2Loader.dll build/WebView2Loader.dll
+          $loader = (Get-FileHash build/WebView2Loader.dll -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($loader -ne "d3fce90bdeecb08596e377dea6a316354dd8949e32ff09b89d51be00c14e21b6") {
+            throw "Official x64 loader digest mismatch"
+          }
+      - name: Build original WebView2 controller executable with MSVC
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sdk = (Resolve-Path build/sdk/build/native/include).Path
+          cmake -S probes/webview2 -B build/msvc -G "Visual Studio 18 2026" -A x64 "-DWEBVIEW2_SDK_INCLUDE=$sdk"
+          if ($LASTEXITCODE -ne 0) { throw "MSVC configuration failed" }
+          cmake --build build/msvc --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "MSVC build failed" }
+          Copy-Item build/msvc/Release/webview2_controller_probe.exe build/webview2_controller_probe.exe
+      - name: Confirm native Windows reference creates actual browser controller
+        shell: pwsh
+        run: |
+          & .\build\webview2_controller_probe.exe 2>&1 | Out-File build\windows-controller.log -Encoding utf8
+          $result = $LASTEXITCODE
+          python -m scripts.webview2_controller_report --input build/windows-controller.log --exit-code $result --output build/windows-controller.json --require-controller
+      - name: Download official standalone x64 Evergreen Runtime installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $url = "https://go.microsoft.com/fwlink/?linkid=2124701"
+          curl.exe --fail --location --retry 3 --max-time 360 --output build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe $url
+          if ($LASTEXITCODE -ne 0) { throw "Official WebView2 standalone download failed" }
+          $file = (Get-Item build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe)
+          if ($file.Length -lt 8388608 -or $file.Length -gt 471859200) {
+            throw "Standalone installer has unexpected file size"
+          }
+          $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+          if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+            throw "Microsoft Authenticode verification failed"
+          }
+          if ($signature.SignerCertificate.Subject -notmatch '(^|, )O=Microsoft Corporation(,|$)') {
+            throw "Installer does not have the expected Microsoft publisher certificate"
+          }
+          $sha = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -Path build/evergreen-installer.sha256 -Value $sha -NoNewline -Encoding ascii
+          Write-Output "Official Microsoft x64 Evergreen standalone signature: VALID"
+          Write-Output "Installer SHA256: $sha"
+          Write-Output "Installer size: $($file.Length) bytes"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-webview2-evergreen-x64-and-controller
+          path: |
+            build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe
+            build/evergreen-installer.sha256
+            build/webview2_controller_probe.exe
+            build/WebView2Loader.dll
+          retention-days: 1
+          compression-level: 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: webview2-native-reference-sanitized
+          path: build/windows-controller.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  wine-install:
+    name: Official WebView2 install before-after (${{ matrix.os }})
+    needs: source-and-build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 27
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: signed-webview2-evergreen-x64-and-controller
+          path: build
+      - name: Install Wine and virtual display on Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine wine64 xvfb xauth
+      - name: Download checksum-pinned Wine 11.21 for Apple Silicon
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-devel-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-devel-11.21-osx64.tar.xz"
+          echo "9909b486657e10ab66c7279371ae1f990345b596b3b1b3a0cf21f28af24fa0ce  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-build"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-build"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Initialize disposable and isolated Wine prefix
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            WINE_BIN="$SWCOMPAT_WINE"
+            python3 -m swcompat --wine "$WINE_BIN" \
+              --prefix "$RUNNER_TEMP/webview2-install-prefix" --logs-dir build/logs init
+          else
+            WINE_BIN="$(command -v wine)"
+            xvfb-run -a python3 -m swcompat --wine "$WINE_BIN" \
+              --prefix "$RUNNER_TEMP/webview2-install-prefix" --logs-dir build/logs init
+          fi
+          echo "SWCOMPAT_WINE_BIN=$WINE_BIN" >> "$GITHUB_ENV"
+          touch "$RUNNER_TEMP/webview2-install-prefix/.swcompat-webview2-disposable"
+      - name: Verify staged installer integrity on Wine host
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "$(cat build/evergreen-installer.sha256)  build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe" | shasum -a 256 -c -
+      - name: Attempt official Microsoft installation and compare browser controller
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARGS=(
+            --wine "$SWCOMPAT_WINE_BIN"
+            --prefix "$RUNNER_TEMP/webview2-install-prefix"
+            --installer build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe
+            --sha256-file build/evergreen-installer.sha256
+            --probe build/webview2_controller_probe.exe
+            --output build/evergreen-install-trial.json
+            --timeout-seconds 240
+            --agree-disposable-prefix
+          )
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a python3 -m scripts.webview2_runtime_trial "${ARGS[@]}"
+          else
+            python3 -m scripts.webview2_runtime_trial "${ARGS[@]}"
+          fi
+      - name: Summarize outcome without claiming browser compatibility
+        if: always()
+        shell: bash
+        run: |
+          if [ -f build/evergreen-install-trial.json ]; then
+            python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = json.loads(Path("build/evergreen-install-trial.json").read_text())
+          lines = [
+              "## Official Microsoft WebView2 Evergreen runtime trial",
+              "Installer executed: **" + p["installer_execution"] + "**",
+              "Runtime before: **" + p["before"]["runtime_discovery"] + "**",
+              "Runtime after: **" + p["after"]["runtime_discovery"] + "**",
+              "Environment after: **" + p["after"]["environment_creation"] + "**",
+              "Controller after: **" + p["after"]["controller_creation"] + "**",
+              "Browser controller actually confirmed: **" + str(p["browser_controller_confirmed"]) + "**",
+              "SOLIDWORKS compatibility: **NOT DEMONSTRATED**",
+          ]
+          with open(__import__("os").environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("\n".join(lines) + "\n")
+          PY
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: webview2-evergreen-install-${{ matrix.os }}-sanitized
+          path: build/evergreen-install-trial.json
+          if-no-files-found: warn
+          retention-days: 7
