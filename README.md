@@ -103,6 +103,12 @@ The [WebView2 Win32 controller compatibility experiment](docs/WEBVIEW2_CONTROLLE
 
 The report distinguishes an API test that **completed** from a browser controller that actually reached **READY**. No HTML rendering, SOLIDWORKS installation, licensing or CAD workflows are claimed.
 
+## Official WebView2 Runtime installation under Wine
+
+The [Evergreen standalone runtime experiment](docs/WEBVIEW2_RUNTIME_INSTALL.md) now tests the real Microsoft-signed Windows x64 WebView2 Runtime installer in **disposable** Linux Wine and Apple Silicon Wine prefixes. Native Windows verifies the installer publisher signature and stages the exact SHA-256 for the Wine hosts. We run the original WebView2 controller test before and after installation.
+
+A completed CI experiment can report a failed installer or missing browser runtime; it is **not** proof of functional WebView2, SOLIDWORKS setup, or CAD compatibility.
+
 ## Local development
 
 Requires Python 3.10+:
