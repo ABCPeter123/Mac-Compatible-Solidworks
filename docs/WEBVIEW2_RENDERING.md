@@ -33,7 +33,7 @@ The next verified Apple Silicon attempt ([run 43354162956](https://github.com/AB
 
 The next diagnostic sets the documented WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS override to disable GPU acceleration, GPU compositing and Vulkan for the synthetic browser only. These are test-only rendering flags, not a production recommendation. They do not disable browser security protections or affect SOLIDWORKS binaries.
 
-A completed controller test is not interchangeable with a successful local HTML/DOM/pixel test. Native and macOS rendering test steps must **fail CI** if the DOM marker, CapturePreview call, PNG decode or either pixel sample fails.
+A completed controller test is not interchangeable with a successful local HTML/DOM/pixel test. Native Windows requires a passing screenshot and GDI sample. On macOS, the default automated experiment is a **diagnostic**, not a pixel-rendering acceptance gate. Only the exact observed screenshot timeout with real runtime/controller, verified DOM, and completed GDI readback is permitted to complete as a `KNOWN_CAPTURE_BLOCKER` warning. Unexpected failures continue to fail CI. For actual pixel acceptance, dispatch the workflow with `require_macos_pixels=true`. That strict test **fails** until real screenshot or GDI pixels are verified.
 
 ## Independent Win32 GDI readback experiment, issue #26
 
@@ -43,9 +43,30 @@ GDI observations have their own bounded markers, `SWCOMPAT_WV2_GDI_CLIENT` and `
 
 A `PIXELS_MATCH` proves two matching readbacks from that GDI device context, **not** that the WebView2 browser screenshot API works. A `NO_MATCH` does **not** prove there is no browser rendering: Chromium may use a DirectComposition/Metal surface that Win32 GDI cannot read, especially on an unattended hosted Mac. Both methods can be unavailable on a headless runner.
 
-Neither GDI method copies user data, loads an external page, or exports a screenshot. Raw logs and pixel bytes remain unuploaded. The CI artifact contains only a fixed-schema JSON outcome. This is a separate diagnostic and **does not turn red browser screenshot CI green** when screenshot proof remains absent.
+Neither GDI method copies user data, loads an external page, or exports a screenshot. Raw logs and pixel bytes remain unuploaded. The CI artifact contains only a fixed-schema JSON outcome. **A completed diagnostic is not pixel evidence.** The [strict acceptance option](../.github/workflows/webview2-runtime-install-ci.yml) remains red when no pixel sample passes.
 
 Tracked in [issue #26](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/issues/26).
+
+## Verified GDI evidence, November 12, 2026
+
+[GitHub Actions run 43358204964](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43358204964) ran the same original x64 executable and genuine signed Microsoft Runtime in native Windows Server and Apple Silicon Wine 11.21.
+
+| Observation | Native Windows 2025 | Apple Silicon Wine |
+| --- | --- | --- |
+| WebView2 runtime/controller | READY | READY |
+| HTML navigation / DOM execution | PASS | PASS |
+| GDI HWND client pixel readback | PIXELS_MATCH | NO_MATCH |
+| GDI desktop pixel readback | PIXELS_MATCH | API_FAILED |
+| Browser PNG screenshot pixels | PASS | NOT_VERIFIED |
+| Chromium screenshot callback | PASS via CapturePreview | CDP_TIMEOUT |
+
+The Apple Silicon GDI diagnostic completed, but neither GDI path demonstrated the required page pixels. This **does not prove that Chromium failed to paint**: the real composition surface may be invisible to GDI or the hosted Mac may not offer an accessible onscreen desktop. It does demonstrate that the tested Wine graphics/presentation stack cannot yet supply verified WebView2 pixels by any of these three methods.
+
+### Automated diagnosis versus strict pixel acceptance
+
+The [classifier](../scripts/webview2_render_gate.py) uses only the bounded, sanitized installer, browser, and GDI reports. The only known negative outcome accepted as a *completed diagnostic* is exactly `CDP_TIMEOUT` after a real installed browser, verified DOM and complete GDI readback. It exports `KNOWN_CAPTURE_BLOCKER`, `browser_pixels=NOT_VERIFIED`, and `macos_pixel_rendering=NOT_DEMONSTRATED`. This **does not** claim macOS rendering success.
+
+Run the GitHub workflow manually with `require_macos_pixels=true` to invoke the actual pixel acceptance gate. That gate requires independently verified screenshot or GDI pixels and rejects the known blocker. It also rejects malformed evidence, incomplete DOM execution, runtime regressions or unexpected error stages.
 
 ## Outcome classification
 
