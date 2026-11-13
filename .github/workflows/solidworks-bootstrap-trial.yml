@@ -1,0 +1,147 @@
+name: Licensed SOLIDWORKS bootstrapper first-launch trial
+on:
+  push:
+    paths:
+      - '.github/workflows/solidworks-bootstrap-trial.yml'
+      - 'scripts/solidworks_bootstrap_trial.py'
+      - 'tests/test_solidworks_bootstrap_trial.py'
+  pull_request:
+    paths:
+      - '.github/workflows/solidworks-bootstrap-trial.yml'
+      - 'scripts/solidworks_bootstrap_trial.py'
+      - 'tests/test_solidworks_bootstrap_trial.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: solidworks-bootstrap-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+jobs:
+  synthetic-tests:
+    name: Synthetic-only installer guardrails (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s tests -p "test_solidworks_bootstrap_trial.py" -v
+  verify-signed-media:
+    name: Verify original SOLIDWORKS publisher and digest
+    if: github.event_name == 'workflow_dispatch'
+    needs: synthetic-tests
+    runs-on: windows-2025
+    timeout-minutes: 18
+    env:
+      SWCOMPAT_INSTALLER_URL: ${{ secrets.SWCOMPAT_INSTALLER_URL }}
+      SWCOMPAT_INSTALLER_SHA256: ${{ secrets.SWCOMPAT_INSTALLER_SHA256 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Fetch authentic installer and verify Authenticode
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not $env:SWCOMPAT_INSTALLER_URL -or -not $env:SWCOMPAT_INSTALLER_SHA256) { throw "Set private installer URL and SHA256 GitHub secrets" }
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          curl.exe --fail --silent --show-error --location --retry 2 --max-time 720 --proto '=https' --proto-redir '=https' --output build/SolidworksSetup.exe $env:SWCOMPAT_INSTALLER_URL
+          if ($LASTEXITCODE -ne 0) { throw "Private installer retrieval failed" }
+          python -m scripts.solidworks_bootstrap_trial --installer build/SolidworksSetup.exe --sha256 $env:SWCOMPAT_INSTALLER_SHA256 --output build/solidworks-windows-media.json
+          if ($LASTEXITCODE -ne 0) { throw "SHA256 or Windows PE invalid" }
+          $signature = Get-AuthenticodeSignature -LiteralPath build/SolidworksSetup.exe
+          if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) { throw "Invalid Authenticode signature" }
+          if ($null -eq $signature.SignerCertificate -or $signature.SignerCertificate.Subject -notmatch '(?i)SOLIDWORKS|DASSAULT') { throw "Unexpected executable publisher" }
+          Write-Output "Original SOLIDWORKS publisher and SHA256: VERIFIED"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: solidworks-bootstrap-windows-preflight-sanitized
+          path: build/solidworks-windows-media.json
+          if-no-files-found: error
+          retention-days: 3
+      - name: Delete proprietary installer
+        if: always()
+        shell: pwsh
+        run: Remove-Item -LiteralPath build/SolidworksSetup.exe -ErrorAction SilentlyContinue
+  first-macos-launch:
+    name: Test real bootstrapper process under Apple Silicon Wine
+    if: github.event_name == 'workflow_dispatch'
+    needs: verify-signed-media
+    runs-on: macos-15
+    timeout-minutes: 23
+    env:
+      SWCOMPAT_INSTALLER_URL: ${{ secrets.SWCOMPAT_INSTALLER_URL }}
+      SWCOMPAT_INSTALLER_SHA256: ${{ secrets.SWCOMPAT_INSTALLER_SHA256 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install checksum-pinned Wine 11.21 on Apple Silicon
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-devel-11.21-osx64.tar.xz"
+          curl --fail --silent --show-error --location --retry 3 --output "$ARCHIVE" "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-devel-11.21-osx64.tar.xz"
+          echo "9909b486657e10ab66c7279371ae1f990345b596b3b1b3a0cf21f28af24fa0ce  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-build"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-build"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE_BIN=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Initialize disposable prefix with Windows 11 reported version
+        shell: bash
+        run: |
+          set -euo pipefail
+          PREFIX="$RUNNER_TEMP/swcompat-solidworks-first-launch"
+          python3 -m swcompat --wine "$SWCOMPAT_WINE_BIN" --prefix "$PREFIX" --logs-dir "$RUNNER_TEMP/swcompat-internal-logs" init
+          python3 -m swcompat --wine "$SWCOMPAT_WINE_BIN" --prefix "$PREFIX" --logs-dir "$RUNNER_TEMP/swcompat-internal-logs" set-winver win11
+          test -d "$PREFIX/drive_c" && test -f "$PREFIX/system.reg"
+          touch "$PREFIX/.swcompat-solidworks-installer-disposable"
+      - name: Fetch same authentic installer and verify its full SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SWCOMPAT_INSTALLER_URL" && test -n "$SWCOMPAT_INSTALLER_SHA256"
+          mkdir -p build
+          curl --fail --silent --show-error --location --retry 2 --max-time 720 --proto '=https' --proto-redir '=https' --output build/SolidworksSetup.exe "$SWCOMPAT_INSTALLER_URL"
+          python3 -m scripts.solidworks_bootstrap_trial --installer build/SolidworksSetup.exe --sha256 "$SWCOMPAT_INSTALLER_SHA256" --output build/solidworks-macos-preflight.json
+      - name: Execute first bounded Wine launch without serial entry
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.solidworks_bootstrap_trial --wine "$SWCOMPAT_WINE_BIN" --prefix "$RUNNER_TEMP/swcompat-solidworks-first-launch" --agree-disposable-prefix --installer build/SolidworksSetup.exe --sha256 "$SWCOMPAT_INSTALLER_SHA256" --timeout-seconds 120 --output build/solidworks-macos-trial.json
+      - name: Report only allowlisted statuses
+        if: always()
+        shell: bash
+        run: |
+          if [ -f build/solidworks-macos-trial.json ]; then
+            python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          p = json.loads(Path("build/solidworks-macos-trial.json").read_text())
+          fields = ("media_verification", "wine_process_created", "bootstrapper_process", "installation_manager_ui", "full_installation", "activation", "cad_launch", "solidworks_compatibility")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write("## Genuine SOLIDWORKS installer first-launch diagnostic\n")
+              for name in fields:
+                  out.write(name + ": **" + str(p[name]) + "**\n")
+          PY
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: solidworks-bootstrap-apple-silicon-sanitized
+          path: |
+            build/solidworks-macos-preflight.json
+            build/solidworks-macos-trial.json
+          if-no-files-found: warn
+          retention-days: 3
+      - name: Delete proprietary media
+        if: always()
+        shell: bash
+        run: rm -f build/SolidworksSetup.exe
