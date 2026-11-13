@@ -4,6 +4,14 @@ An open-source engineering testbed for running the **original, licensed Windows 
 
 **Status: independent Windows x64 execution, OpenGL 4.5 depth-buffered rendering, and official Microsoft WebView2 Runtime installation with a real controller are verified on hosted Apple Silicon Wine. SOLIDWORKS installation, activation and CAD functionality have NOT been demonstrated.**
 
+## First authentic installer launch (staged, not yet executed)
+
+For a legitimately licensed **SOLIDWORKS Student Edition** serial beginning with 9020, the official [Community Download](https://www.solidworks.com/support/community-download) offers the installer for the student's entitled release. Student licenses are version-specific; possession of a serial alone does not verify access to SOLIDWORKS 2026.
+
+The opt-in [first licensed installer trial](.github/workflows/solidworks-bootstrap-trial.yml) is staged to verify the original installer’s SHA-256 and Windows Authenticode publisher, then attempt its initial process launch in a disposable Apple Silicon Wine prefix. Installer media stays private and is never committed to this public repository. It requires a user-authorized time-limited private download URL and expected SHA-256 stored as GitHub Actions secrets. See [private setup instructions](docs/FIRST_AUTHENTIC_INSTALLER_TRIAL.md).
+
+**No real SOLIDWORKS installer has been received or executed yet.** Launcher process creation is not equivalent to successful installation, a rendered Installation Manager, activation, or working CAD.
+
 ## Why this exists
 
 The goal is to identify and fix missing interfaces between SOLIDWORKS, Wine, and macOS. First we establish basic Windows x64 execution and Windows OpenGL/WGL support, then investigate dependencies and installer behavior. We do not try to reverse-engineer Windows in its entirety.
