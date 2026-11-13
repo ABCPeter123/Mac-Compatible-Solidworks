@@ -101,6 +101,16 @@ The next diagnostic runs our **original, synthetic two-color Win32 test window**
 
 The reference reports fixed allowlisted statuses. Neither full process output nor user paths, window text, screenshots, serial numbers, or RGB values are retained.
 
+## Confirmed contrast: original installer versus a synthetic Wine GDI window
+
+[Manual workflow #43503360082](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43503360082) completed with all four jobs passing as **diagnostics** on November 13, 2026. The nonproprietary two-color Win32 HWND self-test reported **`REFERENCE_PASS` directly on hosted Apple Silicon Wine**. The same environment then downloaded and verified the authentic, Dassault/SOLIDWORKS-signed installer. The original installer's process started; one installer-associated window was visible to Win32 enumeration and **responsive** to a bounded message, but GDI `StretchBlt`-based client readback was **`READBACK_FAILED`**. The installer remained open until the deliberate 120-second cutoff.
+
+This establishes that the project's basic Win32 GDI client-area probe works **for a synthetic two-color window in the same hosted Wine configuration**. It does **not** establish macOS desktop pixel presentation or prove that all Wine GDI functionality works for all window types. The remaining failure is likely specific to the original installer's HWND, client geometry, readback method or drawing/surface composition, not a universal GDI absence.
+
+The next diagnostic distinguishes the *first failed API stage* in the original window's GDI readback (`CLIENT_RECT_FAILED`, `CLIENT_TOO_SMALL`, `SOURCE_DC_FAILED`, `MEMORY_DC_FAILED`, `DIB_CREATE_FAILED`, `BITMAP_SELECT_FAILED`, or `STRETCH_BLT_FAILED`). It also independently reads a bounded sample through `GetPixel` and reports only `NONUNIFORM`, `UNIFORM`, or `READBACK_FAILED`. The new result fields are `installer_gdi_failure_stage` and `installer_direct_getpixel`; no actual pixel values, window titles, paths, screenshots, executable bytes, license keys or serials are exported.
+
+The readback controls distinguish acquisition of a DC, copying into a DIB, and reading individual pixels. A synthetic test passing or an installer `GetPixel` returning multiple colors **still does not verify painted macOS window pixels, successful installation, or CAD functionality**.
+
 ## What the workflow actually tests
 
 On native Windows Server, it downloads the executable over HTTPS, verifies its full SHA-256 and PE structure, and checks that the Authenticode publisher is valid and identifies SOLIDWORKS or Dassault. **It does not execute the installer on Windows.** A mismatch aborts the Mac test.
