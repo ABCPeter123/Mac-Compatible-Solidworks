@@ -72,6 +72,14 @@ WINDOW_LINES = {
 WINDOW_ENUMS = {
     "SWCOMPAT_SW_UI_RESPONSIVENESS": {"RESPONSIVE", "UNRESPONSIVE", "NO_CANDIDATE"},
     "SWCOMPAT_SW_UI_GDI_CLIENT": {"NONUNIFORM", "UNIFORM", "READBACK_FAILED", "NO_CANDIDATE"},
+    "SWCOMPAT_SW_UI_GDI_FAILURE_STAGE": {
+        "NONE", "NO_CANDIDATE", "CLIENT_RECT_FAILED", "CLIENT_TOO_SMALL",
+        "SOURCE_DC_FAILED", "MEMORY_DC_FAILED", "DIB_CREATE_FAILED",
+        "BITMAP_SELECT_FAILED", "STRETCH_BLT_FAILED",
+    },
+    "SWCOMPAT_SW_UI_DIRECT_GETPIXEL": {
+        "NONUNIFORM", "UNIFORM", "READBACK_FAILED", "NO_CANDIDATE",
+    },
 }
 
 
@@ -105,11 +113,23 @@ def parse_window_probe(text: str) -> dict | None:
     for field in WINDOW_ENUMS:
         if (values[field] == "NO_CANDIDATE") != no_candidate:
             return None
+    stage = values["SWCOMPAT_SW_UI_GDI_FAILURE_STAGE"]
+    gdi = values["SWCOMPAT_SW_UI_GDI_CLIENT"]
+    if not no_candidate:
+        if gdi == "READBACK_FAILED" and stage == "NONE":
+            return None
+        if gdi != "READBACK_FAILED" and stage not in {"NONE",
+                "CLIENT_RECT_FAILED", "CLIENT_TOO_SMALL", "SOURCE_DC_FAILED",
+                "MEMORY_DC_FAILED", "DIB_CREATE_FAILED",
+                "BITMAP_SELECT_FAILED", "STRETCH_BLT_FAILED"}:
+            return None
     return {
         "candidate_processes": values["SWCOMPAT_SW_UI_CANDIDATE_PROCESSES"],
         "candidate_windows": values["SWCOMPAT_SW_UI_CANDIDATE_WINDOWS"],
         "responsiveness": values["SWCOMPAT_SW_UI_RESPONSIVENESS"],
-        "gdi_client": values["SWCOMPAT_SW_UI_GDI_CLIENT"],
+        "gdi_client": gdi,
+        "gdi_failure_stage": stage,
+        "direct_getpixel": values["SWCOMPAT_SW_UI_DIRECT_GETPIXEL"],
     }
 
 
@@ -211,6 +231,24 @@ def attempt_launch(wine: Path, prefix: Path, installer: Path, *, timeout: int, w
         else "NO_CANDIDATE" if observations
         else "NOT_VERIFIED"
     )
+    direct_getpixel = (
+        "NONUNIFORM" if any(s["direct_getpixel"] == "NONUNIFORM" for s in observations)
+        else "UNIFORM" if any(s["direct_getpixel"] == "UNIFORM" for s in observations)
+        else "READBACK_FAILED" if any(s["direct_getpixel"] == "READBACK_FAILED" for s in observations)
+        else "NO_CANDIDATE" if observations
+        else "NOT_VERIFIED"
+    )
+    gdi_failure_stages = sorted({
+        s["gdi_failure_stage"] for s in observations
+        if s["gdi_failure_stage"] not in {"NO_CANDIDATE", "NONE"}
+    })
+    # Fixed allowlist only, never report arbitrary strings or window content.
+    gdi_failure_stage = (
+        gdi_failure_stages[0] if gdi_failure_stages
+        else "NONE" if max_candidate_windows > 0
+        else "NO_CANDIDATE" if observations
+        else "NOT_VERIFIED"
+    )
     window_evidence = (
         "CANDIDATE_WINDOW_SEEN" if max_candidate_windows > 0
         else "NO_CANDIDATE_WINDOW_OBSERVED" if observations
@@ -228,6 +266,8 @@ def attempt_launch(wine: Path, prefix: Path, installer: Path, *, timeout: int, w
         "candidate_visible_windows_max": max_candidate_windows,
         "installer_hwnd_responsiveness": responsiveness,
         "installer_gdi_client_variation": gdi_client,
+        "installer_gdi_failure_stage": gdi_failure_stage,
+        "installer_direct_getpixel": direct_getpixel,
         "macos_onscreen_pixels": "NOT_VERIFIED",
         "installation_manager_ui": "NOT_VERIFIED",
         "full_installation": "NOT_VERIFIED",
@@ -283,6 +323,8 @@ def main(argv: list[str] | None = None) -> int:
         print("Candidate visible windows (max):", summary["candidate_visible_windows_max"])
         print("Installer HWND responsiveness:", summary["installer_hwnd_responsiveness"])
         print("Installer GDI client readback:", summary["installer_gdi_client_variation"])
+        print("Installer GDI failure stage:", summary["installer_gdi_failure_stage"])
+        print("Installer direct GetPixel:", summary["installer_direct_getpixel"])
         print("macOS onscreen installer pixels: NOT_VERIFIED")
     print("SOLIDWORKS installation: NOT_VERIFIED")
     return 0 if summary["bootstrapper_process"] in {"NOT_EXECUTED", "EXIT_ZERO", "TIMEOUT"} else 1
