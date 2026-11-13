@@ -11,6 +11,8 @@ on:
       - 'probes/solidworks_installer_ui_probe.cpp'
       - 'probes/installer-ui/CMakeLists.txt'
       - 'tests/test_solidworks_ui_census.py'
+      - 'scripts/solidworks_ui_gdi_reference.py'
+      - 'tests/test_solidworks_ui_gdi_reference.py'
   pull_request:
     paths:
       - '.github/workflows/solidworks-bootstrap-trial.yml'
@@ -18,6 +20,11 @@ on:
       - 'tests/test_solidworks_bootstrap_trial.py'
       - 'scripts/solidworks_private_media_fetch.py'
       - 'tests/test_solidworks_private_media_fetch.py'
+      - 'probes/solidworks_installer_ui_probe.cpp'
+      - 'probes/installer-ui/CMakeLists.txt'
+      - 'tests/test_solidworks_ui_census.py'
+      - 'scripts/solidworks_ui_gdi_reference.py'
+      - 'tests/test_solidworks_ui_gdi_reference.py'
   workflow_dispatch:
 permissions:
   contents: read
@@ -40,6 +47,7 @@ jobs:
       - run: python -m unittest discover -s tests -p "test_solidworks_bootstrap_trial.py" -v
       - run: python -m unittest discover -s tests -p "test_solidworks_private_media_fetch.py" -v
       - run: python -m unittest discover -s tests -p "test_solidworks_ui_census.py" -v
+      - run: python -m unittest discover -s tests -p "test_solidworks_ui_gdi_reference.py" -v
       - name: Build and smoke-test original Win32 x64 installer UI census
         if: runner.os == 'Windows'
         shell: pwsh
@@ -144,6 +152,15 @@ jobs:
           python3 -m swcompat --wine "$SWCOMPAT_WINE_BIN" --prefix "$PREFIX" --logs-dir "$RUNNER_TEMP/swcompat-internal-logs" set-winver win11
           test -d "$PREFIX/drive_c" && test -f "$PREFIX/system.reg"
           touch "$PREFIX/.swcompat-solidworks-installer-disposable"
+      - name: Establish nonproprietary Win32 HWND and GDI baseline on Apple Silicon Wine
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.solidworks_ui_gdi_reference \
+            --wine "$SWCOMPAT_WINE_BIN" \
+            --prefix "$RUNNER_TEMP/swcompat-solidworks-first-launch" \
+            --probe build/solidworks_installer_ui_probe.exe \
+            --output build/solidworks-macos-gdi-reference.json
       - name: Fetch same private installer and classify HTTP failures
         shell: bash
         run: |
@@ -161,6 +178,25 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m scripts.solidworks_bootstrap_trial --wine "$SWCOMPAT_WINE_BIN" --prefix "$RUNNER_TEMP/swcompat-solidworks-first-launch" --agree-disposable-prefix --installer build/SolidworksSetup.exe --sha256 "$SWCOMPAT_INSTALLER_SHA256" --window-probe build/solidworks_installer_ui_probe.exe --timeout-seconds 120 --output build/solidworks-macos-trial.json
+      - name: Summarize synthetic Mac Wine GDI reference
+        if: always()
+        shell: bash
+        run: |
+          if [ -f build/solidworks-macos-gdi-reference.json ]; then
+            python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          report = json.loads(Path("build/solidworks-macos-gdi-reference.json").read_text())
+          allowed = {"REFERENCE_PASS", "REFERENCE_FAILED", "REFERENCE_TIMEOUT", "REFERENCE_UNAVAILABLE", "REFERENCE_UNEXPECTED"}
+          value = report.get("reference")
+          if value not in allowed:
+              raise SystemExit("Malformed synthetic reference status")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
+              stream.write("## Wine native-window synthetic GDI baseline\n")
+              stream.write("Nonproprietary Win32 test: **" + value + "**\n")
+              stream.write("Original SOLIDWORKS installer not involved in this reference test.\n")
+          PY
+          fi
       - name: Report only allowlisted statuses
         if: always()
         shell: bash
@@ -182,6 +218,7 @@ jobs:
         with:
           name: solidworks-bootstrap-apple-silicon-sanitized
           path: |
+            build/solidworks-macos-gdi-reference.json
             build/solidworks-macos-fetch.json
             build/solidworks-macos-preflight.json
             build/solidworks-macos-trial.json
