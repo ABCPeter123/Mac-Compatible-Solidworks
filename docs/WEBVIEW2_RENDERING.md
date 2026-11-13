@@ -13,7 +13,7 @@ The test:
 3. Navigates via NavigateToString to a self-contained HTML document with a blue background and a centered green rectangle.
 4. Waits for NavigationCompleted to confirm navigation succeeded.
 5. Calls ExecuteScript and checks an exact JSON-encoded result derived from the actual DOM, element text, document data attribute, and computed CSS.
-6. Calls CapturePreview to write a real PNG image of the browser view to a temporary local file.
+6. Attempts WebView2 CapturePreview. If its callback fails or times out, independently requests a PNG using Chromium's documented Page.captureScreenshot DevTools protocol and decodes only the base64 image field. The report keeps the screenshot source distinct; it does not claim CapturePreview succeeded when the fallback is used.
 7. Verifies the PNG with Python standard-library zlib and CRC checking, including exact dimensions, valid scanline filters and actual RGB colors at two separated positions.
 
 The synthetic background is RGB (19, 83, 147) and the rectangle is RGB (29, 205, 91). The validator tolerates small pixel-color variations. A blank, corrupted, swapped-color, or wrong-color screenshot is **not** a pass. For safety, image files and raw process logs are **not uploaded**; only bounded and fixed-schema JSON results are retained as GitHub Actions artifacts.
@@ -26,6 +26,8 @@ The [WebView2 Evergreen workflow](../.github/workflows/webview2-runtime-install-
 - Apple Silicon macOS 15 with Wine 11.21 after verified Microsoft Evergreen standalone Runtime installation in an isolated prefix.
 
 The workflow separately continues to report the previously verified *negative* Linux Wine installer result. Linux rendering is not claimed when the browser runtime is absent.
+
+Initial Apple Silicon CI [run 43352756493](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43352756493) reached a genuine Chromium page but WebView2 CapturePreview timed out. That means browser controller creation and DOM execution are not sufficient to prove the preview API or actual pixels work. The independent CDP screenshot fallback tests whether the Chromium page image can be captured even though Wine's WebView2 CapturePreview completion callback did not fire.
 
 A completed controller test is not interchangeable with a successful local HTML/DOM/pixel test. Native and macOS rendering test steps must **fail CI** if the DOM marker, CapturePreview call, PNG decode or either pixel sample fails.
 
