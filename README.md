@@ -109,6 +109,12 @@ The [Evergreen standalone runtime experiment](docs/WEBVIEW2_RUNTIME_INSTALL.md) 
 
 In [hosted CI run 43346665424](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43346665424), the Apple Silicon installation **succeeded**, and the WebView2 environment/controller became READY. The same installer exited with code 1 under Linux Wine and did not produce a runtime. A created controller is not proof of rendered HTML or SOLIDWORKS UI compatibility.
 
+## WebView2 HTML, JavaScript DOM, and real browser pixel rendering
+
+The [WebView2 inline HTML rendering experiment](docs/WEBVIEW2_RENDERING.md) adds a real navigation, asynchronous JavaScript DOM verification and WebView2 PNG CapturePreview test. It verifies both a blue page background and an independently rendered green rectangle using a bounded standard-library PNG decoder. A WebView2 controller alone does not pass this test. Native Windows and the official-runtime Apple Silicon Wine pathway run the same original Windows x64 program.
+
+No user HTML, external network navigation, screenshot artifacts or SOLIDWORKS installer data are involved. Successful rendering of this synthetic page does **not** establish that SOLIDWORKS works on a Mac.
+
 ## Local development
 
 Requires Python 3.10+:
