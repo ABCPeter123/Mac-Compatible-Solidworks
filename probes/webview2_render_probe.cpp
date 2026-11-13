@@ -12,6 +12,7 @@
 #include <wincrypt.h>
 #include <WebView2.h>
 #include <cstdio>
+#include <cstring>
 #include <cwchar>
 #include <string>
 #include <vector>
@@ -151,7 +152,7 @@ static bool save_cdp_preview(const std::wstring &reply) {
                               CRYPT_STRING_BASE64, bytes.data(), &size, nullptr, nullptr)) return false;
     const unsigned char signature[] = {137, 80, 78, 71, 13, 10, 26, 10};
     if (size < sizeof(signature) ||
-        memcmp(bytes.data(), signature, sizeof(signature)) != 0) return false;
+        std::memcmp(bytes.data(), signature, sizeof(signature)) != 0) return false;
     HANDLE out = CreateFileW(L"swcompat-webview2-preview.png", GENERIC_WRITE, 0,
                               nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (out == INVALID_HANDLE_VALUE) return false;
