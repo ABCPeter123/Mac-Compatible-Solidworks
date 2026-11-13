@@ -35,6 +35,18 @@ The next diagnostic sets the documented WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS ov
 
 A completed controller test is not interchangeable with a successful local HTML/DOM/pixel test. Native and macOS rendering test steps must **fail CI** if the DOM marker, CapturePreview call, PNG decode or either pixel sample fails.
 
+## Independent Win32 GDI readback experiment, issue #26
+
+The current [render probe](../probes/webview2_render_probe.cpp) now samples two fixed synthetic-page pixels **before** calling either browser screenshot API. It uses Win32 GDI `BitBlt` to read the HWND's client device context and separately the desktop device context at the transformed client coordinates. Each method samples the blue background at (48, 32) and green central rectangle at (240, 160) within the 480-by-320 browser surface. It compares actual RGB values against the expected colors with a small per-channel tolerance.
+
+GDI observations have their own bounded markers, `SWCOMPAT_WV2_GDI_CLIENT` and `SWCOMPAT_WV2_GDI_DESKTOP`, each classified as `PIXELS_MATCH`, `NO_MATCH` or `API_FAILED`. The independent privacy-preserving [GDI reporter](../scripts/webview2_gdi_report.py) accepts only those exact states and verifies all markers are present once. The GDI report runs even if the later `CapturePreview` or Chromium DevTools call times out, since that later failure should not erase prior readback observations.
+
+A `PIXELS_MATCH` proves two matching readbacks from that GDI device context, **not** that the WebView2 browser screenshot API works. A `NO_MATCH` does **not** prove there is no browser rendering: Chromium may use a DirectComposition/Metal surface that Win32 GDI cannot read, especially on an unattended hosted Mac. Both methods can be unavailable on a headless runner.
+
+Neither GDI method copies user data, loads an external page, or exports a screenshot. Raw logs and pixel bytes remain unuploaded. The CI artifact contains only a fixed-schema JSON outcome. This is a separate diagnostic and **does not turn red browser screenshot CI green** when screenshot proof remains absent.
+
+Tracked in [issue #26](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/issues/26).
+
 ## Outcome classification
 
 The sanitized reporter scripts/webview2_render_report.py accepts only the original probe's exact markers and a bounded PNG. It reports navigation and DOM outcomes only when the original probe completed successfully, and reports screenshot rendering as PASS only when the two expected color regions actually appear in the decoded PNG. Failures expose only a fixed stage label such as NAVIGATION_CALLBACK, SCRIPT_DOM or PREVIEW_CALLBACK; they cannot leak the raw log or user's filesystem paths.
