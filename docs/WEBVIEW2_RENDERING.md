@@ -68,6 +68,10 @@ The [classifier](../scripts/webview2_render_gate.py) uses only the bounded, sani
 
 Run the GitHub workflow manually with `require_macos_pixels=true` to invoke the actual pixel acceptance gate. That gate requires independently verified screenshot or GDI pixels and rejects the known blocker. It also rejects malformed evidence, incomplete DOM execution, runtime regressions or unexpected error stages.
 
+## Browser-internal Canvas proof
+
+The independent [Canvas 2D pixel and PNG encoding test](WEBVIEW2_CANVAS.md) executes within the original Win32 WebView2 browser before GDI and screenshot calls. It verifies two actual `getImageData` RGBA pixel values and the `toDataURL` PNG signature, distinguishing internal drawing from onscreen presentation. Canvas success cannot substitute for window RGB evidence, and an incomplete Canvas result fails the new diagnostic classifier.
+
 ## Outcome classification
 
 The sanitized reporter scripts/webview2_render_report.py accepts only the original probe's exact markers and a bounded PNG. It reports navigation and DOM outcomes only when the original probe completed successfully, and reports screenshot rendering as PASS only when the two expected color regions actually appear in the decoded PNG. Failures expose only a fixed stage label such as NAVIGATION_CALLBACK, SCRIPT_DOM or PREVIEW_CALLBACK; they cannot leak the raw log or user's filesystem paths.

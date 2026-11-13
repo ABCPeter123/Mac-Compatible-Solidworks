@@ -236,6 +236,66 @@ static void capture_gdi_diagnostic(HWND window) {
     fflush(stdout);
 }
 
+/* An independent browser-internal Canvas 2D check. It uses ExecuteScript
+ * and reads pixels from the Canvas backing store, not the native window,
+ * compositor, GetDC, CapturePreview, or Chromium DevTools screenshot APIs.
+ */
+static HRESULT verify_script_result(ICoreWebView2 *webview, LPCWSTR script,
+                                    LPCWSTR expected_json) {
+    struct Completion {
+        bool done = false;
+        HRESULT status = E_UNEXPECTED;
+        bool matched = false;
+    } state;
+    auto callback = Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+        [&state, expected_json](HRESULT code, LPCWSTR json) -> HRESULT {
+            state.status = code;
+            state.matched = SUCCEEDED(code) && json && wcscmp(json, expected_json) == 0;
+            state.done = true;
+            return S_OK;
+        });
+    HRESULT request = webview->ExecuteScript(script, callback.Get());
+    if (FAILED(request)) return request;
+    if (!wait_for(state.done, 20000)) return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+    if (FAILED(state.status)) return state.status;
+    return state.matched ? S_OK : E_FAIL;
+}
+
+static HRESULT verify_canvas_2d(ICoreWebView2 *webview) {
+    const wchar_t *script =
+        L"(() => {"
+        L"const c = document.createElement('canvas');"
+        L"c.width=64; c.height=48;"
+        L"const x = c.getContext('2d');"
+        L"if (!x) return 'SWCOMPAT_CANVAS_NO_CONTEXT';"
+        L"x.fillStyle='rgb(19,83,147)'; x.fillRect(0,0,64,48);"
+        L"x.fillStyle='rgb(29,205,91)'; x.fillRect(16,12,32,24);"
+        L"const b = x.getImageData(6,5,1,1).data;"
+        L"const f = x.getImageData(32,24,1,1).data;"
+        L"const eq = (p,r,g,bl) => p[0]===r && p[1]===g && "
+        L"p[2]===bl && p[3]===255;"
+        L"window.__swcompatCanvas = c;"
+        L"return eq(b,19,83,147) && eq(f,29,205,91)"
+        L" ? 'SWCOMPAT_CANVAS_PIXELS_OK' : 'SWCOMPAT_CANVAS_PIXELS_BAD';"
+        L"})()";
+    return verify_script_result(webview, script, L"\"SWCOMPAT_CANVAS_PIXELS_OK\"");
+}
+
+static HRESULT verify_canvas_png_encoding(ICoreWebView2 *webview) {
+    const wchar_t *script =
+        L"(() => {"
+        L"const c = window.__swcompatCanvas;"
+        L"if (!c || c.width!==64 || c.height!==48)"
+        L" return 'SWCOMPAT_CANVAS_MISSING';"
+        L"const png = c.toDataURL('image/png');"
+        L"return typeof png==='string' &&"
+        L" png.startsWith('data:image/png;base64,iVBORw0KGgo') &&"
+        L" png.length>100"
+        L" ? 'SWCOMPAT_CANVAS_PNG_OK' : 'SWCOMPAT_CANVAS_PNG_BAD';"
+        L"})()";
+    return verify_script_result(webview, script, L"\"SWCOMPAT_CANVAS_PNG_OK\"");
+}
+
 int main() {
     HMODULE dll = LoadLibraryW(L"WebView2Loader.dll");
     if (!dll) return fail("LOADER", HRESULT_FROM_WIN32(GetLastError()));
@@ -347,6 +407,17 @@ int main() {
         return fail("SCRIPT_TIMEOUT", HRESULT_FROM_WIN32(ERROR_TIMEOUT));
     if (FAILED(result.script_hr) || !result.dom_ok)
         return fail("SCRIPT_DOM", FAILED(result.script_hr) ? result.script_hr : E_FAIL);
+
+    // These checks deliberately precede *all* screenshot or GDI readbacks.
+    hr = verify_canvas_2d(result.webview.Get());
+    if (FAILED(hr)) return fail("CANVAS_2D", hr);
+    puts("SWCOMPAT_WV2_CANVAS_2D=PASS");
+    std::fflush(stdout);
+    hr = verify_canvas_png_encoding(result.webview.Get());
+    if (FAILED(hr)) return fail("CANVAS_PNG", hr);
+    puts("SWCOMPAT_WV2_CANVAS_PNG=PASS");
+    puts("SWCOMPAT_WV2_CANVAS_PROBE=COMPLETE");
+    std::fflush(stdout);
 
     // Allow the compositor and host event loop to paint the static synthetic page.
     pump_for(900);
