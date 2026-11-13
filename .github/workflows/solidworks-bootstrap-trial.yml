@@ -51,6 +51,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Win32 census MSVC build failed" }
           & .\build\installer-ui\Release\solidworks_installer_ui_probe.exe
           if ($LASTEXITCODE -ne 0) { throw "Win32 window census native smoke failed" }
+          & .\build\installer-ui\Release\solidworks_installer_ui_probe.exe --self-test
+          if ($LASTEXITCODE -ne 0) { throw "Synthetic Win32 HWND responsiveness or GDI surface test failed" }
           Copy-Item build/installer-ui/Release/solidworks_installer_ui_probe.exe build/solidworks_installer_ui_probe.exe
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
@@ -168,7 +170,7 @@ jobs:
           import json, os
           from pathlib import Path
           p = json.loads(Path("build/solidworks-macos-trial.json").read_text())
-          fields = ("media_verification", "wine_process_created", "bootstrapper_process", "installer_window_census", "census_samples_complete", "candidate_installer_processes_max", "candidate_visible_windows_max", "installation_manager_ui", "full_installation", "activation", "cad_launch", "solidworks_compatibility")
+          fields = ("media_verification", "wine_process_created", "bootstrapper_process", "installer_window_census", "census_samples_complete", "candidate_installer_processes_max", "candidate_visible_windows_max", "installer_hwnd_responsiveness", "installer_gdi_client_variation", "macos_onscreen_pixels", "installation_manager_ui", "full_installation", "activation", "cad_launch", "solidworks_compatibility")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
               out.write("## Genuine SOLIDWORKS installer first-launch diagnostic\n")
               for name in fields:

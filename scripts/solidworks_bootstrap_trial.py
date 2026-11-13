@@ -69,6 +69,10 @@ WINDOW_LINES = {
     "SWCOMPAT_SW_UI_CANDIDATE_WINDOWS",
     "SWCOMPAT_SW_UI_VISIBLE_LARGE_WINDOWS",
 }
+WINDOW_ENUMS = {
+    "SWCOMPAT_SW_UI_RESPONSIVENESS": {"RESPONSIVE", "UNRESPONSIVE", "NO_CANDIDATE"},
+    "SWCOMPAT_SW_UI_GDI_CLIENT": {"NONUNIFORM", "UNIFORM", "READBACK_FAILED", "NO_CANDIDATE"},
+}
 
 
 def parse_window_probe(text: str) -> dict | None:
@@ -83,18 +87,29 @@ def parse_window_probe(text: str) -> dict | None:
             values["COMPLETE"] = True
         elif "=" in line:
             key, value = line.split("=", 1)
-            if key not in WINDOW_LINES or key in values or not regex.fullmatch(r"[0-9]{1,5}", value):
+            if key in values:
                 return None
-            values[key] = int(value)
+            if key in WINDOW_LINES and regex.fullmatch(r"[0-9]{1,5}", value):
+                values[key] = int(value)
+            elif key in WINDOW_ENUMS and value in WINDOW_ENUMS[key]:
+                values[key] = value
+            else:
+                return None
         else:
             return None
-    if len(values) != 4 or any(values[k] > 8192 for k in WINDOW_LINES):
+    if len(values) != 4 + len(WINDOW_ENUMS) or any(values[k] > 8192 for k in WINDOW_LINES):
         return None
     if values["SWCOMPAT_SW_UI_CANDIDATE_WINDOWS"] > values["SWCOMPAT_SW_UI_VISIBLE_LARGE_WINDOWS"]:
         return None
+    no_candidate = values["SWCOMPAT_SW_UI_CANDIDATE_WINDOWS"] == 0
+    for field in WINDOW_ENUMS:
+        if (values[field] == "NO_CANDIDATE") != no_candidate:
+            return None
     return {
         "candidate_processes": values["SWCOMPAT_SW_UI_CANDIDATE_PROCESSES"],
         "candidate_windows": values["SWCOMPAT_SW_UI_CANDIDATE_WINDOWS"],
+        "responsiveness": values["SWCOMPAT_SW_UI_RESPONSIVENESS"],
+        "gdi_client": values["SWCOMPAT_SW_UI_GDI_CLIENT"],
     }
 
 
@@ -183,6 +198,19 @@ def attempt_launch(wine: Path, prefix: Path, installer: Path, *, timeout: int, w
 
     max_candidate_windows = max((s["candidate_windows"] for s in observations), default=0)
     max_candidate_processes = max((s["candidate_processes"] for s in observations), default=0)
+    responsiveness = (
+        "RESPONSIVE" if any(s["responsiveness"] == "RESPONSIVE" for s in observations)
+        else "UNRESPONSIVE" if any(s["responsiveness"] == "UNRESPONSIVE" for s in observations)
+        else "NO_CANDIDATE" if observations
+        else "NOT_VERIFIED"
+    )
+    gdi_client = (
+        "NONUNIFORM" if any(s["gdi_client"] == "NONUNIFORM" for s in observations)
+        else "UNIFORM" if any(s["gdi_client"] == "UNIFORM" for s in observations)
+        else "READBACK_FAILED" if any(s["gdi_client"] == "READBACK_FAILED" for s in observations)
+        else "NO_CANDIDATE" if observations
+        else "NOT_VERIFIED"
+    )
     window_evidence = (
         "CANDIDATE_WINDOW_SEEN" if max_candidate_windows > 0
         else "NO_CANDIDATE_WINDOW_OBSERVED" if observations
@@ -198,6 +226,9 @@ def attempt_launch(wine: Path, prefix: Path, installer: Path, *, timeout: int, w
         "census_samples_complete": len(observations),
         "candidate_installer_processes_max": max_candidate_processes,
         "candidate_visible_windows_max": max_candidate_windows,
+        "installer_hwnd_responsiveness": responsiveness,
+        "installer_gdi_client_variation": gdi_client,
+        "macos_onscreen_pixels": "NOT_VERIFIED",
         "installation_manager_ui": "NOT_VERIFIED",
         "full_installation": "NOT_VERIFIED",
         "activation": "NOT_ATTEMPTED",
@@ -250,6 +281,9 @@ def main(argv: list[str] | None = None) -> int:
     if "installer_window_census" in summary:
         print("Win32 installer window census:", summary["installer_window_census"])
         print("Candidate visible windows (max):", summary["candidate_visible_windows_max"])
+        print("Installer HWND responsiveness:", summary["installer_hwnd_responsiveness"])
+        print("Installer GDI client readback:", summary["installer_gdi_client_variation"])
+        print("macOS onscreen installer pixels: NOT_VERIFIED")
     print("SOLIDWORKS installation: NOT_VERIFIED")
     return 0 if summary["bootstrapper_process"] in {"NOT_EXECUTED", "EXIT_ZERO", "TIMEOUT"} else 1
 

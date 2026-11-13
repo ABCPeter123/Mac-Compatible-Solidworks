@@ -13,6 +13,8 @@ def window_sample(processes=1, windows=1, visible=2):
         f"SWCOMPAT_SW_UI_CANDIDATE_PROCESSES={processes}\n"
         f"SWCOMPAT_SW_UI_CANDIDATE_WINDOWS={windows}\n"
         f"SWCOMPAT_SW_UI_VISIBLE_LARGE_WINDOWS={visible}\n"
+        f"SWCOMPAT_SW_UI_RESPONSIVENESS={'RESPONSIVE' if windows else 'NO_CANDIDATE'}\n"
+        f"SWCOMPAT_SW_UI_GDI_CLIENT={'NONUNIFORM' if windows else 'NO_CANDIDATE'}\n"
         "SWCOMPAT_SW_UI_PROBE=COMPLETE\n"
     )
 
@@ -20,11 +22,13 @@ def window_sample(processes=1, windows=1, visible=2):
 class Win32WindowCensusTests(unittest.TestCase):
     def test_candidate_window_is_a_heuristic_only(self):
         self.assertEqual(parse_window_probe(window_sample()), {
-            "candidate_processes": 1, "candidate_windows": 1})
+            "candidate_processes": 1, "candidate_windows": 1,
+            "responsiveness": "RESPONSIVE", "gdi_client": "NONUNIFORM"})
 
     def test_absence_does_not_prove_no_ui(self):
         self.assertEqual(parse_window_probe(window_sample(0, 0, 1)), {
-            "candidate_processes": 0, "candidate_windows": 0})
+            "candidate_processes": 0, "candidate_windows": 0,
+            "responsiveness": "NO_CANDIDATE", "gdi_client": "NO_CANDIDATE"})
 
     def test_reject_missing_completed_marker(self):
         self.assertIsNone(parse_window_probe(window_sample().replace(
@@ -37,6 +41,31 @@ class Win32WindowCensusTests(unittest.TestCase):
     def test_reject_unrecognized_raw_window_title_or_license(self):
         self.assertIsNone(parse_window_probe(window_sample() +
                                              "Install SOLIDWORKS serial: 123-456\n"))
+
+    def test_responsive_window_can_have_failed_gdi_readback(self):
+        result = parse_window_probe(window_sample().replace(
+            "GDI_CLIENT=NONUNIFORM", "GDI_CLIENT=READBACK_FAILED"))
+        self.assertEqual(result["responsiveness"], "RESPONSIVE")
+        self.assertEqual(result["gdi_client"], "READBACK_FAILED")
+
+    def test_unresponsive_window_can_have_uniform_gdi_surface(self):
+        result = parse_window_probe(window_sample()
+            .replace("RESPONSIVENESS=RESPONSIVE", "RESPONSIVENESS=UNRESPONSIVE")
+            .replace("GDI_CLIENT=NONUNIFORM", "GDI_CLIENT=UNIFORM"))
+        self.assertEqual(result["responsiveness"], "UNRESPONSIVE")
+        self.assertEqual(result["gdi_client"], "UNIFORM")
+
+    def test_reject_inconsistent_no_candidate(self):
+        self.assertIsNone(parse_window_probe(window_sample(
+            0, 0, 1).replace("RESPONSIVENESS=NO_CANDIDATE", "RESPONSIVENESS=RESPONSIVE")))
+        self.assertIsNone(parse_window_probe(window_sample(
+            0, 0, 1).replace("GDI_CLIENT=NO_CANDIDATE", "GDI_CLIENT=NONUNIFORM")))
+
+    def test_reject_unknown_or_duplicate_surface_marker(self):
+        self.assertIsNone(parse_window_probe(window_sample().replace(
+            "GDI_CLIENT=NONUNIFORM", "GDI_CLIENT=UNSAFE")))
+        self.assertIsNone(parse_window_probe(window_sample() +
+            "SWCOMPAT_SW_UI_GDI_CLIENT=UNIFORM\n"))
 
     def test_reject_bad_integer(self):
         for bad in ("-1", "1.5", "0x20", "serial123", "999999999999"):
