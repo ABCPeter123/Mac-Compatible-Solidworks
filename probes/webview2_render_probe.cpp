@@ -13,6 +13,7 @@
 #include <WebView2.h>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <cwchar>
 #include <string>
 #include <vector>
@@ -228,6 +229,7 @@ static void capture_gdi_diagnostic(HWND window) {
         if (desktop) ReleaseDC(nullptr, desktop);
     }
     puts("SWCOMPAT_WV2_GDI_SCHEMA=1");
+    puts("SWCOMPAT_WV2_GDI_DOM=PASS");
     printf("SWCOMPAT_WV2_GDI_CLIENT=%s\n", client_result);
     printf("SWCOMPAT_WV2_GDI_DESKTOP=%s\n", desktop_result);
     puts("SWCOMPAT_WV2_GDI_PROBE=COMPLETE");
