@@ -30,6 +30,18 @@ The same compiled Windows executable runs on:
 
 Windows Server 2025 is **not** an officially supported SOLIDWORKS Design client configuration, and hosted macOS is not equivalent to an interactive user Mac.
 
+## Verified CI results, November 12, 2026
+
+The [six-job hosted run](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43336566332) passed, using the same original x64 executable and a checksum-pinned official SDK.
+
+| Host | Runtime query | Environment | Controller | Interpretation |
+| --- | --- | --- | --- | --- |
+| Windows Server 2025 | VERSION_FOUND | READY | READY | Real WebView2 environment and controller were created |
+| Ubuntu 24.04 Wine | NOT_DISCOVERED | REQUEST_FAILED | NOT_REACHED | No WebView2 environment was created |
+| Apple Silicon Wine 11.21 | NOT_DISCOVERED | REQUEST_FAILED | NOT_REACHED | No WebView2 environment was created |
+
+The Windows runner required `--require-controller` and exited successfully only after the WebView2 controller became READY. Both Wine environments ran the same API test and produced coherent **negative** results. In particular, a green Wine CI job does **not** establish browser runtime availability, HTML rendering or WebView2 controller support. Running a genuine runtime installer and then repeating this test is the next dependency gate.
+
 ## Diagnostic report
 
 The independent validator scripts/webview2_controller_report.py converts probe output to a bounded, sanitized JSON report. It accepts only fixed marker identifiers and valid HRESULT-shaped codes. It does not export arbitrary stderr, filenames, runtime version strings, serials, user-data paths or private input.
