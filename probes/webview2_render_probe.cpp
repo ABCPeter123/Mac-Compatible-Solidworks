@@ -296,6 +296,81 @@ static HRESULT verify_canvas_png_encoding(ICoreWebView2 *webview) {
     return verify_script_result(webview, script, L"\"SWCOMPAT_CANVAS_PNG_OK\"");
 }
 
+/* Browser layout and animation callbacks are probed independently from
+ * Canvas pixels, GDI and Chromium's screenshot APIs.
+ *
+ * A computed DOM rectangle proves layout geometry, not paint.
+ * requestAnimationFrame callbacks are sampled through a later ExecuteScript
+ * call after pumping Win32 messages. A stalled frame callback is a diagnostic,
+ * not proof of a particular compositor defect.
+ */
+static HRESULT verify_css_layout(ICoreWebView2 *webview) {
+    const wchar_t *script =
+        L"(() => {"
+        L"const e=document.getElementById('swcompat-marker');"
+        L"if (!e) return 'SWCOMPAT_LAYOUT_BAD';"
+        L"const r=e.getBoundingClientRect();"
+        L"const w=innerWidth,h=innerHeight;"
+        L"const near=(a,b)=>Math.abs(a-b)<2;"
+        L"const dimensions=w>=200 && h>=150 &&"
+        L"near(r.left,w/4)&&near(r.top,h/4)&&"
+        L"near(r.width,w/2)&&near(r.height,h/2);"
+        L"const hit=document.elementFromPoint(w/2,h/2)===e;"
+        L"const outside=document.elementFromPoint(w/10,h/10)!==e;"
+        L"const css=getComputedStyle(e);"
+        L"return dimensions&&hit&&outside&&"
+        L"css.position==='absolute'&&"
+        L"css.backgroundColor==='rgb(29, 205, 91)'"
+        L" ? 'SWCOMPAT_LAYOUT_OK' : 'SWCOMPAT_LAYOUT_BAD';"
+        L"})()";
+    return verify_script_result(webview, script, L"\"SWCOMPAT_LAYOUT_OK\"");
+}
+
+static HRESULT arm_animation_frames(ICoreWebView2 *webview) {
+    const wchar_t *script =
+        L"(() => {"
+        L"window.__swcompatRaf={count:0,last:0};"
+        L"function tick(ts){const s=window.__swcompatRaf;"
+        L"s.count++;s.last=ts;"
+        L"if(s.count<3)requestAnimationFrame(tick);}"
+        L"requestAnimationFrame(tick);"
+        L"return 'SWCOMPAT_RAF_ARMED';"
+        L"})()";
+    return verify_script_result(webview, script, L"\"SWCOMPAT_RAF_ARMED\"");
+}
+
+static const char *sample_animation_frames(ICoreWebView2 *webview) {
+    const wchar_t *script =
+        L"(() => {"
+        L"const s=window.__swcompatRaf;"
+        L"if(!s||typeof s.count!=='number')"
+        L" return 'SWCOMPAT_RAF_INVALID';"
+        L"return s.count>=2 && Number.isFinite(s.last)"
+        L" ? 'SWCOMPAT_RAF_TICKED' : 'SWCOMPAT_RAF_STALLED';"
+        L"})()";
+    struct Sample {
+        bool done = false;
+        HRESULT hr = E_UNEXPECTED;
+        bool ticked = false;
+        bool stalled = false;
+    } state;
+    auto callback = Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+        [&state](HRESULT hr, LPCWSTR value) -> HRESULT {
+            state.hr = hr;
+            if (SUCCEEDED(hr) && value) {
+                state.ticked = wcscmp(value, L"\"SWCOMPAT_RAF_TICKED\"") == 0;
+                state.stalled = wcscmp(value, L"\"SWCOMPAT_RAF_STALLED\"") == 0;
+            }
+            state.done = true;
+            return S_OK;
+        });
+    HRESULT request = webview->ExecuteScript(script, callback.Get());
+    if (FAILED(request) || !wait_for(state.done, 20000) || FAILED(state.hr)) {
+        return "SCRIPT_FAILED";
+    }
+    return state.ticked ? "TICKED" : (state.stalled ? "STALLED" : "SCRIPT_FAILED");
+}
+
 int main() {
     HMODULE dll = LoadLibraryW(L"WebView2Loader.dll");
     if (!dll) return fail("LOADER", HRESULT_FROM_WIN32(GetLastError()));
@@ -419,8 +494,20 @@ int main() {
     puts("SWCOMPAT_WV2_CANVAS_PROBE=COMPLETE");
     std::fflush(stdout);
 
-    // Allow the compositor and host event loop to paint the static synthetic page.
-    pump_for(900);
+    // CSS layout and compositor scheduling are separate from Canvas backing store.
+    hr = verify_css_layout(result.webview.Get());
+    if (FAILED(hr)) return fail("CSS_LAYOUT", hr);
+    puts("SWCOMPAT_WV2_LAYOUT_CSS=PASS");
+    std::fflush(stdout);
+    hr = arm_animation_frames(result.webview.Get());
+    if (FAILED(hr)) return fail("RAF_ARM", hr);
+    pump_for(1800);
+    const char *raf = sample_animation_frames(result.webview.Get());
+    std::printf("SWCOMPAT_WV2_LAYOUT_RAF=%s\n", raf);
+    puts("SWCOMPAT_WV2_LAYOUT_PROBE=COMPLETE");
+    std::fflush(stdout);
+
+    // Read the synthetic window only after browser-internal layout diagnostics.
     capture_gdi_diagnostic(window);
     ComPtr<IStream> png;
     hr = CreateStreamOnHGlobal(nullptr, TRUE, &png);

@@ -17,7 +17,7 @@ RESULTS = {"SCREENSHOT_PIXELS_VERIFIED", "GDI_PIXELS_VERIFIED",
            "KNOWN_CAPTURE_BLOCKER", "UNEXPECTED_FAILURE"}
 
 
-def classify(runtime: dict, render: dict, gdi: dict, canvas: dict) -> dict:
+def classify(runtime: dict, render: dict, gdi: dict, canvas: dict, layout: dict) -> dict:
     def safe(data: object, key: str):
         return data.get(key) if isinstance(data, dict) else None
 
@@ -57,6 +57,14 @@ def classify(runtime: dict, render: dict, gdi: dict, canvas: dict) -> dict:
         and safe(canvas, "window_compositor_pixels") == "NOT_TESTED_HERE"
         and safe(canvas, "solidworks_compatibility") == "NOT_DEMONSTRATED"
     )
+    layout_ok = (
+        safe(layout, "schema") == 1
+        and safe(layout, "diagnostic") == "COMPLETE"
+        and safe(layout, "css_box_layout_hit_testing") == "PASS"
+        and safe(layout, "request_animation_frame") in {"TICKED", "STALLED", "SCRIPT_FAILED"}
+        and safe(layout, "compositor_output") == "NOT_VERIFIED"
+        and safe(layout, "solidworks_compatibility") == "NOT_DEMONSTRATED"
+    )
     render_ok = safe(render, "schema") == 1 and safe(render, "solidworks_compatibility") == "NOT_DEMONSTRATED"
     screenshot_proven = (
         render_ok and safe(render, "result") == "PASS"
@@ -71,7 +79,7 @@ def classify(runtime: dict, render: dict, gdi: dict, canvas: dict) -> dict:
         and safe(render, "png_capture_method") == "UNKNOWN"
         and safe(render, "capture_preview_api") == "UNKNOWN"
     )
-    if not (runtime_ok and gdi_ok and canvas_ok):
+    if not (runtime_ok and gdi_ok and canvas_ok and layout_ok):
         state = "UNEXPECTED_FAILURE"
     elif screenshot_proven:
         state = "SCREENSHOT_PIXELS_VERIFIED"
@@ -90,6 +98,8 @@ def classify(runtime: dict, render: dict, gdi: dict, canvas: dict) -> dict:
         "controller_and_dom": "PASS" if runtime_ok and gdi_ok else "UNKNOWN",
         "canvas_internal_pixels": "VERIFIED" if canvas_ok else "NOT_VERIFIED",
         "canvas_png_encoding": "PASS" if canvas_ok else "NOT_VERIFIED",
+        "css_layout_hit_testing": "PASS" if layout_ok else "NOT_VERIFIED",
+        "request_animation_frame": safe(layout, "request_animation_frame") if layout_ok else "UNKNOWN",
         "browser_pixels": "VERIFIED" if pixel_proof else "NOT_VERIFIED",
         "browser_screenshot_api": "VERIFIED" if state == "SCREENSHOT_PIXELS_VERIFIED"
                                   else "NOT_VERIFIED",
@@ -118,12 +128,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--render", type=Path, required=True)
     parser.add_argument("--gdi", type=Path, required=True)
     parser.add_argument("--canvas", type=Path, required=True)
+    parser.add_argument("--layout", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--require-pixels", action="store_true",
                         help="Strict acceptance: reject a completed known negative diagnostic")
     args = parser.parse_args(argv)
     try:
-        src = [p.expanduser().resolve(strict=True) for p in (args.runtime, args.render, args.gdi, args.canvas)]
+        src = [p.expanduser().resolve(strict=True) for p in (args.runtime, args.render, args.gdi, args.canvas, args.layout)]
         dst = args.output.expanduser().resolve()
         if dst in src:
             raise ValueError("Output must not overwrite evidence")
@@ -135,6 +146,8 @@ def main(argv: list[str] | None = None) -> int:
     print("WebView2 render diagnostic:", result["result"])
     print("Actual browser pixel proof:", result["browser_pixels"])
     print("Canvas 2D internal pixels:", result["canvas_internal_pixels"])
+    print("CSS layout:", result["css_layout_hit_testing"])
+    print("Animation frames:", result["request_animation_frame"])
     print("Capture blocker:", result["capture_blocker"])
     print("SOLIDWORKS compatibility: NOT_DEMONSTRATED")
     if not result["diagnostic_complete"]:

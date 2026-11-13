@@ -18,6 +18,8 @@ on:
       - 'tests/test_webview2_render_gate.py'
       - 'scripts/webview2_canvas_report.py'
       - 'tests/test_webview2_canvas_report.py'
+      - 'scripts/webview2_layout_report.py'
+      - 'tests/test_webview2_layout_report.py'
       - 'probes/webview2_render_probe.cpp'
       - 'scripts/webview2_render_report.py'
       - 'tests/test_webview2_render_report.py'
@@ -27,6 +29,8 @@ on:
       - 'tests/test_webview2_render_gate.py'
       - 'scripts/webview2_canvas_report.py'
       - 'tests/test_webview2_canvas_report.py'
+      - 'scripts/webview2_layout_report.py'
+      - 'tests/test_webview2_layout_report.py'
   pull_request:
     paths:
       - '.github/workflows/webview2-runtime-install-ci.yml'
@@ -69,6 +73,8 @@ jobs:
         run: python -m unittest discover -s tests -p "test_webview2_render_gate.py" -v
       - name: Test Canvas 2D and browser-internal PNG diagnostic report
         run: python -m unittest discover -s tests -p "test_webview2_canvas_report.py" -v
+      - name: Test CSS layout and animation frame reporting
+        run: python -m unittest discover -s tests -p "test_webview2_layout_report.py" -v
       - name: Download checksum-pinned Microsoft WebView2 SDK
         shell: pwsh
         run: |
@@ -115,6 +121,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Native GDI pixels not verified" }
           python -m scripts.webview2_canvas_report --input build/windows-render.log --output build/windows-canvas.json
           if ($LASTEXITCODE -ne 0) { throw "Native Canvas 2D pixels or PNG encoding not verified" }
+          python -m scripts.webview2_layout_report --input build/windows-render.log --output build/windows-layout.json
+          if ($LASTEXITCODE -ne 0) { throw "Native CSS layout or animation frame diagnostic incomplete" }
           if ($LASTEXITCODE -ne 0) { throw "Native GDI readback diagnostic was incomplete" }
           Remove-Item -ErrorAction SilentlyContinue -LiteralPath swcompat-webview2-preview.png
           if ($validation -ne 0) { throw "Native WebView2 HTML render verification failed" }
@@ -161,6 +169,7 @@ jobs:
             build/windows-render.json
             build/windows-gdi.json
             build/windows-canvas.json
+            build/windows-layout.json
           if-no-files-found: warn
           retention-days: 7
 
@@ -279,6 +288,13 @@ jobs:
             exit 1
           fi
           python3 -m scripts.webview2_canvas_report --input build/webview2-render.log --output build/webview2-canvas.json
+      - name: Record CSS box geometry and animation frame callback state
+        if: runner.os == 'macOS' && always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f build/webview2-render.log
+          python3 -m scripts.webview2_layout_report --input build/webview2-render.log --output build/webview2-layout.json
       - name: Record synthetic GDI HWND and desktop pixel readbacks independently
         if: runner.os == 'macOS' && always()
         shell: bash
@@ -297,6 +313,7 @@ jobs:
             --render build/webview2-render.json
             --gdi build/webview2-gdi.json
             --canvas build/webview2-canvas.json
+            --layout build/webview2-layout.json
             --output build/webview2-render-classification.json
           )
           if [ "${{ inputs.require_macos_pixels }}" = "true" ]; then
@@ -318,6 +335,8 @@ jobs:
               out.write("Real browser pixels: **" + result["browser_pixels"] + "**\n")
               out.write("Chromium internal Canvas 2D pixels: **" + result["canvas_internal_pixels"] + "**\n")
               out.write("Chromium internal Canvas PNG encoding: **" + result["canvas_png_encoding"] + "**\n")
+              out.write("Chromium CSS layout: **" + result["css_layout_hit_testing"] + "**\n")
+              out.write("Animation frames: **" + result["request_animation_frame"] + "**\n")
               out.write("WebView2 screenshot API: **" + result["browser_screenshot_api"] + "**\n")
               out.write("SOLIDWORKS compatibility: **NOT DEMONSTRATED**\n")
           if result["result"] == "KNOWN_CAPTURE_BLOCKER":
@@ -392,6 +411,7 @@ jobs:
             build/webview2-render.json
             build/webview2-gdi.json
             build/webview2-canvas.json
+            build/webview2-layout.json
             build/webview2-render-classification.json
           if-no-files-found: warn
           retention-days: 7
