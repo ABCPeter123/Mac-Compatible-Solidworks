@@ -111,7 +111,7 @@ In [hosted CI run 43346665424](https://github.com/ABCPeter123/Mac-Compatible-Sol
 
 ## WebView2 HTML, JavaScript DOM, and real browser pixel rendering
 
-The [WebView2 inline HTML rendering experiment](docs/WEBVIEW2_RENDERING.md) adds a real navigation, asynchronous JavaScript DOM verification and WebView2 PNG CapturePreview test. It verifies both a blue page background and an independently rendered green rectangle using a bounded standard-library PNG decoder. A WebView2 controller alone does not pass this test. Native Windows and the official-runtime Apple Silicon Wine pathway run the same original Windows x64 program.
+The [WebView2 inline HTML rendering experiment](docs/WEBVIEW2_RENDERING.md) adds a real navigation, asynchronous JavaScript DOM verification and browser PNG screenshot test, with a separate Chromium DevTools fallback for a timed-out CapturePreview call. It verifies both a blue page background and an independently rendered green rectangle using a bounded standard-library PNG decoder. A WebView2 controller alone does not pass this test. Native Windows and the official-runtime Apple Silicon Wine pathway run the same original Windows x64 program.
 
 No user HTML, external network navigation, screenshot artifacts or SOLIDWORKS installer data are involved. Successful rendering of this synthetic page does **not** establish that SOLIDWORKS works on a Mac.
 
