@@ -82,7 +82,10 @@ class MediaTests(unittest.TestCase):
             folder = Path(t)
             exe, sha = media_in(folder)
             linked = folder / "linked.exe"
-            linked.symlink_to(exe)
+            try:
+                linked.symlink_to(exe)
+            except (OSError, NotImplementedError):
+                self.skipTest("Symlink privileges unavailable on Windows runner")
             with self.assertRaises(ValueError):
                 verify_media(linked, sha)
 
