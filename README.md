@@ -109,6 +109,10 @@ The [Evergreen standalone runtime experiment](docs/WEBVIEW2_RUNTIME_INSTALL.md) 
 
 In [hosted CI run 43346665424](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43346665424), the Apple Silicon installation **succeeded**, and the WebView2 environment/controller became READY. The same installer exited with code 1 under Linux Wine and did not produce a runtime. A created controller is not proof of rendered HTML or SOLIDWORKS UI compatibility.
 
+## Chromium Canvas 2D internal pixel isolation
+
+The [Canvas 2D experiment](docs/WEBVIEW2_CANVAS.md) now tests `fillRect`, real `getImageData` RGBA pixels, and browser-internal PNG encoding independently of WebView2 screenshot APIs or the macOS compositor. These are separate evidence stages: correct Canvas pixels **do not** prove that the window displays them. A new fail-closed Canvas report is required for the existing screenshot-blocker classification.
+
 ## WebView2 HTML, DOM, screenshot, and compositor diagnostics
 
 The [Win32 WebView2 rendering experiment](docs/WEBVIEW2_RENDERING.md) tests inline HTML navigation, JavaScript DOM execution, WebView2 CapturePreview, Chromium DevTools screenshots, and independent GDI readback from the window and desktop. It decodes the PNG and checks two actual pixel colors on native Windows.
