@@ -72,7 +72,7 @@ static Surface sample_client_gdi(HWND window) {
                 std::unordered_set<uint32_t> colors;
                 for (size_t i = 0; i < 32 * 32 && colors.size() < 2; ++i)
                     colors.insert(rgb[i] & 0x00FFFFFFu);
-                outcome = colors.size() >= 4 ? Surface::NONUNIFORM : Surface::UNIFORM;
+                outcome = colors.size() >= 2 ? Surface::NONUNIFORM : Surface::UNIFORM;
             }
             SelectObject(target, prior);
         }
