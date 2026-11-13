@@ -2,7 +2,7 @@
 
 An open-source engineering testbed for running the **original, licensed Windows SOLIDWORKS application** on macOS, without rebuilding SOLIDWORKS or requiring a commercial VM.
 
-**Status: independent Windows x64 execution, OpenGL 4.5 pixel rendering and depth-buffered geometry are verified on Apple Silicon. SOLIDWORKS installation, activation and CAD functionality have NOT been demonstrated.**
+**Status: independent Windows x64 execution, OpenGL 4.5 depth-buffered rendering, and official Microsoft WebView2 Runtime installation with a real controller are verified on hosted Apple Silicon Wine. SOLIDWORKS installation, activation and CAD functionality have NOT been demonstrated.**
 
 ## Why this exists
 
@@ -107,7 +107,7 @@ The report distinguishes an API test that **completed** from a browser controlle
 
 The [Evergreen standalone runtime experiment](docs/WEBVIEW2_RUNTIME_INSTALL.md) now tests the real Microsoft-signed Windows x64 WebView2 Runtime installer in **disposable** Linux Wine and Apple Silicon Wine prefixes. Native Windows verifies the installer publisher signature and stages the exact SHA-256 for the Wine hosts. We run the original WebView2 controller test before and after installation.
 
-A completed CI experiment can report a failed installer or missing browser runtime; it is **not** proof of functional WebView2, SOLIDWORKS setup, or CAD compatibility.
+In [hosted CI run 43346665424](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43346665424), the Apple Silicon installation **succeeded**, and the WebView2 environment/controller became READY. The same installer exited with code 1 under Linux Wine and did not produce a runtime. A created controller is not proof of rendered HTML or SOLIDWORKS UI compatibility.
 
 ## Local development
 
