@@ -66,6 +66,16 @@ Update the `SWCOMPAT_INSTALLER_URL` value in **Settings → Secrets and variable
 
 The workflow now uses `scripts/solidworks_private_media_fetch.py` on both Windows and Apple Silicon. It distinguishes `HTTP_404_NOT_FOUND`, `HTTP_403_FORBIDDEN`, `PRESIGNED_URL_EXPIRED`, `TRANSPORT_ERROR`, and a successful download in sanitized artifacts. It does not retry a definitive 404 and never prints signed URLs or response bodies. This diagnostic fix cannot make a missing private object available by itself.
 
+## First original installer result and follow-up probe
+
+[Manual Actions run 43494158179](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43494158179), executed November 13, 2026, **successfully downloaded and verified the genuine SOLIDWORKS installer on Windows** (expected SHA-256 and valid Dassault/SOLIDWORKS Authenticode). On hosted Apple Silicon macOS 15 / Wine 11.21, the **same installer downloaded, passed SHA-256 again, and the original process started**. It remained running until the deliberate **120-second timeout**, then its process group was terminated.
+
+This is the project's first authentic SOLIDWORKS installer process execution, **not a completed installation**. A timeout can represent a UI waiting for input, installation/bootstrapper work, or a hang. No Mac browser pixels or installation manager UI were verified, no activation was attempted, and no CAD functionality was exercised.
+
+The subsequent Win32 window census improves that evidence: while the same authentic process is running, the workflow launches a newly compiled, read-only Windows x64 probe inside the **same Wine prefix**. It enumerates Win32 processes and visible top-level window rectangles, counts probable installer-related processes by a small explicit executable-name allowlist (including the SOLIDWORKS setup and installation manager names), and samples several times. Its output contains only bounded numeric counts. It does not record window titles, window contents, paths, process command lines, screenshots, user/serial data or binaries.
+
+The sanitized diagnostic fields are `installer_window_census`, `census_samples_complete`, `candidate_installer_processes_max`, and `candidate_visible_windows_max`. `CANDIDATE_WINDOW_SEEN` establishes only that the Wine Win32 window API detected a sufficiently large, visible, installer-associated top-level window in the hosted CI environment. It does **not** establish that the window's pixels were painted on a macOS screen. `NO_CANDIDATE_WINDOW_OBSERVED` may miss helper processes or delayed windows and is not proof that installation UI never exists. The `installation_manager_ui` field remains `NOT_VERIFIED` in either case.
+
 ## What the workflow actually tests
 
 On native Windows Server, it downloads the executable over HTTPS, verifies its full SHA-256 and PE structure, and checks that the Authenticode publisher is valid and identifies SOLIDWORKS or Dassault. **It does not execute the installer on Windows.** A mismatch aborts the Mac test.

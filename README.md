@@ -10,7 +10,7 @@ For a legitimately licensed **SOLIDWORKS Student Edition** serial beginning with
 
 The opt-in [first licensed installer trial](.github/workflows/solidworks-bootstrap-trial.yml) is staged to verify the original installer’s SHA-256 and Windows Authenticode publisher, then attempt its initial process launch in a disposable Apple Silicon Wine prefix. Installer media stays private and is never committed to this public repository. It requires a user-authorized time-limited private download URL and expected SHA-256 stored as GitHub Actions secrets. See [private setup instructions](docs/FIRST_AUTHENTIC_INSTALLER_TRIAL.md).
 
-**No real SOLIDWORKS installer has been received or executed yet.** Launcher process creation is not equivalent to successful installation, a rendered Installation Manager, activation, or working CAD.
+**The authentic SOLIDWORKS installer has now been downloaded, digitally verified and executed under hosted Apple Silicon Wine** ([CI run 43494158179](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43494158179)). Its process started and remained running until the bounded 120-second timeout. Installation Manager visibility, completed installation, activation and working CAD remain **NOT VERIFIED**. The next instrumented trial samples probable installer processes and Win32 top-level window creation while the original executable runs, without collecting screenshots or licenses.
 
 ## Why this exists
 
