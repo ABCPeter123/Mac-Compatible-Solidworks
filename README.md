@@ -109,6 +109,16 @@ The [Evergreen standalone runtime experiment](docs/WEBVIEW2_RUNTIME_INSTALL.md) 
 
 In [hosted CI run 43346665424](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43346665424), the Apple Silicon installation **succeeded**, and the WebView2 environment/controller became READY. The same installer exited with code 1 under Linux Wine and did not produce a runtime. A created controller is not proof of rendered HTML or SOLIDWORKS UI compatibility.
 
+## WebView2 HTML, DOM, screenshot, and compositor diagnostics
+
+The [Win32 WebView2 rendering experiment](docs/WEBVIEW2_RENDERING.md) tests inline HTML navigation, JavaScript DOM execution, WebView2 CapturePreview, Chromium DevTools screenshots, and independent GDI readback from the window and desktop. It decodes the PNG and checks two actual pixel colors on native Windows.
+
+**Verified outcome:** The signed Microsoft WebView2 Runtime installs and supports controller creation, HTML navigation and DOM execution on hosted Apple Silicon Wine. However, WebView2 screenshot callbacks time out, GDI window readback returns NO_MATCH, and GDI desktop readback fails. **No WebView2 display pixels have been verified on macOS.**
+
+The default macOS CI run distinguishes a complete known-negative compositor diagnostic from unexpected regressions. A manual workflow run with `require_macos_pixels=true` enforces real screenshot or GDI pixel proof and **fails** on the current Mac configuration. A green *diagnostic* does not establish rendering or SOLIDWORKS compatibility.
+
+All pages and pixel colors are synthetic. No external pages, user data, screenshot artifacts or SOLIDWORKS installer files are involved.
+
 ## Local development
 
 Requires Python 3.10+:

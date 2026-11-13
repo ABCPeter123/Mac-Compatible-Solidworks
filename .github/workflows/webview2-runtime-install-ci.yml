@@ -1,4 +1,4 @@
-name: Official WebView2 Evergreen runtime installation trial on Wine
+name: Official WebView2 runtime installation and rendering diagnostics
 
 on:
   push:
@@ -9,6 +9,20 @@ on:
       - 'scripts/webview2_controller_report.py'
       - 'probes/webview2_controller_probe.cpp'
       - 'probes/webview2/CMakeLists.txt'
+      - 'probes/webview2_render_probe.cpp'
+      - 'scripts/webview2_render_report.py'
+      - 'tests/test_webview2_render_report.py'
+      - 'scripts/webview2_gdi_report.py'
+      - 'tests/test_webview2_gdi_report.py'
+      - 'scripts/webview2_render_gate.py'
+      - 'tests/test_webview2_render_gate.py'
+      - 'probes/webview2_render_probe.cpp'
+      - 'scripts/webview2_render_report.py'
+      - 'tests/test_webview2_render_report.py'
+      - 'scripts/webview2_gdi_report.py'
+      - 'tests/test_webview2_gdi_report.py'
+      - 'scripts/webview2_render_gate.py'
+      - 'tests/test_webview2_render_gate.py'
   pull_request:
     paths:
       - '.github/workflows/webview2-runtime-install-ci.yml'
@@ -18,6 +32,11 @@ on:
       - 'probes/webview2_controller_probe.cpp'
       - 'probes/webview2/CMakeLists.txt'
   workflow_dispatch:
+    inputs:
+      require_macos_pixels:
+        description: 'Strict acceptance gate: fail unless macOS browser pixels are verified'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -38,6 +57,12 @@ jobs:
           python-version: '3.12'
       - name: Test opt-in isolation and result reporting
         run: python -m unittest discover -s tests -p "test_webview2_runtime_trial.py" -v
+      - name: Test strict PNG screenshot and DOM report validation
+        run: python -m unittest discover -s tests -p "test_webview2_render_report.py" -v
+      - name: Test allowlisted GDI readback report and pixel evidence states
+        run: python -m unittest discover -s tests -p "test_webview2_gdi_report.py" -v
+      - name: Test fail-closed rendering diagnostic and strict pixel acceptance gate
+        run: python -m unittest discover -s tests -p "test_webview2_render_gate.py" -v
       - name: Download checksum-pinned Microsoft WebView2 SDK
         shell: pwsh
         run: |
@@ -66,12 +91,24 @@ jobs:
           cmake --build build/msvc --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { throw "MSVC build failed" }
           Copy-Item build/msvc/Release/webview2_controller_probe.exe build/webview2_controller_probe.exe
+          Copy-Item build/msvc/Release/webview2_render_probe.exe build/webview2_render_probe.exe
       - name: Confirm native Windows reference creates actual browser controller
         shell: pwsh
         run: |
           & .\build\webview2_controller_probe.exe 2>&1 | Out-File build\windows-controller.log -Encoding utf8
           $result = $LASTEXITCODE
           python -m scripts.webview2_controller_report --input build/windows-controller.log --exit-code $result --output build/windows-controller.json --require-controller
+      - name: Require real native WebView2 HTML navigation DOM and screenshot pixels
+        shell: pwsh
+        run: |
+          & .\build\webview2_render_probe.exe 2>&1 | Out-File build\windows-render.log -Encoding utf8
+          $code = $LASTEXITCODE
+          python -m scripts.webview2_render_report --input build/windows-render.log --exit-code $code --screenshot swcompat-webview2-preview.png --output build/windows-render.json
+          $validation = $LASTEXITCODE
+          python -m scripts.webview2_gdi_report --input build/windows-render.log --output build/windows-gdi.json --require-pixels
+          if ($LASTEXITCODE -ne 0) { throw "Native GDI readback diagnostic was incomplete" }
+          Remove-Item -ErrorAction SilentlyContinue -LiteralPath swcompat-webview2-preview.png
+          if ($validation -ne 0) { throw "Native WebView2 HTML render verification failed" }
       - name: Download official standalone x64 Evergreen Runtime installer
         shell: pwsh
         run: |
@@ -102,6 +139,7 @@ jobs:
             build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe
             build/evergreen-installer.sha256
             build/webview2_controller_probe.exe
+            build/webview2_render_probe.exe
             build/WebView2Loader.dll
           retention-days: 1
           compression-level: 0
@@ -109,12 +147,15 @@ jobs:
         if: always()
         with:
           name: webview2-native-reference-sanitized
-          path: build/windows-controller.json
+          path: |
+            build/windows-controller.json
+            build/windows-render.json
+            build/windows-gdi.json
           if-no-files-found: warn
           retention-days: 7
 
   wine-install:
-    name: Official WebView2 install before-after (${{ matrix.os }})
+    name: WebView2 installation and rendering diagnostic (${{ matrix.os }})
     needs: source-and-build
     runs-on: ${{ matrix.os }}
     timeout-minutes: 27
@@ -189,6 +230,113 @@ jobs:
           else
             python3 -m scripts.webview2_runtime_trial "${ARGS[@]}"
           fi
+      - name: Verify local HTML DOM JavaScript and pixel-rendered WebView2 on Apple Silicon
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path("build/evergreen-install-trial.json").read_text())
+          if not result["browser_controller_confirmed"]:
+              raise SystemExit("Installed WebView2 controller not READY, cannot validate rendering")
+          PY
+          export WINEPREFIX="$RUNNER_TEMP/webview2-install-prefix" WINEARCH=win64 WINEDEBUG=-all
+          # Investigate Wine compositor/screenshot deadlocks without weakening
+          # browser sandbox or cross-origin protections. Applies only to this probe.
+          export WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--disable-gpu --disable-gpu-compositing --disable-features=Vulkan"
+          set +e
+          "$SWCOMPAT_WINE_BIN" "$PWD/build/webview2_render_probe.exe" > build/webview2-render.log 2>&1
+          code=$?
+          set -e
+          # Record actual screenshot failure but do not erase the GDI test.
+          # The subsequent evidence gate rejects every unexpected failure.
+          set +e
+          python3 -m scripts.webview2_render_report --input build/webview2-render.log --exit-code "$code" --screenshot swcompat-webview2-preview.png --output build/webview2-render.json
+          render_status=$?
+          set -e
+          echo "SWCOMPAT_RENDER_REPORT_EXIT=$render_status" >> "$GITHUB_ENV"
+          # Local test screenshot contains only synthetic colored rectangles.
+          rm -f swcompat-webview2-preview.png
+      - name: Record synthetic GDI HWND and desktop pixel readbacks independently
+        if: runner.os == 'macOS' && always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f build/webview2-render.log ]; then
+            python3 -m scripts.webview2_gdi_report --input build/webview2-render.log --output build/webview2-gdi.json
+          fi
+      - name: Require complete WebView2 diagnostics or verified pixels on Apple Silicon
+        if: runner.os == 'macOS' && always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(
+            --runtime build/evergreen-install-trial.json
+            --render build/webview2-render.json
+            --gdi build/webview2-gdi.json
+            --output build/webview2-render-classification.json
+          )
+          if [ "${{ inputs.require_macos_pixels }}" = "true" ]; then
+            args+=(--require-pixels)
+          fi
+          python3 -m scripts.webview2_render_gate "${args[@]}"
+      - name: Report known browser compositor limitations explicitly
+        if: runner.os == 'macOS' && always()
+        shell: bash
+        run: |
+          if [ -f build/webview2-render-classification.json ]; then
+            python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          result = json.loads(Path("build/webview2-render-classification.json").read_text())
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write("\n## WebView2 rendering acceptance status\n")
+              out.write("Diagnostic: **" + result["result"] + "**\n")
+              out.write("Real browser pixels: **" + result["browser_pixels"] + "**\n")
+              out.write("WebView2 screenshot API: **" + result["browser_screenshot_api"] + "**\n")
+              out.write("SOLIDWORKS compatibility: **NOT DEMONSTRATED**\n")
+          if result["result"] == "KNOWN_CAPTURE_BLOCKER":
+              print("::warning::WebView2 browser pixels NOT VERIFIED on Apple Silicon; expected CDP timeout with DOM ready and GDI diagnostic complete.")
+          PY
+          fi
+      - name: Summarize GDI framebuffer evidence separately from browser screenshot API
+        if: runner.os == 'macOS' && always()
+        shell: bash
+        run: |
+          if [ -f build/webview2-gdi.json ]; then
+            python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          result = json.loads(Path("build/webview2-gdi.json").read_text())
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("\n## WebView2 Win32 GDI synthetic framebuffer diagnostic\n")
+              f.write("Window client: **" + result["window_client_bitblt"] + "**\n")
+              f.write("Desktop: **" + result["desktop_bitblt"] + "**\n")
+              f.write("Actual synthetic pixels: **" + result["gdi_pixel_evidence"] + "**\n")
+              f.write("WebView2 screenshot APIs: **SEPARATELY TESTED**\n")
+          PY
+          fi
+      - name: Record actual DOM and pixel evidence
+        if: runner.os == 'macOS' && always()
+        shell: bash
+        run: |
+          if [ -f build/webview2-render.json ]; then
+            python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          result = json.loads(Path("build/webview2-render.json").read_text())
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("\n## Local WebView2 HTML / DOM / PNG pixel test\n")
+              f.write("Render result: **" + result["result"] + "**\n")
+              f.write("Pixel verification: **" + result["screenshot_pixel_validation"] + "**\n")
+              f.write("PNG method: **" + result["png_capture_method"] + "**\n")
+              f.write("CapturePreview API: **" + result["capture_preview_api"] + "**\n")
+              f.write("Failure stage: **" + result["failure_stage"] + "**\n")
+              f.write("SOLIDWORKS compatibility: **NOT DEMONSTRATED**\n")
+          PY
+          fi
       - name: Summarize outcome without claiming browser compatibility
         if: always()
         shell: bash
@@ -216,6 +364,10 @@ jobs:
         if: always()
         with:
           name: webview2-evergreen-install-${{ matrix.os }}-sanitized
-          path: build/evergreen-install-trial.json
+          path: |
+            build/evergreen-install-trial.json
+            build/webview2-render.json
+            build/webview2-gdi.json
+            build/webview2-render-classification.json
           if-no-files-found: warn
           retention-days: 7
