@@ -34,19 +34,54 @@ static bool installer_name(const wchar_t *name) {
 }
 
 enum class Surface { FAILURE, UNIFORM, NONUNIFORM };
+enum class FailureStage {
+    NONE, CLIENT_RECT, CLIENT_TOO_SMALL, SOURCE_DC,
+    MEMORY_DC, DIB_CREATE, BITMAP_SELECT, STRETCH_BLT
+};
 
-static Surface sample_client_gdi(HWND window) {
+struct GdiSample {
+    Surface surface = Surface::FAILURE;
+    Surface direct_pixel = Surface::FAILURE;
+    FailureStage failure = FailureStage::CLIENT_RECT;
+};
+
+static Surface sample_direct_getpixel(HDC source, int width, int height) {
+    std::unordered_set<COLORREF> colors;
+    /* Always sample bounded coordinates within the client rect.
+     * RGB values are used only for process-local aggregate variation.
+     */
+    for (int y = 1; y <= 4; ++y) {
+        for (int x = 1; x <= 4; ++x) {
+            const COLORREF pixel = GetPixel(source, width * x / 5, height * y / 5);
+            if (pixel == CLR_INVALID) return Surface::FAILURE;
+            colors.insert(pixel);
+            if (colors.size() >= 2) return Surface::NONUNIFORM;
+        }
+    }
+    return Surface::UNIFORM;
+}
+
+static GdiSample sample_client_gdi(HWND window) {
+    GdiSample result;
     RECT client = {};
-    if (!GetClientRect(window, &client)) return Surface::FAILURE;
+    if (!GetClientRect(window, &client)) return result;
     const int width = client.right - client.left;
     const int height = client.bottom - client.top;
-    if (width < 100 || height < 100) return Surface::FAILURE;
+    if (width < 100 || height < 100) {
+        result.failure = FailureStage::CLIENT_TOO_SMALL;
+        return result;
+    }
     HDC source = GetDC(window);
-    if (!source) return Surface::FAILURE;
+    if (!source) {
+        result.failure = FailureStage::SOURCE_DC;
+        return result;
+    }
+    result.direct_pixel = sample_direct_getpixel(source, width, height);
     HDC target = CreateCompatibleDC(source);
     if (!target) {
+        result.failure = FailureStage::MEMORY_DC;
         ReleaseDC(window, source);
-        return Surface::FAILURE;
+        return result;
     }
     BITMAPINFO info = {};
     info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -57,22 +92,25 @@ static Surface sample_client_gdi(HWND window) {
     info.bmiHeader.biCompression = BI_RGB;
     void *pixels = nullptr;
     HBITMAP bitmap = CreateDIBSection(source, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
-    Surface outcome = Surface::FAILURE;
-    if (bitmap && pixels) {
+    if (!bitmap || !pixels) {
+        result.failure = FailureStage::DIB_CREATE;
+    } else {
         HGDIOBJ prior = SelectObject(target, bitmap);
-        if (prior && prior != HGDI_ERROR) {
+        if (!prior || prior == HGDI_ERROR) {
+            result.failure = FailureStage::BITMAP_SELECT;
+        } else {
             SetStretchBltMode(target, COLORONCOLOR);
-            /* Read center 60% of client area, excluding most window chrome.
-             * Never serialize or emit individual pixels or image data.
-             */
             const BOOL copied = StretchBlt(target, 0, 0, 32, 32,
                 source, width / 5, height / 5, width * 3 / 5, height * 3 / 5, SRCCOPY);
-            if (copied) {
+            if (!copied) {
+                result.failure = FailureStage::STRETCH_BLT;
+            } else {
                 const auto *rgb = static_cast<const uint32_t *>(pixels);
                 std::unordered_set<uint32_t> colors;
                 for (size_t i = 0; i < 32 * 32 && colors.size() < 2; ++i)
                     colors.insert(rgb[i] & 0x00FFFFFFu);
-                outcome = colors.size() >= 2 ? Surface::NONUNIFORM : Surface::UNIFORM;
+                result.surface = colors.size() >= 2 ? Surface::NONUNIFORM : Surface::UNIFORM;
+                result.failure = FailureStage::NONE;
             }
             SelectObject(target, prior);
         }
@@ -80,7 +118,21 @@ static Surface sample_client_gdi(HWND window) {
     if (bitmap) DeleteObject(bitmap);
     DeleteDC(target);
     ReleaseDC(window, source);
-    return outcome;
+    return result;
+}
+
+static const char *failure_name(FailureStage stage) {
+    switch (stage) {
+        case FailureStage::NONE: return "NONE";
+        case FailureStage::CLIENT_RECT: return "CLIENT_RECT_FAILED";
+        case FailureStage::CLIENT_TOO_SMALL: return "CLIENT_TOO_SMALL";
+        case FailureStage::SOURCE_DC: return "SOURCE_DC_FAILED";
+        case FailureStage::MEMORY_DC: return "MEMORY_DC_FAILED";
+        case FailureStage::DIB_CREATE: return "DIB_CREATE_FAILED";
+        case FailureStage::BITMAP_SELECT: return "BITMAP_SELECT_FAILED";
+        case FailureStage::STRETCH_BLT: return "STRETCH_BLT_FAILED";
+    }
+    return "UNKNOWN";
 }
 
 static bool responds_to_null(HWND hwnd) {
@@ -97,6 +149,9 @@ struct WindowCounts {
     int nonuniform = 0;
     int uniform = 0;
     int failed_readback = 0;
+    int direct_nonuniform = 0;
+    int direct_uniform = 0;
+    FailureStage first_failure = FailureStage::NONE;
     std::unordered_set<DWORD> candidate_ids;
 };
 
@@ -113,11 +168,18 @@ static BOOL CALLBACK enumerate(HWND hwnd, LPARAM userdata) {
     ++counts->candidate_visible;
     if (responds_to_null(hwnd)) ++counts->responsive;
     else ++counts->unresponsive;
-    switch (sample_client_gdi(hwnd)) {
+    const GdiSample sample = sample_client_gdi(hwnd);
+    switch (sample.surface) {
         case Surface::NONUNIFORM: ++counts->nonuniform; break;
         case Surface::UNIFORM: ++counts->uniform; break;
-        case Surface::FAILURE: ++counts->failed_readback; break;
+        case Surface::FAILURE:
+            ++counts->failed_readback;
+            if (counts->first_failure == FailureStage::NONE)
+                counts->first_failure = sample.failure;
+            break;
     }
+    if (sample.direct_pixel == Surface::NONUNIFORM) ++counts->direct_nonuniform;
+    if (sample.direct_pixel == Surface::UNIFORM) ++counts->direct_uniform;
     return TRUE;
 }
 
@@ -154,9 +216,11 @@ static int self_test() {
     ShowWindow(hwnd, SW_SHOWNORMAL);
     UpdateWindow(hwnd);
     const bool responsive = responds_to_null(hwnd);
-    const Surface variation = sample_client_gdi(hwnd);
+    const GdiSample variation = sample_client_gdi(hwnd);
     DestroyWindow(hwnd);
-    if (!responsive || variation != Surface::NONUNIFORM) {
+    if (!responsive || variation.surface != Surface::NONUNIFORM ||
+        variation.direct_pixel != Surface::NONUNIFORM ||
+        variation.failure != FailureStage::NONE) {
         puts("SWCOMPAT_SW_UI_SELF_TEST=FAIL");
         return 1;
     }
@@ -213,7 +277,14 @@ int wmain(int argc, wchar_t **argv) {
     std::printf("SWCOMPAT_SW_UI_CANDIDATE_WINDOWS=%d\n", counts.candidate_visible);
     std::printf("SWCOMPAT_SW_UI_VISIBLE_LARGE_WINDOWS=%d\n", counts.visible_large);
     std::printf("SWCOMPAT_SW_UI_RESPONSIVENESS=%s\n", response);
+    const char *direct = counts.candidate_visible == 0 ? "NO_CANDIDATE"
+        : counts.direct_nonuniform > 0 ? "NONUNIFORM"
+        : counts.direct_uniform > 0 ? "UNIFORM" : "READBACK_FAILED";
+    const char *stage = counts.candidate_visible == 0 ? "NO_CANDIDATE"
+        : counts.failed_readback > 0 ? failure_name(counts.first_failure) : "NONE";
     std::printf("SWCOMPAT_SW_UI_GDI_CLIENT=%s\n", surface);
+    std::printf("SWCOMPAT_SW_UI_GDI_FAILURE_STAGE=%s\n", stage);
+    std::printf("SWCOMPAT_SW_UI_DIRECT_GETPIXEL=%s\n", direct);
     puts("SWCOMPAT_SW_UI_PROBE=COMPLETE");
     return 0;
 }

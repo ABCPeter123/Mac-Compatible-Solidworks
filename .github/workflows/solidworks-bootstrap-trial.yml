@@ -206,7 +206,7 @@ jobs:
           import json, os
           from pathlib import Path
           p = json.loads(Path("build/solidworks-macos-trial.json").read_text())
-          fields = ("media_verification", "wine_process_created", "bootstrapper_process", "installer_window_census", "census_samples_complete", "candidate_installer_processes_max", "candidate_visible_windows_max", "installer_hwnd_responsiveness", "installer_gdi_client_variation", "macos_onscreen_pixels", "installation_manager_ui", "full_installation", "activation", "cad_launch", "solidworks_compatibility")
+          fields = ("media_verification", "wine_process_created", "bootstrapper_process", "installer_window_census", "census_samples_complete", "candidate_installer_processes_max", "candidate_visible_windows_max", "installer_hwnd_responsiveness", "installer_gdi_client_variation", "installer_gdi_failure_stage", "installer_direct_getpixel", "macos_onscreen_pixels", "installation_manager_ui", "full_installation", "activation", "cad_launch", "solidworks_compatibility")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
               out.write("## Genuine SOLIDWORKS installer first-launch diagnostic\n")
               for name in fields:

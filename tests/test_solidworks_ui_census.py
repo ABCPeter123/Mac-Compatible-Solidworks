@@ -15,6 +15,8 @@ def window_sample(processes=1, windows=1, visible=2):
         f"SWCOMPAT_SW_UI_VISIBLE_LARGE_WINDOWS={visible}\n"
         f"SWCOMPAT_SW_UI_RESPONSIVENESS={'RESPONSIVE' if windows else 'NO_CANDIDATE'}\n"
         f"SWCOMPAT_SW_UI_GDI_CLIENT={'NONUNIFORM' if windows else 'NO_CANDIDATE'}\n"
+        f"SWCOMPAT_SW_UI_GDI_FAILURE_STAGE={'NONE' if windows else 'NO_CANDIDATE'}\n"
+        f"SWCOMPAT_SW_UI_DIRECT_GETPIXEL={'NONUNIFORM' if windows else 'NO_CANDIDATE'}\n"
         "SWCOMPAT_SW_UI_PROBE=COMPLETE\n"
     )
 
@@ -23,12 +25,14 @@ class Win32WindowCensusTests(unittest.TestCase):
     def test_candidate_window_is_a_heuristic_only(self):
         self.assertEqual(parse_window_probe(window_sample()), {
             "candidate_processes": 1, "candidate_windows": 1,
-            "responsiveness": "RESPONSIVE", "gdi_client": "NONUNIFORM"})
+            "responsiveness": "RESPONSIVE", "gdi_client": "NONUNIFORM",
+            "gdi_failure_stage": "NONE", "direct_getpixel": "NONUNIFORM"})
 
     def test_absence_does_not_prove_no_ui(self):
         self.assertEqual(parse_window_probe(window_sample(0, 0, 1)), {
             "candidate_processes": 0, "candidate_windows": 0,
-            "responsiveness": "NO_CANDIDATE", "gdi_client": "NO_CANDIDATE"})
+            "responsiveness": "NO_CANDIDATE", "gdi_client": "NO_CANDIDATE",
+            "gdi_failure_stage": "NO_CANDIDATE", "direct_getpixel": "NO_CANDIDATE"})
 
     def test_reject_missing_completed_marker(self):
         self.assertIsNone(parse_window_probe(window_sample().replace(
@@ -43,10 +47,12 @@ class Win32WindowCensusTests(unittest.TestCase):
                                              "Install SOLIDWORKS serial: 123-456\n"))
 
     def test_responsive_window_can_have_failed_gdi_readback(self):
-        result = parse_window_probe(window_sample().replace(
-            "GDI_CLIENT=NONUNIFORM", "GDI_CLIENT=READBACK_FAILED"))
+        result = parse_window_probe(window_sample()
+            .replace("GDI_CLIENT=NONUNIFORM", "GDI_CLIENT=READBACK_FAILED")
+            .replace("GDI_FAILURE_STAGE=NONE", "GDI_FAILURE_STAGE=STRETCH_BLT_FAILED"))
         self.assertEqual(result["responsiveness"], "RESPONSIVE")
         self.assertEqual(result["gdi_client"], "READBACK_FAILED")
+        self.assertEqual(result["gdi_failure_stage"], "STRETCH_BLT_FAILED")
 
     def test_unresponsive_window_can_have_uniform_gdi_surface(self):
         result = parse_window_probe(window_sample()
@@ -66,6 +72,35 @@ class Win32WindowCensusTests(unittest.TestCase):
             "GDI_CLIENT=NONUNIFORM", "GDI_CLIENT=UNSAFE")))
         self.assertIsNone(parse_window_probe(window_sample() +
             "SWCOMPAT_SW_UI_GDI_CLIENT=UNIFORM\n"))
+
+    def test_reject_unexplained_readback_failure(self):
+        self.assertIsNone(parse_window_probe(window_sample().replace(
+            "GDI_CLIENT=NONUNIFORM", "GDI_CLIENT=READBACK_FAILED")))
+
+    def test_getpixel_can_work_when_stretchblt_fails(self):
+        result = parse_window_probe(window_sample()
+            .replace("GDI_CLIENT=NONUNIFORM", "GDI_CLIENT=READBACK_FAILED")
+            .replace("GDI_FAILURE_STAGE=NONE", "GDI_FAILURE_STAGE=STRETCH_BLT_FAILED"))
+        self.assertEqual(result["direct_getpixel"], "NONUNIFORM")
+        self.assertEqual(result["gdi_client"], "READBACK_FAILED")
+
+    def test_no_device_context_precludes_getpixel(self):
+        result = parse_window_probe(window_sample()
+            .replace("GDI_CLIENT=NONUNIFORM", "GDI_CLIENT=READBACK_FAILED")
+            .replace("GDI_FAILURE_STAGE=NONE", "GDI_FAILURE_STAGE=SOURCE_DC_FAILED")
+            .replace("DIRECT_GETPIXEL=NONUNIFORM", "DIRECT_GETPIXEL=READBACK_FAILED"))
+        self.assertEqual(result["direct_getpixel"], "READBACK_FAILED")
+        self.assertEqual(result["gdi_failure_stage"], "SOURCE_DC_FAILED")
+
+    def test_reject_unknown_or_duplicate_failure_stage(self):
+        self.assertIsNone(parse_window_probe(window_sample().replace(
+            "GDI_FAILURE_STAGE=NONE", "GDI_FAILURE_STAGE=MY_PRIVATE_DATA")))
+        self.assertIsNone(parse_window_probe(window_sample() +
+            "SWCOMPAT_SW_UI_GDI_FAILURE_STAGE=CLIENT_RECT_FAILED\n"))
+
+    def test_reject_inconsistent_getpixel_without_candidate(self):
+        self.assertIsNone(parse_window_probe(window_sample(0, 0, 1).replace(
+            "DIRECT_GETPIXEL=NO_CANDIDATE", "DIRECT_GETPIXEL=NONUNIFORM")))
 
     def test_reject_bad_integer(self):
         for bad in ("-1", "1.5", "0x20", "serial123", "999999999999"):
