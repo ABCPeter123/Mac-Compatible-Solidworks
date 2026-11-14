@@ -53,7 +53,7 @@ class WineMsiErrorTests(unittest.TestCase):
 
     def test_specific_installfiles_or_registry_service_failure_precedes_finalization(self):
         raw = (
-            b'0120:err:msi:ACTION_InstallFiles compressed file wasn\\x27t installed (L"PRIVATE")\n'
+            b"0120:err:msi:ACTION_InstallFiles compressed file wasn't installed (L'PRIVATE')\n"
             b'0120:err:msi:execute_script Execution of script 0 halted; action L"InstallFiles" returned 1603\n'
             b'0120:err:msi:execute_script Execution of script 0 halted; action L"StartServices" returned 1603\n'
             b'0120:err:msi:execute_script Execution of script 0 halted; action L"WriteRegistryValues" returned 1603\n'
