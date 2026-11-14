@@ -134,6 +134,46 @@ class FullExitTests(TestCase):
                 result = win32.launch(wine, prefix, original, fixture)
             self.assertEqual(result["category"], "REBOOT_REQUIRED")
 
+    def test_installer_only_fusion_builtin_override_does_not_pollute_wine_prefix(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            prefix = root / "prefix"
+            (prefix / "drive_c").mkdir(parents=True)
+            (prefix / "system.reg").write_text("")
+            (prefix / trial.SENTINEL).write_text("")
+            wine = root / "wine"
+            wine.write_bytes(b"wine")
+            monitor = root / "netfx481_win32_launch.exe"
+            monitor.write_bytes(b"self-authored")
+            original = root / "NDP481-x86-x64-AllOS-ENU.exe"
+            original.write_bytes(b"synthetic")
+            environments = []
+            with mock.patch("swcompat.wine_paths.windows_media_path", return_value=r"Z:\\build\\NDP481-x86-x64-AllOS-ENU.exe"), \
+                 mock.patch.object(win32.subprocess, "run") as process:
+                def execute(command, **kwargs):
+                    environments.append(kwargs["env"])
+                    kwargs["stdout"].write(sample())
+                    return mock.Mock(returncode=0)
+                process.side_effect = execute
+                self.assertEqual(win32.launch(wine, prefix, original, monitor, fusion_builtin=True)["category"],
+                                 "REBOOT_REQUIRED")
+                self.assertEqual(win32.launch(wine, prefix, original, monitor)["category"],
+                                 "REBOOT_REQUIRED")
+            self.assertEqual(environments[0]["WINEDLLOVERRIDES"], "fusion=b")
+            self.assertNotIn("WINEDLLOVERRIDES", environments[1])
+            self.assertEqual(environments[0]["WINEPREFIX"], str(prefix))
+            self.assertEqual(environments[1]["WINEPREFIX"], str(prefix))
+
+    def test_fusion_setup_report_does_not_override_real_native_clr_gate(self):
+        before = {"registry": "NOT_FOUND", "clr_family": "MONO", "managed": "PASS"}
+        report = trial.combine(before, before, "EXIT_NONZERO", 3010,
+                               fusion_setup_override="BUILTIN_ONLY")
+        self.assertFalse(report["framework_runtime_ready"])
+        self.assertEqual(report["fusion_setup_override"], "BUILTIN_ONLY")
+        with self.assertRaises(ValueError):
+            trial.combine(before, before, "EXIT_ZERO", 0,
+                          fusion_setup_override="fusion=n;private_path")
+
     def test_exact_win32_3010_needed_for_reboot_claim(self):
         old = {"registry": "NOT_FOUND", "clr_family": "MONO", "managed": "PASS"}
         ready = {"registry": "AT_LEAST_481", "clr_family": "MICROSOFT_CLR_CANDIDATE", "managed": "PASS"}
