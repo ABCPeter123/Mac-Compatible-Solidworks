@@ -3,7 +3,7 @@ name: macOS host-window pixel verification for Win32 CAD viewport
 on:
   pull_request:
     paths:
-      - '.github/workflows/live-cad-3d-session-ci.yml'
+      - '.github/workflows/macos-host-viewport-ci.yml'
       - 'probes/live_cad_viewport.c'
       - 'scripts/live_cad_session_trial.py'
       - 'tests/test_live_cad_session_trial.py'
