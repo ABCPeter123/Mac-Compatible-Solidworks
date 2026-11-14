@@ -60,8 +60,17 @@ def prepare_webview2(
     """
     if os.name == "nt":
         raise ValueError("Native Windows execution not permitted in this local Wine helper")
-    if prefix.is_symlink() or controller.is_symlink() or installer.is_symlink() or sha256_file.is_symlink():
+    if prefix.expanduser().is_symlink() or controller.expanduser().is_symlink() or installer.expanduser().is_symlink() or sha256_file.expanduser().is_symlink():
         raise ValueError("Symbolic links are not accepted for executable inputs")
+    # The Wine installer and probe both run with cwd set to their own media
+    # directory. Convert every input to an absolute path FIRST; otherwise
+    # build/setup.exe from cwd=build would incorrectly become build/build/setup.exe.
+    wine = wine.expanduser().resolve(strict=True)
+    prefix = prefix.expanduser().resolve()
+    logs = logs.expanduser().resolve()
+    installer = installer.expanduser().resolve(strict=True)
+    sha256_file = sha256_file.expanduser().resolve(strict=True)
+    controller = controller.expanduser().resolve(strict=True)
     validate_controller(controller)
     if not wine.is_file() or not os.access(wine, os.X_OK):
         raise ValueError("Wine runtime not executable")
