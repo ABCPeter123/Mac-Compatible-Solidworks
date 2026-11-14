@@ -153,6 +153,7 @@ struct WindowCounts {
     int child_gdi_failed = 0;
     int visible_large = 0;
     int candidate_visible = 0;
+    int owned_visible = 0;
     int responsive = 0;
     int unresponsive = 0;
     int nonuniform = 0;
@@ -198,7 +199,10 @@ static BOOL CALLBACK enumerate_child(HWND hwnd, LPARAM userdata) {
 
 static BOOL CALLBACK enumerate(HWND hwnd, LPARAM userdata) {
     auto *counts = reinterpret_cast<WindowCounts *>(userdata);
-    if (!IsWindowVisible(hwnd) || GetWindow(hwnd, GW_OWNER) != nullptr) return TRUE;
+    if (!IsWindowVisible(hwnd)) return TRUE;
+    const bool owned_popup = GetWindow(hwnd, GW_OWNER) != nullptr;
+    /* Owned, visible top-level dialogs may contain the actual installer UI.
+     * Include them without collecting window titles or owner HWND values. */
     RECT bounds = {};
     if (!GetWindowRect(hwnd, &bounds) || bounds.right - bounds.left < 160 ||
         bounds.bottom - bounds.top < 100) return TRUE;
@@ -207,6 +211,7 @@ static BOOL CALLBACK enumerate(HWND hwnd, LPARAM userdata) {
     GetWindowThreadProcessId(hwnd, &pid);
     if (!counts->candidate_ids.count(pid)) return TRUE;
     ++counts->candidate_visible;
+    if (owned_popup) ++counts->owned_visible;
     const LONG_PTR ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
     if (ex & WS_EX_LAYERED) ++counts->parent_layered;
     if (ex & WS_EX_NOREDIRECTIONBITMAP) ++counts->parent_no_redirection;
@@ -321,6 +326,7 @@ int wmain(int argc, wchar_t **argv) {
     std::printf("SWCOMPAT_SW_UI_CANDIDATE_PROCESSES=%u\n",
         static_cast<unsigned>(counts.candidate_ids.size()));
     std::printf("SWCOMPAT_SW_UI_CANDIDATE_WINDOWS=%d\n", counts.candidate_visible);
+    std::printf("SWCOMPAT_SW_UI_OWNED_WINDOWS=%d\n", counts.owned_visible);
     std::printf("SWCOMPAT_SW_UI_VISIBLE_LARGE_WINDOWS=%d\n", counts.visible_large);
     std::printf("SWCOMPAT_SW_UI_RESPONSIVENESS=%s\n", response);
     const char *direct = counts.candidate_visible == 0 ? "NO_CANDIDATE"
