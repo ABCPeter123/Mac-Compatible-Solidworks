@@ -12,6 +12,18 @@ The opt-in [licensed installer trial](.github/workflows/solidworks-bootstrap-tri
 
 **The authentic SOLIDWORKS installer has now been downloaded, digitally verified and executed under hosted Apple Silicon Wine** ([CI run 43494158179](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43494158179)). Its process started and remained running until the bounded 120-second timeout. Installation Manager visibility, completed installation, activation and working CAD remain **NOT VERIFIED**. Later diagnostic runs detected one visible, responsive installer-associated Win32 window, but client-area pixel readback failed. The current probe also checks visible child HWNDs, owned popup windows and composition styles on the next manually dispatched trial, without collecting screenshots or licenses.
 
+## Native macOS Wine installation (experimental, local, no VM)
+
+The repository now has a **real interactive local installer workflow** for users with a Mac, a supported Wine build and legitimately obtained original SOLIDWORKS media. It uses a persistent isolated Wine prefix, discovers expected SOLIDWORKS 2026 prerequisite installers in full installation media, and starts each explicitly selected original dependency installer with a visible UI. The original Installation Manager runs **from its media directory**, without the hosted CI test's 120-second forced termination. This is an actual user-facing execution path, though **successful SOLIDWORKS installation and operation remain unverified**.
+
+```bash
+# On a Mac with Python and Wine installed, from this repository:
+python3 -m swcompat native-audit "/path/to/extracted/SOLIDWORKS-media"
+python3 -m swcompat native-install "/path/to/extracted/SOLIDWORKS-media" --install-prerequisites
+```
+
+Both commands require the original licensed installation media; neither downloads proprietary product binaries nor accepts license terms or activation on your behalf. The first command inspects files without Wine; the second creates or reuses an isolated persistent prefix and launches the genuine installer interactively. Complete steps and limits: [native Mac installation guide](docs/NATIVE_MAC_INSTALL.md).
+
 ## Working desktop SOLIDWORKS access from a Mac without a Mac-hosted VM
 
 The direct Apple Silicon Wine port is still experimental and has not demonstrated a working SOLIDWORKS installation. For actual CAD work, use a **licensed Windows 11 x86-64 workstation** with SOLIDWORKS installed and access it from macOS using the official Microsoft Windows App. The workstation does the CAD execution; there is no Windows VM on the Mac. An available Windows host or hosted Windows workstation, a private LAN/VPN, and a valid license are required.
