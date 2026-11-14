@@ -88,6 +88,16 @@ The original Microsoft installer returned raw Unix-side subprocess status **194*
 
 After setup, the managed fixture still executed with Mono, the Framework registry Release was NOT_FOUND and Microsoft CLR readiness was FALSE. The next test should perform an isolated Wine reboot using the supported `wineboot --restart` command when raw status 194 is observed, then retest native CLR identity and real managed operations. A reboot is not considered success unless the independent CLR readiness gate passes.
 
+## Actual Wine reboot experiment for possible native .NET 3010
+
+The completed [genuine signed Microsoft setup run 43563308094](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43563308094) verified Wine Mono's Windows Support MSI was removed and both false registry Release values were cleared. The native Microsoft installer subsequently returned **Unix process status 194**, without establishing a working Microsoft CLR before any simulated reboot.
+
+Microsoft's [Framework installer deployment guide](https://learn.microsoft.com/en-us/dotnet/framework/deployment/deployment-guide-for-developers#return-codes) defines Windows code **3010** as successful installation requiring a restart. The low eight bits of 3010 are **194**. Because Unix Wine process exit status may be truncated, **194 is only a possible indication of 3010**, not authoritative proof. The original Windows return code is not recovered.
+
+The revised isolated experiment takes this specific signal and performs Wine's documented `wineboot --restart` operation against the **same marked disposable Wine prefix**, under a strict timeout, after verifying that Wine Mono's registered MSI was removed. It **does not restart macOS**. If the executable is absent, times out or fails, the status is recorded and cannot count as successful installation. On completion, the independent native Microsoft CLR / registry / managed runtime fixture is executed again before restoring the Wine prefix's reported Windows 11 version. The existing workflow then restores Windows 11 and probes the managed runtime one final time.
+
+All statuses are fixed-schema enums with no raw installer logs, executable names, paths, serial numbers or contents of the Microsoft installer. The only positive criterion is actual Microsoft CLR candidate operation plus required registry and managed fixture checks after a confirmed Wine restart. The restart does not establish compatibility on its own.
+
 ## Technical boundaries
 
 The independent fixture does not test every SOLIDWORKS managed feature or COM interop, and running Microsoft's CLR under Wine would still not establish CAD readiness. WebView2 browser pixels, native graphics/window composition, installation manager UI, x86 helper processes and activation remain separate compatibility gates.
