@@ -177,7 +177,7 @@ def initialize_prefix(wine: Path, prefix: Path, logs: Path) -> str:
 
 def install_local(wine: Path, prefix: Path, logs: Path, media: Path, *,
                   install_prerequisites: bool = False, permit_bootstrapper: bool = False,
-                  runner=None) -> int:
+                  require_webview2_probe: Path | None = None, runner=None) -> int:
     """Launch original media, optionally installing selected official prerequisites.
 
     This waits for the interactive installer rather than intentionally killing
@@ -209,17 +209,25 @@ def install_local(wine: Path, prefix: Path, logs: Path, media: Path, *,
     state = initialize_prefix(wine, prefix, logs)
     print("Persistent Wine prefix:", state)
     if install_prerequisites:
+        from .wine_paths import windows_media_path
         for key, _ in COMPONENTS:
             path = inventory.components[key]
             assert path is not None
-            command = ([str(wine), "msiexec.exe", "/i", str(path)] if path.suffix.lower() == ".msi"
-                       else [str(wine), str(path)])
+            command = ([str(wine), "msiexec.exe", "/i", windows_media_path(wine, prefix, path)]
+                       if path.suffix.lower() == ".msi" else [str(wine), str(path)])
             print("Starting prerequisite:", key, "(interactive, no EULA automation)")
             code = runner(command, prefix=prefix, logs=logs, label=key, cwd=path.parent)
             print("Prerequisite installer exit:", key, "ZERO_UNVERIFIED" if code == 0 else "NONZERO")
             if code != 0:
                 print("Stopped before SOLIDWORKS installer; prerequisite failure requires investigation.")
                 return 1
+    if require_webview2_probe is not None:
+        from .native_webview2 import check_webview2
+        if not check_webview2(wine, prefix, require_webview2_probe):
+            print("Microsoft WebView2 browser controller: NOT_READY")
+            print("SOLIDWORKS installer was not launched.")
+            return 1
+        print("Microsoft WebView2 browser controller: READY")
     launcher = inventory.launcher
     print("Starting original SOLIDWORKS installation manager interactively (no timeout).")
     command = [str(wine), str(launcher)]
