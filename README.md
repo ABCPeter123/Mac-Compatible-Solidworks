@@ -52,6 +52,12 @@ python3 -m swcompat --prefix "$SWPREFIX" probe-wgl --exe build/win_gui_session_p
 
 A passing test does not demonstrate physical Mac input, the SOLIDWORKS GUI or a real CAD document.
 
+## Fix applied: prepare the real SOLIDWORKS prefix with Microsoft WebView2
+
+Previous genuine SOLIDWORKS installer tests launched the original bootstrapper in an otherwise fresh Wine prefix. The independent Microsoft WebView2 test had already confirmed official x64 Evergreen runtime installation and controller creation on hosted Apple Silicon Wine, but **that runtime was missing from the actual SOLIDWORKS prefix**.
+
+The manual licensed installer workflow now downloads the official Microsoft-signed WebView2 runtime, validates its publisher and SHA-256 on Windows, installs it into the **same** disposable Apple Silicon Wine prefix, and **requires an actual READY WebView2 controller before starting the signed SOLIDWORKS bootstrapper**. This addresses a known missing requirement for SOLIDWORKS web content, but does not demonstrate installer UI pixels, full product installation or CAD use. See [details](docs/FIRST_AUTHENTIC_INSTALLER_TRIAL.md#install-the-real-webview2-prerequisite-before-bootstrapping-solidworks).
+
 ## SOLIDWORKS installer prerequisites research
 
 The [installation prerequisite reconnaissance workflow](.github/workflows/installer-prereq-ci.yml) builds a small read-only Windows x64 executable. It checks Windows Installer, COM, service manager access, VC++ runtime indicators, .NET Framework registry signals, and basic host information on native Windows, Linux Wine, and Apple Silicon Wine.
