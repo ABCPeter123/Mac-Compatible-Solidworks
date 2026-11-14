@@ -304,7 +304,8 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
     wine_restart = wine_restart or {"reason": "NOT_REQUESTED", "action": "NOT_REQUESTED"}
     if wine_restart["reason"] not in {"NOT_REQUESTED", "NO_3010_SIGNAL", "UNIX_194_POSSIBLE_3010", "WIN32_3010_CONFIRMED"} or wine_restart["action"] not in {
         "NOT_REQUESTED", "NOT_NEEDED", "COMPLETED", "WINEBOOT_MISSING",
-        "TIMED_OUT", "START_FAILED", "EXIT_NONZERO"
+        "TIMED_OUT", "START_FAILED", "EXIT_NONZERO",
+        "SKIPPED_CHILD_ACTIVE", "SKIPPED_CHILD_UNVERIFIED"
     }:
         raise ValueError("Unsupported Wine restart result")
     setup_evidence = setup_evidence or {
@@ -462,8 +463,11 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
     if experiment_reboot_after_possible_3010:
         if (win32_evidence is not None and win32_evidence["status"] == "EXIT_CAPTURED"
                 and code == 3010):
-            restart = {"reason": "WIN32_3010_CONFIRMED",
-                       "action": wineboot_restart(wine, prefix)}
+            lifecycle = win32_evidence["child_lifecycle"]
+            action = ("SKIPPED_CHILD_ACTIVE" if lifecycle == "STILL_ACTIVE" else
+                      "SKIPPED_CHILD_UNVERIFIED" if lifecycle in {"PARTIAL", "UNKNOWN"} else
+                      wineboot_restart(wine, prefix))
+            restart = {"reason": "WIN32_3010_CONFIRMED", "action": action}
         elif win32_evidence is None and termination == "EXIT_NONZERO" and code == POSSIBLE_3010_UNIX_CODE:
             restart = {"reason": "UNIX_194_POSSIBLE_3010",
                        "action": wineboot_restart(wine, prefix)}
@@ -546,6 +550,8 @@ def main(argv: list[str] | None = None) -> int:
     print("Original full Win32 exit status:", result["win32_launch"]["exit_hex"])
     print("Original full Win32 result:", result["win32_launch"]["category"])
     print("Original Win32 bootstrapper child:", result["win32_launch"]["child_seen"])
+    print("Direct child lifecycle after parent exits:", result["win32_launch"]["child_lifecycle"])
+    print("Direct child exit aggregate:", result["win32_launch"]["child_exit"])
     print("Microsoft .NET 4.8.1 original setup:", result["install_execution"])
     print("Independent Microsoft CLR candidate after:", result["after"]["clr_family"])
     print("Registered .NET 4.8.1 after:", result["after"]["registry"])
