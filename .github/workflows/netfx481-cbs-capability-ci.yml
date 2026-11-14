@@ -39,7 +39,7 @@ jobs:
           $cmdText = @(
             '@echo off'
             ('call "' + $vcvars + '"')
-            'cl /nologo /W4 /O2 /MT /Fe:build\netfx481_cbs_capability.exe probes\netfx481_cbs_capability.c advapi32.lib'
+            'cl /nologo /W4 /O2 /MT /Fe:build\netfx481_cbs_capability.exe probes\netfx481_cbs_capability.c'
             'exit /b %errorlevel%'
           )
           Set-Content -LiteralPath build/compile-cbs.cmd -Value $cmdText -Encoding ascii
