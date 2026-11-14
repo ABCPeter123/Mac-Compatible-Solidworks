@@ -1,0 +1,154 @@
+name: Windows component servicing capabilities on Apple Silicon Wine
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/netfx481-cbs-capability-ci.yml'
+      - 'probes/netfx481_cbs_capability.c'
+      - 'scripts/netfx481_cbs_capability.py'
+      - 'tests/test_netfx481_cbs_capability.py'
+      - 'scripts/netfx481_cbs_prefix.py'
+      - 'tests/test_netfx481_cbs_prefix.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-reference:
+    name: Native Windows CBS and DISM reference
+    runs-on: windows-2025
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test safe servicing probe parser
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests -p 'test_netfx481_cbs_capability.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Invalid component servicing parser" }
+          python -m unittest discover -s tests -p 'test_netfx481_cbs_prefix.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Unsafe direct Wine prefix inventory" }
+      - name: Compile read-only native Win32 servicing probe with MSVC
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force build | Out-Null
+          $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw "MSVC x64 compiler missing" }
+          $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+          $cmdText = @(
+            '@echo off'
+            ('call "' + $vcvars + '"')
+            'cl /nologo /W4 /O2 /MT /Fe:build\netfx481_cbs_capability.exe probes\netfx481_cbs_capability.c'
+            'exit /b %errorlevel%'
+          )
+          Set-Content -LiteralPath build/compile-cbs.cmd -Value $cmdText -Encoding ascii
+          & cmd.exe /d /c build\compile-cbs.cmd
+          if ($LASTEXITCODE -ne 0) { throw "Win32 CBS compile failed" }
+          $evidence = & build\netfx481_cbs_capability.exe
+          if ($LASTEXITCODE -ne 0) { throw "Win32 CBS reference failed" }
+          if ($evidence -notcontains 'SWCOMPAT_CBS_SCHEMA=1') { throw "Invalid CBS evidence schema" }
+          if ($evidence -notcontains 'SWCOMPAT_CBS_REGISTRY=PRESENT') { throw "Expected native Windows CBS registry missing" }
+          if ($evidence -notcontains 'SWCOMPAT_CBS_TRUSTEDINSTALLER=PRESENT') { throw "Expected native Windows TrustedInstaller missing" }
+          Write-Output "Native Windows CBS registry and TrustedInstaller confirmed"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: self-authored-windows-cbs-probe
+          path: build/netfx481_cbs_capability.exe
+          retention-days: 1
+
+  macos-wine:
+    name: CBS API inventory on disposable Apple Silicon Wine
+    runs-on: macos-15
+    needs: windows-reference
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: self-authored-windows-cbs-probe
+          path: build
+      - name: Acquire pinned Wine build by verified SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-devel-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-devel-11.21-osx64.tar.xz"
+          echo "9909b486657e10ab66c7279371ae1f990345b596b3b1b3a0cf21f28af24fa0ce  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-build"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-build"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Set up marked disposable Windows 10 Wine prefix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat --prefix "$RUNNER_TEMP/cbs-probe-prefix" --logs-dir "$RUNNER_TEMP/cbs-probe-logs" init
+          touch "$RUNNER_TEMP/cbs-probe-prefix/.swcompat-netfx481-disposable"
+          python3 -m swcompat --prefix "$RUNNER_TEMP/cbs-probe-prefix" --logs-dir "$RUNNER_TEMP/cbs-probe-logs" set-winver win10
+      - name: Run read-only original Windows servicing probe under Wine
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx481_cbs_capability \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/cbs-probe-prefix" \
+            --fixture build/netfx481_cbs_capability.exe \
+            --output build/netfx481-cbs-capabilities.json
+      - name: Inspect fixed CBS file and registry locations directly in Wine
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx481_cbs_prefix             --wine "$SWCOMPAT_WINE"             --prefix "$RUNNER_TEMP/cbs-probe-prefix"             --output build/netfx481-cbs-prefix.json
+      - name: Summarize only fixed component support flags
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx481_cbs_capability import validate
+          from scripts.netfx481_cbs_prefix import validate as validate_prefix_report
+          file = Path("build/netfx481-cbs-capabilities.json")
+          direct = Path("build/netfx481-cbs-prefix.json")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write("## Apple Silicon Wine Windows servicing inventory\n\n")
+              if not file.exists():
+                  out.write("No complete servicing report. No compatibility claim.\n")
+              else:
+                  data = json.loads(file.read_text(encoding="utf-8"))
+                  if not validate(data):
+                      raise SystemExit("Unexpected CBS evidence")
+                  for name in ("registry", "packages", "trustedinstaller", "dismapi"):
+                      out.write(name.upper() + ": **" + data[name] + "**\n\n")
+                  out.write("Presence of an API does not prove successful CBS package servicing.\n")
+              if not direct.exists():
+                  out.write("No direct Wine CBS prefix inventory.\n")
+              else:
+                  data = json.loads(direct.read_text(encoding="utf-8"))
+                  if not validate_prefix_report(data):
+                      raise SystemExit("Invalid direct Wine CBS report")
+                  out.write("\n## Direct marked-prefix registry and disk inspection\n\n")
+                  for key in ("cbs_registry", "packages_directory",
+                              "trustedinstaller_service_registration", "dismapi_disk_file"):
+                      out.write(key.upper() + ": **" + data[key] + "**\n\n")
+                  out.write("Registration and file presence are NOT a servicing implementation test.\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: apple-silicon-cbs-enums-only
+          path: |
+            build/netfx481-cbs-capabilities.json
+            build/netfx481-cbs-prefix.json
+          if-no-files-found: ignore
+          retention-days: 7
