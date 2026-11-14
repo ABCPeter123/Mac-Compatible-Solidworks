@@ -14,12 +14,12 @@ import os
 from pathlib import Path
 
 from scripts.netfx481_trial import (
-    clear_false_release, clear_false_wow6432_release, probe,
+    NETFX_FULL_KEY, NETFX_WOW6432_FULL_KEY, probe, reg_code,
     run_installer, validate_prefix, wineboot_restart,
 )
 from scripts.netfx481_clr_load import run as load_clr
 from scripts.netfx481_payload_audit import snapshot
-from scripts.wine_mono_removal import remove_mono
+from scripts.wine_mono_removal import inventory, remove_mono
 
 INSTALLER_NAME = "ndp48-x86-x64-allos-enu.exe"
 PROBE_NAME = "netfx481_runtime_probe.exe"
@@ -46,6 +46,27 @@ def verify_official_media(installer: Path, manifest: Path) -> None:
             digest.update(block)
     if digest.hexdigest() != expected:
         raise ValueError("Original installer digest mismatch")
+
+
+def clear_unbacked_release(wine: Path, prefix: Path, key: str) -> str:
+    """Clear only a Release value lacking a native CLR in the marked fresh prefix.
+
+    Caller must first establish Framework64 clr.dll is absent. A fabricated
+    Wine Mono Release entry otherwise causes the official setup to short-circuit.
+    Do not delete parent registry keys or touch established user prefixes.
+    """
+    validate_prefix(prefix)
+    if key not in {NETFX_FULL_KEY, NETFX_WOW6432_FULL_KEY}:
+        raise ValueError("Unexpected registry key")
+    state = reg_code(wine, prefix, "query", key, "/v", "Release")
+    if state == 1:
+        return "NOT_NEEDED"
+    if state != 0:
+        return "QUERY_FAILED"
+    if reg_code(wine, prefix, "delete", key, "/v", "Release", "/f") != 0:
+        return "DELETE_FAILED"
+    return ("CLEARED" if reg_code(wine, prefix, "query", key, "/v", "Release") == 1
+            else "VERIFY_FAILED")
 
 
 def native_48_candidate(before: dict, after: dict, first: str, last: str,
@@ -102,27 +123,41 @@ def inspect(wine: Path, prefix: Path, installer: Path, manifest: Path,
         "netfx481_ready": False,
         "solidworks_compatibility": "NOT_DEMONSTRATED",
     }
-    if before["clr_family"] == "MICROSOFT_CLR_CANDIDATE":
+    # The managed fixture can be NOT_VERIFIED before .NET exists. That is
+    # exactly when a clean CLR install is needed, not a reason to skip setup.
+    # Refuse changes when an installed native CLR file already exists.
+    if before_disk["CLR64"][0] != "ABSENT":
         report["status"] = "ALREADY_NATIVE"
         return report
-    if before["clr_family"] != "MONO":
-        report["status"] = "BLOCKED_MONO_REMOVAL"
-        return report
-    adjust64 = clear_false_release(wine, prefix, before)
+    # Only a newly initialized, marked prefix with no CLR file can have these
+    # two unsupported Wine Mono Release indicators removed.
+    adjust64 = clear_unbacked_release(wine, prefix, NETFX_FULL_KEY)
     report["registry64_adjustment"] = adjust64
-    if adjust64 in {"DELETE_FAILED", "STILL_PRESENT_OR_UNVERIFIED"}:
+    if adjust64 in {"QUERY_FAILED", "DELETE_FAILED", "VERIFY_FAILED"}:
         report["status"] = "BLOCKED_REGISTRY"
         return report
-    adjust32 = clear_false_wow6432_release(wine, prefix, before)
-    report["registry32_adjustment"] = adjust32["action"]
-    if adjust32["action"] in {"QUERY_FAILED", "DELETE_FAILED", "VERIFY_FAILED"}:
+    adjust32 = clear_unbacked_release(wine, prefix, NETFX_WOW6432_FULL_KEY)
+    report["registry32_adjustment"] = adjust32
+    if adjust32 in {"QUERY_FAILED", "DELETE_FAILED", "VERIFY_FAILED"}:
         report["status"] = "BLOCKED_REGISTRY"
         return report
-    removal = remove_mono(wine, prefix, before)
-    report["mono_removal"] = removal["action"]
-    if removal["action"] != "REMOVED":
+    # Wine Mono may be MSI-registered even when no managed fixture can run.
+    # Trust its exact registered MSI product inventory instead of assuming a
+    # failed managed probe implies no Mono installation.
+    try:
+        mono_products = inventory(wine, prefix)
+    except ValueError:
+        report["mono_removal"] = "INVENTORY_FAILED"
         report["status"] = "BLOCKED_MONO_REMOVAL"
         return report
+    if mono_products:
+        removal = remove_mono(wine, prefix, {"clr_family": "MONO"})
+        report["mono_removal"] = removal["action"]
+        if removal["action"] != "REMOVED":
+            report["status"] = "BLOCKED_MONO_REMOVAL"
+            return report
+    else:
+        report["mono_removal"] = "MONO_NOT_REGISTERED"
 
     status, code = run_installer(wine, prefix, installer, timeout)
     report["installer_execution"] = status
@@ -170,7 +205,7 @@ def validate(report: dict) -> bool:
         and report["scope"] == "ORIGINAL_NETFX48_DISPOSABLE_WINE_BASELINE"
         and report["status"] in STATUSES
         and report["before_family"] in {"MONO", "MICROSOFT_CLR_CANDIDATE", "UNKNOWN", "NOT_VERIFIED"}
-        and report["registry64_adjustment"] in {"NOT_APPLICABLE", "CLEARED", "DELETE_FAILED", "STILL_PRESENT_OR_UNVERIFIED"}
+        and report["registry64_adjustment"] in {"NOT_APPLICABLE", "NOT_NEEDED", "CLEARED", "QUERY_FAILED", "DELETE_FAILED", "VERIFY_FAILED"}
         and report["registry32_adjustment"] in {"NOT_APPLICABLE", "NOT_NEEDED", "CLEARED", "QUERY_FAILED", "DELETE_FAILED", "VERIFY_FAILED"}
         and report["mono_removal"] in {"NOT_APPLICABLE", "REMOVED", "MONO_NOT_REGISTERED", "INVENTORY_FAILED", "REMOVE_FAILED", "VERIFY_FAILED"}
         and report["installer_execution"] in {"NOT_RUN", "EXIT_ZERO", "EXIT_NONZERO", "START_FAILED", "TIMEOUT"}
