@@ -22,12 +22,13 @@ from scripts.netfx481_payload_audit import snapshot
 from scripts.wine_mono_removal import inventory, remove_mono
 from scripts.netfx481_win32_exit import VALID_STATUSES as WIN32_STATUSES, CATEGORIES as WIN32_CATEGORIES
 from scripts.netfx481_setup_evidence import KNOWN_RESULTS, KNOWN_PHASES, KNOWN_CODES
+from scripts.netfx48_win32_exit import SELFTEST_STATES
 
 INSTALLER_NAME = "ndp48-x86-x64-allos-enu.exe"
 PROBE_NAME = "netfx481_runtime_probe.exe"
 LOADER_NAME = "netfx481_clr_load.exe"
 SHA_LENGTH = 64
-STATUSES = {"MEASURED", "BLOCKED_MONO_REMOVAL", "BLOCKED_REGISTRY", "ALREADY_NATIVE"}
+STATUSES = {"MEASURED", "BLOCKED_MONO_REMOVAL", "BLOCKED_REGISTRY", "ALREADY_NATIVE", "BLOCKED_LAUNCHER"}
 UNIX_OUTCOMES = {"ZERO", "POSSIBLE_3010_UNIX_194", "CONFIRMED_3010", "OTHER", "NOT_RUN"}
 REBOOT_OUTCOMES = {"NOT_NEEDED", "COMPLETED", "TIMED_OUT", "START_FAILED", "EXIT_NONZERO", "NOT_RUN"}
 
@@ -118,6 +119,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, manifest: Path,
         "mono_removal": "NOT_APPLICABLE",
         "installer_execution": "NOT_RUN",
         "unix_exit_category": "NOT_RUN",
+        "win32_selftest_before": "NOT_REQUESTED",
+        "win32_selftest_after": "NOT_REQUESTED",
         "win32_original_status": "NOT_REQUESTED",
         "win32_original_exit": "NOT_AVAILABLE",
         "setup_log_status": "NOT_REQUESTED",
@@ -135,6 +138,9 @@ def inspect(wine: Path, prefix: Path, installer: Path, manifest: Path,
         "netfx481_ready": False,
         "solidworks_compatibility": "NOT_DEMONSTRATED",
     }
+    if win32_launcher is not None:
+        from scripts.netfx48_win32_exit import selftest as launcher_selftest
+        report["win32_selftest_before"] = launcher_selftest(wine, prefix, win32_launcher)
     # The managed fixture can be NOT_VERIFIED before .NET exists. That is
     # exactly when a clean CLR install is needed, not a reason to skip setup.
     # Refuse changes when an installed native CLR file already exists.
@@ -172,7 +178,13 @@ def inspect(wine: Path, prefix: Path, installer: Path, manifest: Path,
         report["mono_removal"] = "MONO_NOT_REGISTERED"
 
     if win32_launcher is not None:
-        from scripts.netfx48_win32_exit import launch as launch_native
+        from scripts.netfx48_win32_exit import (
+            launch as launch_native, selftest as launcher_selftest,
+        )
+        report["win32_selftest_after"] = launcher_selftest(wine, prefix, win32_launcher)
+        if report["win32_selftest_after"] != "PASS":
+            report["status"] = "BLOCKED_LAUNCHER"
+            return report
         from scripts.netfx481_win32_exit import termination as native_termination
         from scripts.netfx481_setup_evidence import classify_log, discard_log
         private_dir = prefix / "drive_c" / "swcompat-netfx48-private"
@@ -234,6 +246,7 @@ def validate(report: dict) -> bool:
             "schema", "scope", "status", "before_family",
             "registry64_adjustment", "registry32_adjustment", "mono_removal",
             "installer_execution", "unix_exit_category",
+            "win32_selftest_before", "win32_selftest_after",
             "win32_original_status", "win32_original_exit",
             "setup_log_status", "setup_log_phase", "setup_error_categories",
             "wine_restart",
@@ -250,6 +263,8 @@ def validate(report: dict) -> bool:
         and report["mono_removal"] in {"NOT_APPLICABLE", "REMOVED", "MONO_NOT_REGISTERED", "INVENTORY_FAILED", "REMOVE_FAILED", "VERIFY_FAILED"}
         and report["installer_execution"] in {"NOT_RUN", "EXIT_ZERO", "EXIT_NONZERO", "START_FAILED", "TIMEOUT"}
         and report["unix_exit_category"] in UNIX_OUTCOMES
+        and report["win32_selftest_before"] in (SELFTEST_STATES | {"NOT_REQUESTED"})
+        and report["win32_selftest_after"] in (SELFTEST_STATES | {"NOT_REQUESTED"})
         and report["win32_original_status"] in WIN32_STATUSES
         and report["win32_original_exit"] in WIN32_CATEGORIES
         and report["setup_log_status"] in KNOWN_RESULTS
@@ -298,6 +313,8 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("Verified .NET 4.8 disposable-prefix experiment refused")
     print("Original Microsoft .NET 4.8 outcome:", report["installer_execution"])
     print("Original setup process exit category:", report["unix_exit_category"])
+    print("Original Win32 monitor selftest before cleanup:", report["win32_selftest_before"])
+    print("Original Win32 monitor selftest after cleanup:", report["win32_selftest_after"])
     print("Exact Windows installer status:", report["win32_original_status"])
     print("Exact Windows installer exit classification:", report["win32_original_exit"])
     print("Private installer setup failure stage:", report["setup_log_phase"])
