@@ -1,0 +1,71 @@
+name: Analyze original Microsoft .NET 4.8.1 installer package structure
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/netfx481-offline-package-ci.yml'
+      - 'scripts/netfx481_archive_evidence.py'
+      - 'tests/test_netfx481_archive_evidence.py'
+      - 'docs/NETFX481_REAL_RUNTIME.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-original-package:
+    name: Inspect signed original Microsoft offline installer on Windows
+    runs-on: windows-2025
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check safe classification of synthetic Windows packages
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests -p 'test_netfx481_archive_evidence.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Microsoft package classification safety failed" }
+      - name: Acquire Microsoft original offline installer and authenticate Authenticode signature
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force build | Out-Null
+          $url = "https://download.microsoft.com/download/4/b/2/cd00d4ed-ebdd-49ee-8a33-eabc3d1030e3/NDP481-x86-x64-AllOS-ENU.exe"
+          $exe = Join-Path (Resolve-Path build) "NDP481-x86-x64-AllOS-ENU.exe"
+          curl.exe --fail --location --retry 3 --max-time 600 --output $exe $url
+          if ($LASTEXITCODE -ne 0) { throw "Authentic Microsoft 4.8.1 original package download failed" }
+          $item = Get-Item -LiteralPath $exe
+          if ($item.Length -lt 15728640 -or $item.Length -gt 262144000) { throw "Original Microsoft setup size unexpected" }
+          $sig = Get-AuthenticodeSignature -LiteralPath $exe
+          if ($sig.Status -ne [System.Management.Automation.SignatureStatus]::Valid) { throw "Microsoft original signature invalid" }
+          if ($null -eq $sig.SignerCertificate -or $sig.SignerCertificate.Subject -notmatch '(^|, )O=Microsoft Corporation(,|$)') {
+            throw "Original offline installer not signed by Microsoft Corporation"
+          }
+          Write-Output "Official Microsoft 4.8.1 runtime redistributable authenticated"
+      - name: Privately inspect original Microsoft installer as package archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $seven = Join-Path $env:ProgramFiles "7-Zip\7z.exe"
+          if (!(Test-Path $seven)) { throw "Windows 2025 runner missing 7-Zip package reader" }
+          $installer = Join-Path (Resolve-Path build) "NDP481-x86-x64-AllOS-ENU.exe"
+          $transcript = Join-Path (Resolve-Path build) "private-sevenzip-list.txt"
+          & $seven l -slt $installer > $transcript 2>$null
+          $readerCode = $LASTEXITCODE
+          python -m scripts.netfx481_archive_evidence --listing $transcript --reader-exit $readerCode --output build/netfx481-package-categories.json
+          if ($LASTEXITCODE -ne 0) { throw "Private package inventory classification failed" }
+          Remove-Item -LiteralPath $transcript -Force
+          if (!(Test-Path build/netfx481-package-categories.json)) { throw "Missing sanitized results" }
+      - name: Emit only allowlisted categories
+        shell: pwsh
+        run: |
+          python - <<'PY'
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: netfx481-original-microsoft-package-categories-only
+          path: build/netfx481-package-categories.json
+          if-no-files-found: error
+          retention-days: 7
