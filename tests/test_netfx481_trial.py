@@ -151,6 +151,8 @@ class DotNet481Tests(unittest.TestCase):
                 proc.assert_not_called()
 
     def test_false_release_cannot_lead_to_official_setup_if_not_cleared(self):
+        if trial.os.name == "nt":
+            self.skipTest("Real Wine trial intentionally refuses native Windows; Linux/macOS test covers this gate")
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             prefix = root / "prefix"
