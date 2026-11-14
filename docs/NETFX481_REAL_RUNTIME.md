@@ -62,6 +62,14 @@ However, the genuine Microsoft .NET Framework 4.8.1 installer still returned EXI
 
 The Windows 10 reported-version hypothesis did not fix the dependency. Further work must identify why Microsoft's installer short-circuits without deploying a usable CLR. Changes to a normal long-lived Mac user prefix are not justified by this result.
 
+## Next fix candidate: separate 32-bit Wine Mono registry view
+
+Winetricks [issue #2367](https://github.com/Winetricks/winetricks/issues/2367) identifies an additional `Wow6432Node` .NET Framework registry key left in Wine-derived prefixes which causes Microsoft Framework installers to refuse or skip the actual install. Our prior tests removed only the 64-bit `Release` indicator. That did not prove the 32-bit registry view was clean.
+
+The new opt-in experiment also inspects `HKLM\\Software\\Wow6432Node\\Microsoft\\NET Framework Setup\\NDP\\v4\\Full` for a `Release` value. It runs only in a marked disposable prefix and only when the independent managed fixture proves Wine Mono is active while the normal registry view falsely reports .NET 4.8.1. It deletes only that individual `Release` value, confirms it is absent with a second Windows registry query, and then launches the original signed Microsoft installer. If the key is absent, it reports NOT_NEEDED and continues. If a query, deletion or verification fails, it refuses to launch the installer.
+
+The report contains only the enums `before`, `action`, and `after`; it includes no raw registry contents, user paths or Microsoft binaries. This is a targeted reproducible test, not a promise that .NET 4.8.1 now installs. Do not run it on your normal persistent SOLIDWORKS Wine prefix.
+
 ## Technical boundaries
 
 The independent fixture does not test every SOLIDWORKS managed feature or COM interop, and running Microsoft's CLR under Wine would still not establish CAD readiness. WebView2 browser pixels, native graphics/window composition, installation manager UI, x86 helper processes and activation remain separate compatibility gates.
