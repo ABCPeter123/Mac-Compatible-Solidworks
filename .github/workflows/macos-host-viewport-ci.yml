@@ -1,0 +1,310 @@
+name: macOS host-window pixel verification for Win32 CAD viewport
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/live-cad-3d-session-ci.yml'
+      - 'probes/live_cad_viewport.c'
+      - 'scripts/live_cad_session_trial.py'
+      - 'tests/test_live_cad_session_trial.py'
+      - 'docs/LIVE_CAD_3D_SESSION.md'
+      - 'probes/macos_host_window_capture.swift'
+      - 'scripts/macos_host_window_trial.py'
+      - 'tests/test_macos_host_window_trial.py'
+      - 'docs/MACOS_HOST_VIEWPORT_CAPTURE.md'
+  workflow_dispatch:
+    inputs:
+      require_macos_window_pixels:
+        description: 'Fail unless actual macOS window pixels are verified'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  windows-reference:
+    name: Native Windows compile and exact independent saved-model verification
+    runs-on: windows-2025
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test status parser, strict no-leak reporting and saved-model checks
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests -p 'test_live_cad_session_trial.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'CAD session parser regression' }
+          python -m unittest discover -s tests -p 'test_macos_host_window_trial.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "CAD session evidence parser failed" }
+      - name: Build original x64 WGL executable with MSVC
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force build | Out-Null
+          $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw "MSVC x64 toolchain missing" }
+          $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+          $commands = @(
+            '@echo off'
+            ('call "' + $vcvars + '"')
+            'cl /nologo /W4 /O2 /MT /std:c11 /Fe:build\live_cad_viewport.exe probes\live_cad_viewport.c Opengl32.lib Gdi32.lib User32.lib'
+            'exit /b %errorlevel%'
+          )
+          Set-Content -LiteralPath build/compile-live-cad.cmd -Value $commands -Encoding ascii
+          & cmd.exe /d /c build\compile-live-cad.cmd
+          if ($LASTEXITCODE -ne 0) { throw "CAD WGL Win32 fixture compile failed" }
+      - name: Check independent native Windows saved-geometry verifier
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          # PowerShell creates the exact source-controlled synthetic state.
+          python -c "import os,pathlib; from scripts.live_cad_session_trial import EXPECTED; pathlib.Path(os.environ['RUNNER_TEMP'],'synthetic-cad-model.bin').write_bytes(EXPECTED)"
+          $doc = Join-Path $env:RUNNER_TEMP 'synthetic-cad-model.bin'
+          $output = & build\live_cad_viewport.exe verify $doc
+          if ($LASTEXITCODE -ne 0 -or $output -notcontains 'SWCOMPAT_LIVE_INDEPENDENT_REOPEN=PASS') {
+            throw "Native Windows synthetic model verification failed"
+          }
+          Remove-Item -LiteralPath $doc
+          Write-Output 'Native Windows original x64 saved-model verifier: PASS'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: self-authored-native-x64-cad-3d
+          path: build/live_cad_viewport.exe
+          retention-days: 1
+
+  mesa:
+    name: Obtain checksum-pinned Windows x64 software OpenGL implementation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install trusted 7z unpacker
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends p7zip-full
+      - name: Download and checksum verify Mesa 25.1.9 x64
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/mesa-extract build/mesa-payload
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/mesa-25.1.9.7z" \
+            "https://github.com/pal1000/mesa-dist-win/releases/download/25.1.9/mesa3d-25.1.9-release-mingw.7z"
+          echo "5d6cd7fe78c524a534bdfa92bfb437cb914c9d291ab5f4d48185a71f2d8a2210  $RUNNER_TEMP/mesa-25.1.9.7z" | sha256sum -c -
+          7z x -y -o"build/mesa-extract" "$RUNNER_TEMP/mesa-25.1.9.7z" >/dev/null
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+          from scripts.stage_zink import select_dlls
+          for name, source in select_dlls(Path("build/mesa-extract")).items():
+              shutil.copy2(source, Path("build/mesa-payload") / name)
+              print("Staged checked self-contained Mesa DLL:", name)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: self-authored-cad-software-gl
+          path: build/mesa-payload/*.dll
+          retention-days: 1
+
+  linux-wine-reference:
+    name: Synthetic 3D edit, frame readback and model reopen under Linux Wine
+    runs-on: ubuntu-24.04
+    needs: [windows-reference, mesa]
+    timeout-minutes: 17
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: self-authored-native-x64-cad-3d
+          path: build
+      - uses: actions/download-artifact@v4
+        with:
+          name: self-authored-cad-software-gl
+          path: build/mesa-payload
+      - name: Set up Wine and virtual X server
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine wine64 xvfb xauth libgl1-mesa-dri
+      - name: Run the same original Windows x64 executable against CPU OpenGL
+        shell: bash
+        run: |
+          set -euo pipefail
+          xvfb-run -a python -m swcompat --prefix "$RUNNER_TEMP/live-cad-linux" \
+            --logs-dir "$RUNNER_TEMP/live-cad-linux-logs" init
+          touch "$RUNNER_TEMP/live-cad-linux/.swcompat-netfx481-disposable"
+          python -m scripts.stage_zink --source build/mesa-payload \
+            --prefix "$RUNNER_TEMP/live-cad-linux" --manifest build/mesa-stage-linux.json
+          xvfb-run -a python -m scripts.live_cad_session_trial \
+            --wine "$(realpath "$(command -v wine)")" \
+            --prefix "$RUNNER_TEMP/live-cad-linux" \
+            --fixture build/live_cad_viewport.exe \
+            --output build/live-cad-linux.json \
+            --agree-disposable-prefix
+      - name: Require actual 3D pixels, model change and independent reopen on Linux
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.live_cad_session_trial import validate
+          r = json.loads(Path("build/live-cad-linux.json").read_text())
+          assert validate(r)
+          assert r["synthetic_cad_session"] is True
+          assert r["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+          PY
+
+  apple-silicon-wine:
+    name: Full synthetic 3D CAD interaction and document persistence under Apple Silicon Wine
+    runs-on: macos-15
+    needs: [windows-reference, mesa]
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: self-authored-native-x64-cad-3d
+          path: build
+      - uses: actions/download-artifact@v4
+        with:
+          name: self-authored-cad-software-gl
+          path: build/mesa-payload
+      - name: Acquire same pinned Wine 11.21 binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-devel-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-devel-11.21-osx64.tar.xz"
+          echo "9909b486657e10ab66c7279371ae1f990345b596b3b1b3a0cf21f28af24fa0ce  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-build"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-build"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Create isolated Apple Silicon Wine prefix and stage x64 Mesa llvmpipe
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat --prefix "$RUNNER_TEMP/live-cad-prefix" \
+            --logs-dir "$RUNNER_TEMP/live-cad-logs" init
+          touch "$RUNNER_TEMP/live-cad-prefix/.swcompat-netfx481-disposable"
+          python3 -m scripts.stage_zink --source build/mesa-payload \
+            --prefix "$RUNNER_TEMP/live-cad-prefix" \
+            --manifest build/live-cad-mesa-stage.json
+      - name: Drive original Windows x64 interactive model and verify independent saved model
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.live_cad_session_trial \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/live-cad-prefix" \
+            --fixture build/live_cad_viewport.exe \
+            --output build/live-cad-apple-silicon.json \
+            --agree-disposable-prefix
+      - name: Compile original native macOS AppKit window screenshot calibrator
+        shell: bash
+        run: |
+          set -euo pipefail
+          swiftc -O -framework AppKit -framework CoreGraphics \
+            -o build/macos_host_window_capture \
+            probes/macos_host_window_capture.swift
+      - name: Compare native AppKit screenshot and Wine CAD viewport host screenshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARGS=()
+          if [ "${{ inputs.require_macos_window_pixels }}" = "true" ]; then
+            ARGS+=(--require-macos-window-pixels)
+          fi
+          python3 -m scripts.macos_host_window_trial \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/live-cad-prefix" \
+            --fixture build/live_cad_viewport.exe \
+            --host build/macos_host_window_capture \
+            --output build/host-macos-window-visibility.json \
+            --agree-disposable-prefix \
+            "${ARGS[@]}"
+      - name: Report host-window presentation separately from WGL framebuffer
+        shell: bash
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.macos_host_window_trial import validate
+          path = Path("build/host-macos-window-visibility.json")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("## macOS screenshot visibility (not just WGL back-buffer pixels)\n\n")
+              if not path.is_file():
+                  f.write("No host screenshot experiment report: NOT VERIFIED\n")
+              else:
+                  r = json.loads(path.read_text())
+                  if not validate(r):
+                      raise ValueError("Unsafe host capture report")
+                  for field in ("native_control", "wine_host_pixels", "windows_3d_session",
+                                "saved_model", "independent_model_reopen", "cleanup",
+                                "host_window_visibility_proven",
+                                "native_solidworks_compatibility"):
+                      f.write(f"{field}: **${r[field]}**\n\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-host-window-enums-only
+          path: build/host-macos-window-visibility.json
+          retention-days: 7
+          if-no-files-found: warn
+      - name: Summarize finite CAD checks only
+        shell: bash
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.live_cad_session_trial import validate
+          path = Path("build/live-cad-apple-silicon.json")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("## Synthetic 3D Win32 WGL edit session, not actual SOLIDWORKS\n\n")
+              if not path.exists():
+                  f.write("No verified CAD stage result.\n")
+              else:
+                  r = json.loads(path.read_text())
+                  if not validate(r):
+                      raise ValueError("Unsafe synthetic CAD report")
+                  for part in ("session", "independent_reopen"):
+                      f.write(f"{part}: **{r[part]['result']}**; {r[part]['reason']}\n\n")
+                  for part in ("saved_model", "cleanup", "synthetic_cad_session",
+                               "native_solidworks_cad", "solidworks_compatibility"):
+                      f.write(f"{part}: **{r[part]}**\n\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: apple-silicon-cad-3d-fixed-enums-only
+          path: build/live-cad-apple-silicon.json
+          retention-days: 7
+          if-no-files-found: warn
+      - name: Require actual complete synthetic session, not merely process launch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.live_cad_session_trial import validate
+          r = json.loads(Path("build/live-cad-apple-silicon.json").read_text())
+          assert validate(r)
+          assert r["synthetic_cad_session"] is True
+          assert r["native_solidworks_cad"] is False
+          assert r["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+          PY
