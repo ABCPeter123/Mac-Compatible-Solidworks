@@ -105,7 +105,7 @@ jobs:
             --sha256-file build/netfx481.sha256 \
             --probe build/netfx481_runtime_probe.exe \
             --output build/netfx481-experiment.json \
-            --timeout 210 --agree-disposable-prefix
+            --timeout 210 --agree-disposable-prefix --experiment-clear-false-release
       - name: Report exact outcome, never turn Wine Mono or registry spoof into Microsoft Framework
         if: always()
         shell: bash
@@ -120,6 +120,7 @@ jobs:
                   out.write("Trial did not yield a complete report. No compatibility claim.\n")
               else:
                   result = json.loads(report.read_text(encoding="utf-8"))
+                  out.write("False preexisting .NET registry adjustment: **" + result["registry_adjustment"] + "**\n\n")
                   out.write("Original signed Microsoft offline setup: **" + result["install_execution"] + "**\n\n")
                   out.write("Framework registry signal: **" + result["after"]["registry"] + "**\n\n")
                   out.write("Independent CLR identity: **" + result["after"]["clr_family"] + "**\n\n")
