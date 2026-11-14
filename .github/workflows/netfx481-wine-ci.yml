@@ -1,0 +1,155 @@
+name: Genuine Microsoft .NET Framework 4.8.1 on Apple Silicon Wine
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/netfx481-wine-ci.yml'
+      - 'probes/netfx481_runtime_probe.cs'
+      - 'scripts/netfx481_trial.py'
+      - 'tests/test_netfx481_trial.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-microsoft:
+    name: Verify signed official .NET 4.8.1 installer and independent probe
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate self-authored framework verification tests
+        shell: pwsh
+        run: python -m unittest discover -s tests -p 'test_netfx481_trial.py' -v
+      - name: Compile original C# Framework probe against native Windows Framework
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force build | Out-Null
+          $csc = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          if (!(Test-Path $csc)) { throw "Windows Framework C# compiler is missing" }
+          & $csc /nologo /target:exe /reference:System.Core.dll /reference:System.Xml.dll /out:build\netfx481_runtime_probe.exe probes\netfx481_runtime_probe.cs
+          if ($LASTEXITCODE -ne 0) { throw "C# probe build failed" }
+          & build\netfx481_runtime_probe.exe
+          if ($LASTEXITCODE -ne 0) { throw "Original managed fixture failed on native Windows" }
+      - name: Download and authenticate original Microsoft .NET Framework 4.8.1 offline installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $url = "https://download.microsoft.com/download/4/b/2/cd00d4ed-ebdd-49ee-8a33-eabc3d1030e3/NDP481-x86-x64-AllOS-ENU.exe"
+          curl.exe --fail --location --retry 3 --max-time 600 --output build/NDP481-x86-x64-AllOS-ENU.exe $url
+          if ($LASTEXITCODE -ne 0) { throw "Official Microsoft offline installer unavailable" }
+          $file = Get-Item build/NDP481-x86-x64-AllOS-ENU.exe
+          if ($file.Length -lt 15728640 -or $file.Length -gt 262144000) { throw "Unexpected Microsoft package size" }
+          $sig = Get-AuthenticodeSignature -LiteralPath $file.FullName
+          if ($sig.Status -ne [System.Management.Automation.SignatureStatus]::Valid) { throw "Authenticode validation failed" }
+          if ($null -eq $sig.SignerCertificate -or $sig.SignerCertificate.Subject -notmatch '(^|, )O=Microsoft Corporation(,|$)') { throw "Unexpected publisher" }
+          $sha = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -LiteralPath build/netfx481.sha256 -Value $sha -NoNewline -Encoding ascii
+          Write-Output "Actual Microsoft .NET Framework 4.8.1 offline installer publisher and full SHA256 verified"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-netfx481-original-microsoft-runtime
+          path: |
+            build/NDP481-x86-x64-AllOS-ENU.exe
+            build/netfx481.sha256
+            build/netfx481_runtime_probe.exe
+          compression-level: 0
+          retention-days: 1
+
+  macos-real-netfx:
+    name: Real .NET 4.8.1 framework install in disposable Apple Silicon Wine
+    runs-on: macos-15
+    needs: verify-microsoft
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: signed-netfx481-original-microsoft-runtime
+          path: build
+      - name: Fetch and verify fixed Wine 11.21 Apple Silicon-compatible x64 build
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-devel-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-devel-11.21-osx64.tar.xz"
+          echo "9909b486657e10ab66c7279371ae1f990345b596b3b1b3a0cf21f28af24fa0ce  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-build"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-build"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Initialize isolated, explicitly disposable Wine prefix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat --prefix "$RUNNER_TEMP/netfx481-prefix" --logs-dir "$RUNNER_TEMP/netfx481-logs" init
+          touch "$RUNNER_TEMP/netfx481-prefix/.swcompat-netfx481-disposable"
+          python3 -m swcompat --prefix "$RUNNER_TEMP/netfx481-prefix" --logs-dir "$RUNNER_TEMP/netfx481-logs" set-winver win11
+      - name: Install original Microsoft .NET 4.8.1 and validate runtime identity and managed execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx481_trial \
+            --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx481-prefix" \
+            --installer build/NDP481-x86-x64-AllOS-ENU.exe \
+            --sha256-file build/netfx481.sha256 \
+            --probe build/netfx481_runtime_probe.exe \
+            --output build/netfx481-experiment.json \
+            --timeout 210 --agree-disposable-prefix --experiment-clear-false-release
+      - name: Report exact outcome, never turn Wine Mono or registry spoof into Microsoft Framework
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          report = Path("build/netfx481-experiment.json")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write("## Genuine Microsoft .NET Framework 4.8.1 under Apple Silicon Wine\n\n")
+              if not report.is_file():
+                  out.write("Trial did not yield a complete report. No compatibility claim.\n")
+              else:
+                  result = json.loads(report.read_text(encoding="utf-8"))
+                  out.write("False preexisting .NET registry adjustment: **" + result["registry_adjustment"] + "**\n\n")
+                  out.write("Original signed Microsoft offline setup: **" + result["install_execution"] + "**\n\n")
+                  out.write("Framework registry signal: **" + result["after"]["registry"] + "**\n\n")
+                  out.write("Independent CLR identity: **" + result["after"]["clr_family"] + "**\n\n")
+                  out.write("Real managed operations: **" + result["after"]["managed"] + "**\n\n")
+                  out.write("Default Microsoft CLR readiness: **" + str(result["framework_runtime_ready"]) + "**\n\n")
+                  out.write("Native-first CLR family: **" + result["after_native_first"]["clr_family"] + "**\n\n")
+                  out.write("Native-first readiness: **" + str(result["native_first_runtime_ready"]) + "**\n\n")
+                  out.write("Native-only CLR family: **" + result["after_native_only"]["clr_family"] + "**\n\n")
+                  out.write("Native-only readiness: **" + str(result["native_only_runtime_ready"]) + "**\n\n")
+                  out.write("SOLIDWORKS installation, activation and CAD: **NOT TESTED**\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netfx481-macos-original-microsoft-runtime-sanitized
+          path: build/netfx481-experiment.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Ensure the trial produced a complete privacy-safe result
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path("build/netfx481-experiment.json").read_text())
+          assert data["scope"] == "MICROSOFT_NETFX481_WINE_DISPOSABLE_EXPERIMENT"
+          assert data["media_sha256_verified"] is True
+          assert data["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+          assert "after_native_first" in data and "after_native_only" in data
+          assert type(data["runtime_ready_with_controlled_override"]) is bool
+          PY
