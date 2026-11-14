@@ -68,6 +68,11 @@ WINDOW_LINES = {
     "SWCOMPAT_SW_UI_CANDIDATE_PROCESSES",
     "SWCOMPAT_SW_UI_CANDIDATE_WINDOWS",
     "SWCOMPAT_SW_UI_VISIBLE_LARGE_WINDOWS",
+    "SWCOMPAT_SW_UI_PARENT_LAYERED",
+    "SWCOMPAT_SW_UI_PARENT_NO_REDIRECTION",
+    "SWCOMPAT_SW_UI_CHILD_VISIBLE",
+    "SWCOMPAT_SW_UI_CHILD_LAYERED",
+    "SWCOMPAT_SW_UI_CHILD_NO_REDIRECTION",
 }
 WINDOW_ENUMS = {
     "SWCOMPAT_SW_UI_RESPONSIVENESS": {"RESPONSIVE", "UNRESPONSIVE", "NO_CANDIDATE"},
@@ -79,6 +84,9 @@ WINDOW_ENUMS = {
     },
     "SWCOMPAT_SW_UI_DIRECT_GETPIXEL": {
         "NONUNIFORM", "UNIFORM", "READBACK_FAILED", "NO_CANDIDATE",
+    },
+    "SWCOMPAT_SW_UI_CHILD_GDI": {
+        "NONUNIFORM", "UNIFORM", "READBACK_FAILED", "NO_CHILD",
     },
 }
 
@@ -111,8 +119,21 @@ def parse_window_probe(text: str) -> dict | None:
         return None
     no_candidate = values["SWCOMPAT_SW_UI_CANDIDATE_WINDOWS"] == 0
     for field in WINDOW_ENUMS:
-        if (values[field] == "NO_CANDIDATE") != no_candidate:
-            return None
+        if field != "SWCOMPAT_SW_UI_CHILD_GDI":
+            if (values[field] == "NO_CANDIDATE") != no_candidate:
+                return None
+    children = values["SWCOMPAT_SW_UI_CHILD_VISIBLE"]
+    child_gdi = values["SWCOMPAT_SW_UI_CHILD_GDI"]
+    if (children == 0) != (child_gdi == "NO_CHILD"):
+        return None
+    if (values["SWCOMPAT_SW_UI_CHILD_LAYERED"] > children
+            or values["SWCOMPAT_SW_UI_CHILD_NO_REDIRECTION"] > children):
+        return None
+    if (values["SWCOMPAT_SW_UI_PARENT_LAYERED"] > values["SWCOMPAT_SW_UI_CANDIDATE_WINDOWS"]
+            or values["SWCOMPAT_SW_UI_PARENT_NO_REDIRECTION"] > values["SWCOMPAT_SW_UI_CANDIDATE_WINDOWS"]):
+        return None
+    if no_candidate and children != 0:
+        return None
     stage = values["SWCOMPAT_SW_UI_GDI_FAILURE_STAGE"]
     gdi = values["SWCOMPAT_SW_UI_GDI_CLIENT"]
     if not no_candidate:
@@ -130,6 +151,12 @@ def parse_window_probe(text: str) -> dict | None:
         "gdi_client": gdi,
         "gdi_failure_stage": stage,
         "direct_getpixel": values["SWCOMPAT_SW_UI_DIRECT_GETPIXEL"],
+        "parent_layered": values["SWCOMPAT_SW_UI_PARENT_LAYERED"],
+        "parent_no_redirection": values["SWCOMPAT_SW_UI_PARENT_NO_REDIRECTION"],
+        "child_visible": children,
+        "child_layered": values["SWCOMPAT_SW_UI_CHILD_LAYERED"],
+        "child_no_redirection": values["SWCOMPAT_SW_UI_CHILD_NO_REDIRECTION"],
+        "child_gdi": child_gdi,
     }
 
 
@@ -238,6 +265,18 @@ def attempt_launch(wine: Path, prefix: Path, installer: Path, *, timeout: int, w
         else "NO_CANDIDATE" if observations
         else "NOT_VERIFIED"
     )
+    child_visible_max = max((sample["child_visible"] for sample in observations), default=0)
+    parent_layered_max = max((sample["parent_layered"] for sample in observations), default=0)
+    parent_no_redirection_max = max((sample["parent_no_redirection"] for sample in observations), default=0)
+    child_layered_max = max((sample["child_layered"] for sample in observations), default=0)
+    child_no_redirection_max = max((sample["child_no_redirection"] for sample in observations), default=0)
+    child_gdi = (
+        "NONUNIFORM" if any(s["child_gdi"] == "NONUNIFORM" for s in observations)
+        else "UNIFORM" if any(s["child_gdi"] == "UNIFORM" for s in observations)
+        else "READBACK_FAILED" if any(s["child_gdi"] == "READBACK_FAILED" for s in observations)
+        else "NO_CHILD" if observations
+        else "NOT_VERIFIED"
+    )
     gdi_failure_stages = sorted({
         s["gdi_failure_stage"] for s in observations
         if s["gdi_failure_stage"] not in {"NO_CANDIDATE", "NONE"}
@@ -268,6 +307,12 @@ def attempt_launch(wine: Path, prefix: Path, installer: Path, *, timeout: int, w
         "installer_gdi_client_variation": gdi_client,
         "installer_gdi_failure_stage": gdi_failure_stage,
         "installer_direct_getpixel": direct_getpixel,
+        "installer_parent_layered_max": parent_layered_max,
+        "installer_parent_no_redirection_max": parent_no_redirection_max,
+        "installer_child_visible_max": child_visible_max,
+        "installer_child_layered_max": child_layered_max,
+        "installer_child_no_redirection_max": child_no_redirection_max,
+        "installer_child_gdi": child_gdi,
         "macos_onscreen_pixels": "NOT_VERIFIED",
         "installation_manager_ui": "NOT_VERIFIED",
         "full_installation": "NOT_VERIFIED",
@@ -325,6 +370,9 @@ def main(argv: list[str] | None = None) -> int:
         print("Installer GDI client readback:", summary["installer_gdi_client_variation"])
         print("Installer GDI failure stage:", summary["installer_gdi_failure_stage"])
         print("Installer direct GetPixel:", summary["installer_direct_getpixel"])
+        print("Installer child HWNDs (max):", summary["installer_child_visible_max"])
+        print("Installer child GDI:", summary["installer_child_gdi"])
+        print("Installer parent no-redirection (max):", summary["installer_parent_no_redirection_max"])
         print("macOS onscreen installer pixels: NOT_VERIFIED")
     print("SOLIDWORKS installation: NOT_VERIFIED")
     return 0 if summary["bootstrapper_process"] in {"NOT_EXECUTED", "EXIT_ZERO", "TIMEOUT"} else 1
