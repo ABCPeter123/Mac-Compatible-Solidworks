@@ -95,8 +95,11 @@ def inspect(wine: Path, prefix: Path, msi: Path, manifest: Path,
             timeout: int = 150) -> dict:
     if os.name == "nt" or any(x.is_symlink() for x in (wine, prefix, msi, manifest)):
         raise ValueError("MSI test must only run on unlinked disposable Wine")
-    wine, prefix, msi, manifest = (
-        x.resolve(strict=True) for x in (wine, prefix, msi, manifest))
+    try:
+        wine, prefix, msi, manifest = (
+            x.resolve(strict=True) for x in (wine, prefix, msi, manifest))
+    except OSError as exc:
+        raise ValueError("Self-authored MSI media or disposable prefix missing") from exc
     validate_prefix(prefix)
     if not wine.is_file() or not os.access(wine, os.X_OK):
         raise ValueError("Wine executable missing")

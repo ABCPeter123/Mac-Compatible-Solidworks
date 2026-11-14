@@ -1,0 +1,171 @@
+name: Independent CAD document create edit reopen on native Windows and Apple Silicon Wine
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/cad-ole-document-ci.yml'
+      - 'probes/cad_ole_document.cpp'
+      - 'scripts/cad_ole_document_trial.py'
+      - 'tests/test_cad_ole_document_trial.py'
+      - 'docs/CAD_POSTINSTALL_PARALLEL.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-reference:
+    name: Verify synthetic CAD OLE structured document across three Windows x64 processes
+    runs-on: windows-2025
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Strict privacy and process-stage regression tests
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests -p 'test_cad_ole_document_trial.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Unsafe CAD document evidence" }
+      - name: Compile native Windows x64 COM structured document fixture
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force build | Out-Null
+          $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw "MSVC x64 toolchain missing" }
+          $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+          $commands = @(
+            '@echo off'
+            ('call "' + $vcvars + '"')
+            'cl /nologo /W4 /EHsc /O2 /MT /Fe:build\cad_ole_document.exe probes\cad_ole_document.cpp Ole32.lib'
+            'exit /b %errorlevel%'
+          )
+          Set-Content -LiteralPath build/compile-cad-ole.cmd -Value $commands -Encoding ascii
+          & cmd.exe /d /c build\compile-cad-ole.cmd
+          if ($LASTEXITCODE -ne 0) { throw "CAD OLE fixture compile failed" }
+      - name: Run create, edit and verify in three independent native Windows processes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $doc = Join-Path $env:RUNNER_TEMP ("swcompat-cad-doc-" + [guid]::NewGuid().ToString("N") + ".cfb")
+          if (Test-Path -LiteralPath $doc) { throw "Test document unexpectedly exists" }
+          foreach ($phase in @('create', 'edit', 'verify')) {
+            $lines = & build\cad_ole_document.exe $phase $doc
+            if ($LASTEXITCODE -ne 0 -or
+                $lines -notcontains 'SWCOMPAT_CAD_DOC_SCHEMA=1' -or
+                $lines -notcontains 'SWCOMPAT_CAD_DOC_RESULT=PASS' -or
+                $lines -notcontains ('SWCOMPAT_CAD_DOC_PHASE=' + $phase.ToUpperInvariant())) {
+              throw ("Native Windows COM structured document phase failed: " + $phase)
+            }
+            Write-Output ("Native Windows synthetic CAD document " + $phase + ": PASS")
+          }
+          if (!(Test-Path -LiteralPath $doc)) { throw "Missing document after Windows verification" }
+          $data = [System.IO.File]::ReadAllBytes($doc)
+          if ($data.Length -lt 512 -or
+              [Convert]::ToHexString($data[0..7]) -cne "D0CF11E0A1B11AE1") {
+            throw "Original Windows CFB header not written"
+          }
+          Remove-Item -LiteralPath $doc
+          if (Test-Path -LiteralPath $doc) { throw "Native Windows cleanup failed" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: self-authored-cad-ole-windows-x64-fixture
+          path: build/cad_ole_document.exe
+          retention-days: 1
+
+  apple-silicon-wine:
+    name: Test independent synthetic CAD editing, save and reopen in Apple Silicon Wine
+    needs: windows-reference
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: self-authored-cad-ole-windows-x64-fixture
+          path: build
+      - name: Download pinned and hash-verified Wine 11.21
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-devel-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-devel-11.21-osx64.tar.xz"
+          echo "9909b486657e10ab66c7279371ae1f990345b596b3b1b3a0cf21f28af24fa0ce  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-build"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-build"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Prepare new marked Wine prefix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat \
+            --prefix "$RUNNER_TEMP/cad-document-prefix" \
+            --logs-dir "$RUNNER_TEMP/cad-document-logs" init
+          touch "$RUNNER_TEMP/cad-document-prefix/.swcompat-netfx481-disposable"
+          python3 -m swcompat \
+            --prefix "$RUNNER_TEMP/cad-document-prefix" \
+            --logs-dir "$RUNNER_TEMP/cad-document-logs" set-winver win10
+      - name: Create, edit, verify and clean original x64 Windows COM compound document
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.cad_ole_document_trial \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/cad-document-prefix" \
+            --fixture build/cad_ole_document.exe \
+            --output build/cad-ole-postinstall-stage.json \
+            --agree-disposable-prefix
+      - name: Publish only finite structured-document stage statuses
+        shell: bash
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.cad_ole_document_trial import validate
+          path = Path("build/cad-ole-postinstall-stage.json")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("## Independent CAD-style COM document persistence, not SOLIDWORKS\n\n")
+              if not path.is_file():
+                  f.write("No completed OLE compound document status report.\n")
+              else:
+                  report = json.loads(path.read_text())
+                  if not validate(report):
+                      raise ValueError("Unsafe CAD-like document report")
+                  for phase in ("create", "edit", "verify"):
+                      f.write(f"{phase}: **{report[phase]['result']}**, "
+                              f"reason **{report[phase]['reason']}**\n\n")
+                  for field in ("after_create", "after_edit", "after_verify",
+                                "cleanup", "synthetic_document_roundtrip",
+                                "native_solidworks_document", "solidworks_compatibility"):
+                      f.write(f"{field}: **{report[field]}**\n\n")
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: apple-silicon-synthetic-cad-ole-enums-only
+          path: build/cad-ole-postinstall-stage.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Require actual native Windows fixture run, never fake SOLIDWORKS
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.cad_ole_document_trial import validate
+          r = json.loads(Path("build/cad-ole-postinstall-stage.json").read_text())
+          assert validate(r)
+          assert r["create"]["result"] in {"PASS", "FAIL"}
+          assert r["cleanup"] == "REMOVED"
+          assert r["native_solidworks_document"] is False
+          assert r["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+          PY
