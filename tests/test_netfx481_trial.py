@@ -112,6 +112,70 @@ class DotNet481Tests(unittest.TestCase):
             self.assertEqual(trial.run_installer(Path("wine"), Path("prefix"),
                                                   Path("installer"), 90), ("START_FAILED", None))
 
+    def test_clear_false_release_changes_only_disposable_wine_registry(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "drive_c").mkdir()
+            (root / "system.reg").write_text("")
+            (root / trial.SENTINEL).write_text("")
+            operations = []
+            def run(command, **kwargs):
+                operations.append((command, kwargs))
+                return mock.Mock(returncode=0 if command[2] == "delete" else 1)
+            with mock.patch.object(trial.subprocess, "run", side_effect=run):
+                result = trial.clear_false_release(Path("wine"), root, state(runtime="MONO"))
+            self.assertEqual(result, "CLEARED")
+            self.assertEqual(len(operations), 2)
+            self.assertEqual(operations[0][0][2:], [
+                "delete", trial.NETFX_FULL_KEY, "/v", "Release", "/f"
+            ])
+            self.assertEqual(operations[1][0][2:], [
+                "query", trial.NETFX_FULL_KEY, "/v", "Release"
+            ])
+            for _, options in operations:
+                self.assertEqual(options["env"]["WINEPREFIX"], str(root))
+                self.assertNotIn("shell", options)
+
+    def test_no_registry_deletion_without_mono_false_release_or_marker(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "drive_c").mkdir()
+            (root / "system.reg").write_text("")
+            with mock.patch.object(trial.subprocess, "run") as proc:
+                with self.assertRaises(ValueError):
+                    trial.clear_false_release(Path("wine"), root, state(runtime="MONO"))
+                (root / trial.SENTINEL).write_text("")
+                self.assertEqual(
+                    trial.clear_false_release(Path("wine"), root, state()), "NOT_APPLICABLE"
+                )
+                proc.assert_not_called()
+
+    def test_false_release_cannot_lead_to_official_setup_if_not_cleared(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            prefix = root / "prefix"
+            (prefix / "drive_c").mkdir(parents=True)
+            (prefix / "system.reg").write_text("")
+            (prefix / trial.SENTINEL).write_text("")
+            wine = root / "wine"
+            wine.write_bytes(b"synthetic")
+            wine.chmod(0o755)
+            installer = root / "NDP481-x86-x64-AllOS-ENU.exe"
+            installer.write_bytes(b"synthetic")
+            manifest = root / "hash.txt"
+            manifest.write_text("0" * 64)
+            fixture = root / "netfx481_runtime_probe.exe"
+            fixture.write_bytes(b"synthetic")
+            with mock.patch.object(trial, "verify_media", return_value=True), \
+                 mock.patch.object(trial, "probe", return_value=state(runtime="MONO")), \
+                 mock.patch.object(trial, "clear_false_release", return_value="STILL_PRESENT_OR_UNVERIFIED"), \
+                 mock.patch.object(trial, "run_installer") as installer_runner:
+                result = trial.trial(wine, prefix, installer, manifest, fixture,
+                                     experiment_clear_false_release=True)
+            self.assertEqual(result["registry_adjustment"], "STILL_PRESENT_OR_UNVERIFIED")
+            self.assertEqual(result["install_execution"], "SKIPPED_REGISTRY_NOT_CORRECTED")
+            installer_runner.assert_not_called()
+
     def test_real_run_requires_manifest_digest(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
