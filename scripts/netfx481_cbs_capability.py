@@ -84,7 +84,23 @@ def run(wine: Path, prefix: Path, executable: Path, timeout: int = 30) -> dict:
         except (OSError, subprocess.TimeoutExpired):
             rc = 124
         stdout.seek(0)
-        result = parse(stdout.read(MAX_OUTPUT + 1), rc)
+        raw = stdout.read(MAX_OUTPUT + 1)
+        result = parse(raw, rc)
+    # Never show raw Wine output or private paths. Only fixed lifecycle states
+    # and a bounded count of our own expected markers may enter job logs.
+    if rc == 124:
+        status = "TIMED_OUT_OR_LAUNCH_FAILED"
+    elif rc != 0:
+        status = "PROCESS_NONZERO"
+    elif result == blank():
+        status = "INVALID_OR_INCOMPLETE_REPORT"
+    else:
+        status = "STRUCTURED_REPORT"
+    count = min(len(FIELDS), sum(
+        1 for line in raw.splitlines() if line.startswith(b"SWCOMPAT_CBS_")
+    ))
+    print("Win32 CBS fixture execution:", status)
+    print("Self-authored CBS marker lines:", count)
     if not validate(result):
         raise ValueError("Invalid CBS capability evidence")
     return result
