@@ -9,7 +9,7 @@
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="SWCompatMsiProbeDir" Name="SWCompatMsiProbe">
         <Component Id="ProbeFileComponent" Guid="{77ED3F8A-C4B5-47A3-AE1D-4AA81E1C07AB}">
-          <File Id="ProbeMarkerFile" Source="msi_transaction_marker.txt" KeyPath="yes" />
+          <File Id="ProbeMarkerFile" Source="probes/msi_transaction_marker.txt" KeyPath="yes" />
         </Component>
       </Directory>
     </StandardDirectory>
