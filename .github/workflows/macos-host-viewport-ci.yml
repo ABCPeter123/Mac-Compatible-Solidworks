@@ -223,9 +223,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ARGS=()
+          REQUIRE_FLAG=""
           if [ "${{ inputs.require_macos_window_pixels }}" = "true" ]; then
-            ARGS+=(--require-macos-window-pixels)
+            REQUIRE_FLAG="--require-macos-window-pixels"
           fi
           python3 -m scripts.macos_host_window_trial \
             --wine "$SWCOMPAT_WINE" \
@@ -234,7 +234,7 @@ jobs:
             --host build/macos_host_window_capture \
             --output build/host-macos-window-visibility.json \
             --agree-disposable-prefix \
-            "${ARGS[@]}"
+            $REQUIRE_FLAG
       - name: Report host-window presentation separately from WGL framebuffer
         shell: bash
         if: always()
@@ -256,7 +256,7 @@ jobs:
                                 "saved_model", "independent_model_reopen", "cleanup",
                                 "host_window_visibility_proven",
                                 "native_solidworks_compatibility"):
-                      f.write(f"{field}: **${r[field]}**\n\n")
+                      f.write(f"{field}: **{r[field]}**\n\n")
           PY
       - uses: actions/upload-artifact@v4
         if: always()
