@@ -10,6 +10,10 @@ from scripts import msi_transaction_trial as trial
 
 
 class SelfAuthoredMSITests(unittest.TestCase):
+    def test_repository_marker_is_exact_lf_bytes_on_every_ci_os(self):
+        original = Path(__file__).resolve().parents[1] / "probes" / "msi_transaction_marker.txt"
+        self.assertEqual(original.read_bytes(), trial.MARKER)
+
     def test_verifies_sha256_and_never_accepts_wrong_media(self):
         with TemporaryDirectory() as td:
             root = Path(td)
