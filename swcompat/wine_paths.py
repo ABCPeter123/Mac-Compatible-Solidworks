@@ -20,8 +20,11 @@ def windows_media_path(wine: Path, prefix: Path, path: Path) -> str:
 
     Never print raw Wine output (paths may contain usernames/private data).
     """
-    target = path.expanduser().resolve(strict=True)
-    if not target.is_file() or target.is_symlink():
+    source = path.expanduser()
+    if source.is_symlink():
+        raise ValueError("Linked media is not accepted")
+    target = source.resolve(strict=True)
+    if not target.is_file():
         raise ValueError("Windows Installer needs a real local media file")
     if os.name == "nt":
         raise ValueError("Path conversion must run through Wine")
