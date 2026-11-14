@@ -67,6 +67,10 @@ def run(wine: Path, prefix: Path, executable: Path, timeout: int = 30) -> dict:
     if (executable.is_symlink() or not executable.is_file()
             or executable.name.casefold() != "netfx481_cbs_capability.exe"):
         raise ValueError("Expected self-authored signed-on-Windows CBS capability probe")
+    # This fixture is passed from CI as relative "build/fixture.exe", while
+    # subprocess.cwd is set to its parent. Resolve it first, or Wine searches
+    # for the nonexistent "build/build/fixture.exe" and reports Unix 53.
+    executable = executable.resolve(strict=True)
     if not wine.is_file() or wine.is_symlink():
         raise ValueError("Expected fixed Wine binary")
     env = os.environ.copy()
