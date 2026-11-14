@@ -177,7 +177,8 @@ jobs:
                       raise ValueError("Unsafe original .NET 4.0 report")
                   for field in ("status", "winver", "registry64", "registry32", "mono",
                                 "selftest", "installer_status", "installer_exit",
-                                "reboot", "clr64_before", "clr64_after", "clr32_after",
+                                "installer_child_seen", "installer_child_lifecycle",
+                                "installer_child_exit", "reboot", "clr64_before", "clr64_after", "clr32_after",
                                 "mscorlib64_after", "native_loader", "runtime_family",
                                 "managed_functionality", "candidate_native40",
                                 "netfx481_ready", "solidworks_compatibility"):

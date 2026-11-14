@@ -85,9 +85,11 @@ class Netfx40LegacyTests(unittest.TestCase):
             absent = {key: ("ABSENT", None) for key in ITEMS}
             samples = [absent, absent]
             test = {"status": "EXIT_CAPTURED", "category": "REBOOT_REQUIRED",
-                    "exit_hex": "00000BC2"}
+                    "exit_hex": "00000BC2", "child_seen": "NOT_OBSERVED",
+                    "child_lifecycle": "NOT_OBSERVED", "child_exit": "NOT_VERIFIED"}
             installed = {"status": "EXIT_CAPTURED", "category": "SUCCESS",
-                         "exit_hex": "00000000"}
+                         "exit_hex": "00000000", "child_seen": "OBSERVED",
+                         "child_lifecycle": "ALL_EXITED", "child_exit": "NONZERO"}
             with (
                 mock.patch.object(legacy, "verify_media"),
                 mock.patch.object(legacy, "snapshot", side_effect=samples),
@@ -107,6 +109,9 @@ class Netfx40LegacyTests(unittest.TestCase):
                       for p in (wine, prefix, *paths)))
             self.assertTrue(legacy.validate(result))
             self.assertEqual(result["installer_exit"], "SUCCESS")
+            self.assertEqual(result["installer_child_seen"], "OBSERVED")
+            self.assertEqual(result["installer_child_lifecycle"], "ALL_EXITED")
+            self.assertEqual(result["installer_child_exit"], "NONZERO")
             self.assertEqual(result["installer_status"], "EXIT_CAPTURED")
             self.assertEqual(result["selftest"], "PASS")
             self.assertEqual(result["clr64_after"], "ABSENT")
@@ -122,6 +127,8 @@ class Netfx40LegacyTests(unittest.TestCase):
                 ("mono", "C:\\private"),
                 ("clr64_after", "PRIVATE_DLL_PATH"),
                 ("candidate_native40", 1),
+                ("installer_child_exit", "C:\\fake\\private"),
+                ("installer_child_lifecycle", "INVENTED_CHILD"),
                 ("netfx481_ready", True),
             ]:
                 changed = dict(result)
