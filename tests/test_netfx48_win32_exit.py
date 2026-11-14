@@ -43,3 +43,28 @@ class NetFx48Win32Tests(TestCase):
                     with self.assertRaisesRegex(ValueError, "Expected .NET 4.8-specific"):
                         monitor.launch(root / "wine", root, installer,
                                        root / "wrong-launcher.exe")
+
+    def test_selftest_no_output_is_not_mistaken_for_original_setup_failure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            fixture = root / "netfx48_win32_launch.exe"
+            fixture.write_bytes(b"fixture")
+            class Silent:
+                returncode = 1
+            with mock.patch("scripts.netfx481_trial.validate_prefix"):
+                with mock.patch.object(monitor.subprocess, "run", return_value=Silent()):
+                    self.assertEqual(monitor.selftest(root / "wine", root, fixture),
+                                     "NO_OUTPUT")
+
+    def test_start_failed_process_reports_are_complete_and_safe(self):
+        payload = ("SWCOMPAT_WIN32_SETUP_SCHEMA=1\n"
+                   "SWCOMPAT_WIN32_SETUP_STATUS=START_FAILED\n"
+                   "SWCOMPAT_WIN32_SETUP_EXIT_HEX=FFFFFFFF\n"
+                   "SWCOMPAT_WIN32_SETUP_CHILD_SEEN=UNKNOWN\n"
+                   "SWCOMPAT_WIN32_SETUP_CHILD_LIFECYCLE=UNKNOWN\n"
+                   "SWCOMPAT_WIN32_SETUP_CHILD_EXIT=NOT_VERIFIED\n").encode()
+        result = monitor.parse(payload, 1)
+        from scripts.netfx481_win32_exit import validate
+        self.assertEqual(result["status"], "START_FAILED")
+        self.assertTrue(validate(result))
+        self.assertEqual(monitor.termination(result), ("START_FAILED", None))
