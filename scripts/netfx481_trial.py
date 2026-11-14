@@ -189,15 +189,25 @@ def clear_false_release(wine: Path, prefix: Path, before: dict) -> str:
     return "CLEARED" if query == 1 else "STILL_PRESENT_OR_UNVERIFIED"
 
 
-def run_installer(wine: Path, prefix: Path, installer: Path, timeout: int) -> tuple[str, int | None]:
+def run_installer(wine: Path, prefix: Path, installer: Path, timeout: int, *,
+                  log_windows_path: str | None = None) -> tuple[str, int | None]:
     env = os.environ.copy()
     env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64", "WINEDEBUG": "-all"})
     # /q is Microsoft's documented unattended option. Do not supply
     # /AcceptEULA or make any claims about licensing agreement on behalf
     # of the end user. The installer may refuse to run without it.
+    # Microsoft .NET Framework deployment supports /log <file>. Write only
+    # to a hard-coded private C: path when diagnostic opt-in is explicit.
+    if log_windows_path is not None:
+        from scripts.netfx481_setup_evidence import WINDOWS_LOG_PATH
+        if log_windows_path != WINDOWS_LOG_PATH:
+            raise ValueError("Unexpected Microsoft installer transcript destination")
+    command = [str(wine), str(installer), "/q", "/norestart"]
+    if log_windows_path is not None:
+        command.extend(["/log", log_windows_path])
     try:
         proc = subprocess.Popen(
-            [str(wine), str(installer), "/q", "/norestart"],
+            command,
             cwd=installer.parent, env=env, stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True,
@@ -260,7 +270,8 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
             registry_adjustment: str = "NOT_REQUESTED",
             wow6432_release: dict[str, str] | None = None,
             wine_mono_removal: dict | None = None,
-            wine_restart: dict[str, str] | None = None) -> dict:
+            wine_restart: dict[str, str] | None = None,
+            setup_evidence: dict | None = None) -> dict:
     if registry_adjustment not in {
         "NOT_REQUESTED", "NOT_APPLICABLE", "CLEARED", "DELETE_FAILED", "STILL_PRESENT_OR_UNVERIFIED"
     }:
@@ -294,6 +305,16 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
         "TIMED_OUT", "START_FAILED", "EXIT_NONZERO"
     }:
         raise ValueError("Unsupported Wine restart result")
+    setup_evidence = setup_evidence or {
+        "status": "NOT_REQUESTED", "phase": "UNKNOWN", "codes": []
+    }
+    from scripts.netfx481_setup_evidence import KNOWN_RESULTS, KNOWN_PHASES, KNOWN_CODES
+    if (setup_evidence.get("status") not in KNOWN_RESULTS
+            or setup_evidence.get("phase") not in KNOWN_PHASES
+            or not isinstance(setup_evidence.get("codes"), list)
+            or len(setup_evidence["codes"]) > len(KNOWN_CODES)
+            or any(x not in KNOWN_CODES.values() for x in setup_evidence["codes"])):
+        raise ValueError("Unsafe or unexpected setup transcript evidence")
     return {
         "schema": 1,
         "scope": "MICROSOFT_NETFX481_WINE_DISPOSABLE_EXPERIMENT",
@@ -304,6 +325,7 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
         "wow6432_release": wow6432_release,
         "wine_mono_removal": wine_mono_removal,
         "wine_restart": wine_restart,
+        "setup_evidence": setup_evidence,
         "after": after,
         "after_native_first": native_first,
         "after_native_only": native_only,
@@ -331,7 +353,8 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
           timeout: int = 210, *, experiment_clear_false_release: bool = False,
           experiment_clear_wow6432_release: bool = False,
           experiment_remove_wine_mono: bool = False,
-          experiment_reboot_after_possible_3010: bool = False) -> dict:
+          experiment_reboot_after_possible_3010: bool = False,
+          experiment_setup_log: bool = False) -> dict:
     if os.name == "nt":
         raise ValueError("Native Windows execution is not permitted")
     for path in (wine, prefix, installer, manifest, fixture):
@@ -356,6 +379,8 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
         raise ValueError("Wine Mono removal requires both controlled registry corrections")
     if experiment_reboot_after_possible_3010 and not experiment_remove_wine_mono:
         raise ValueError("Reboot experiment requires verified Wine Mono removal")
+    if experiment_setup_log and not experiment_remove_wine_mono:
+        raise ValueError("Microsoft setup diagnostics require verified Wine Mono removal")
     before = probe(wine, prefix, fixture)
     if runtime_ready(before):
         return combine(before, before, "SKIPPED_ALREADY_READY", None)
@@ -381,7 +406,22 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
                            registry_adjustment=registry_adjustment,
                            wow6432_release=wow6432,
                            wine_mono_removal=wine_mono_removal)
-    termination, code = run_installer(wine, prefix, installer, timeout)
+    log_output = None
+    setup_evidence = None
+    if experiment_setup_log:
+        from scripts.netfx481_setup_evidence import private_log_path
+        log_output = private_log_path(prefix)
+    try:
+        termination, code = run_installer(
+            wine, prefix, installer, timeout,
+            log_windows_path=(r"C:\swcompat-netfx481-private\framework-setup.txt"
+                              if log_output is not None else None),
+        )
+    finally:
+        if log_output is not None:
+            from scripts.netfx481_setup_evidence import classify_log, discard_log
+            setup_evidence = classify_log(log_output)
+            discard_log(log_output)
     restart = None
     if experiment_reboot_after_possible_3010:
         restart = ({"reason": "UNIX_194_POSSIBLE_3010",
@@ -399,7 +439,8 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
                    registry_adjustment=registry_adjustment,
                    wow6432_release=wow6432,
                    wine_mono_removal=wine_mono_removal,
-                   wine_restart=restart)
+                   wine_restart=restart,
+                   setup_evidence=setup_evidence)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -420,6 +461,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="Uninstall Wine Mono MSI in marked disposable prefix before Microsoft .NET; requires both registry flags")
     ap.add_argument("--experiment-reboot-after-possible-3010", action="store_true",
                     help="Reboot Wine only after Unix 194 possibly indicates Windows 3010; requires Mono removal")
+    ap.add_argument("--experiment-setup-log", action="store_true",
+                    help="Classify private original Microsoft setup /log without uploading or printing raw transcript")
     args = ap.parse_args(argv)
     if not 60 <= args.timeout <= 360:
         ap.error("Invalid bounded timeout")
@@ -432,7 +475,8 @@ def main(argv: list[str] | None = None) -> int:
                        experiment_clear_false_release=args.experiment_clear_false_release,
                        experiment_clear_wow6432_release=args.experiment_clear_wow6432_release,
                        experiment_remove_wine_mono=args.experiment_remove_wine_mono,
-                       experiment_reboot_after_possible_3010=args.experiment_reboot_after_possible_3010)
+                       experiment_reboot_after_possible_3010=args.experiment_reboot_after_possible_3010,
+                       experiment_setup_log=args.experiment_setup_log)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     except (OSError, ValueError):
@@ -442,6 +486,9 @@ def main(argv: list[str] | None = None) -> int:
     print("Wine Mono MSI uninstall:", result["wine_mono_removal"]["action"])
     print("Possible Windows 3010 reboot:", result["wine_restart"]["reason"])
     print("Disposable Wine restart:", result["wine_restart"]["action"])
+    print("Microsoft setup diagnostic availability:", result["setup_evidence"]["status"])
+    print("Microsoft setup failure phase:", result["setup_evidence"]["phase"])
+    print("Microsoft setup recognized error categories:", ",".join(result["setup_evidence"]["codes"]) or "NONE")
     print("Microsoft .NET 4.8.1 original setup:", result["install_execution"])
     print("Independent Microsoft CLR candidate after:", result["after"]["clr_family"])
     print("Registered .NET 4.8.1 after:", result["after"]["registry"])
