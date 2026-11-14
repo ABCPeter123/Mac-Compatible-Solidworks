@@ -166,6 +166,14 @@ Wine Mono MSI removal, exact false-release cleanup and a subsequent disposable W
 
 The primary CI attempt's final schema-check step failed because its old allowlist did not include the newly verified `WIN32_3010_CONFIRMED` reboot reason. The experiment itself ran and produced a valid result. The schema rule is now corrected and CI re-executed. The next concrete problem is **tracking the observed child installer through its actual completion and error result before reboot**, not assuming the parent process's 3010 means the child finished.
 
+## Follow-up: observe the child installer until completion before reboot
+
+The first native Windows monitor confirmed that the authenticated Microsoft Framework bootstrapper exits with full Windows DWORD `0x00000BC2` (3010, reboot required) and **observes a direct child process**, yet the CLR still runs under Mono afterward. The original monitor captured only existence of a child, not whether that installation child had finished before our simulated Wine reboot.
+
+The next independent native Win32 monitor stores up to 12 validated direct child process handles seen in bounded Toolhelp32 snapshots while the original Microsoft parent installer executes. After the parent exits, it waits at most 1.5 seconds per observed child (18 seconds total), reads completed child exit statuses through `GetExitCodeProcess`, and reports only an allowlisted **lifecycle** (`ALL_EXITED`, `STILL_ACTIVE`, `PARTIAL`, `NOT_OBSERVED`, `UNKNOWN`) and coarse exit classification (`ALL_ZERO`, `REBOOT_REQUIRED`, `NONZERO`, `NOT_VERIFIED`). It never uploads child PIDs, process names, command lines, paths or raw error logs.
+
+The observation is best effort. A child exiting before the initial snapshot, children started by a service, and descendant processes outside the direct parent may not be captured. `NOT_OBSERVED` never means no child was started; `PARTIAL` means at least one status was not safely verified. When full parent Win32 code is 3010, **a child still active or not fully verified blocks the simulated restart**, rather than potentially interrupting pending installation activity. Only the independent Microsoft CLR readiness gate can establish Framework compatibility.
+
 ## Technical boundaries
 
 The independent fixture does not test every SOLIDWORKS managed feature or COM interop, and running Microsoft's CLR under Wine would still not establish CAD readiness. WebView2 browser pixels, native graphics/window composition, installation manager UI, x86 helper processes and activation remain separate compatibility gates.
