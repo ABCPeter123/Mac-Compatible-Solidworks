@@ -168,6 +168,8 @@ jobs:
                       ("Status", "status"), ("Wine Mono removal", "mono_removal"),
                       ("Original installer", "installer_execution"),
                       ("Windows exit category", "unix_exit_category"),
+                      ("Win32 launcher selftest before Mono cleanup", "win32_selftest_before"),
+                      ("Win32 launcher selftest after Mono cleanup", "win32_selftest_after"),
                       ("Win32 original process status", "win32_original_status"),
                       ("Win32 original exit", "win32_original_exit"),
                       ("Private setup log availability", "setup_log_status"),
@@ -198,6 +200,8 @@ jobs:
           from scripts.netfx48_baseline import validate
           report = json.loads(Path("build/netfx48-baseline.json").read_text())
           assert validate(report)
+          assert report["win32_selftest_before"] == "PASS"
+          assert report["win32_selftest_after"] == "PASS"
           assert report["win32_original_status"] == "EXIT_CAPTURED"
           assert report["win32_original_exit"] in {"SUCCESS", "REBOOT_REQUIRED", "MSI_FATAL_ERROR", "INSTALL_ALREADY_PRESENT", "OTHER"}
           assert report["netfx481_ready"] is False
