@@ -30,7 +30,7 @@ SETUP_LOG = re.compile(
 )
 DD_LOG = re.compile(r"(?i)^dd_[a-z0-9_(). -]{1,110}\.(?:txt|log)$")
 _ACTION_FAILED = re.compile(
-    r"(?i)\bAction ended\s+[^:\r\n]{1,32}:\s*"
+    r"(?i)\bAction ended\s+\d{1,2}:\d{2}:\d{2}:\s*"
     r"([a-z][a-z0-9_. -]{0,90})\.\s*Return value 3\b"
 )
 _ERROR_NUMBER = re.compile(r"(?i)\b(?:Note:\s*1:\s*|Error\s+)(\d{4})\b")
