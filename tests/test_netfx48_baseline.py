@@ -58,6 +58,11 @@ class NetFx48BaselineTests(TestCase):
             "registry32_adjustment": "NOT_NEEDED", "mono_removal": "REMOVED",
             "installer_execution": "EXIT_NONZERO",
             "unix_exit_category": "POSSIBLE_3010_UNIX_194",
+            "win32_original_status": "NOT_REQUESTED",
+            "win32_original_exit": "NOT_AVAILABLE",
+            "setup_log_status": "NOT_REQUESTED",
+            "setup_log_phase": "UNKNOWN",
+            "setup_error_categories": [],
             "wine_restart": "COMPLETED",
             "clr64_before": "ABSENT", "clr64_after": "ABSENT",
             "clr64_change": "UNCHANGED", "clr_loader": "NOT_FOUND",
@@ -72,6 +77,8 @@ class NetFx48BaselineTests(TestCase):
             ("netfx481_ready", True), ("before_family", "PRIVATE_USERNAME"),
             ("scope", "SOME_OTHER_PREFIX"), ("native_48_candidate", 1),
             ("clr64_after", "/Users/private/clr.dll"),
+            ("win32_original_exit", "/Users/private"),
+            ("setup_log_phase", "PRIVATE_INSTALLER_PATH"),
         ]:
             invalid = dict(report)
             invalid[key] = value
@@ -140,3 +147,14 @@ class NetFx48BaselineTests(TestCase):
             self.assertEqual(report["installer_execution"], "EXIT_ZERO")
             self.assertFalse(report["native_48_candidate"])
             self.assertTrue(baseline.validate(report))
+
+    def test_confident_full_windows_3010_qualifies_only_after_runtime_verification(self):
+        before = {"CLR64": "ABSENT"}
+        after = {"registry": "BELOW_481", "clr_family": "MICROSOFT_CLR_CANDIDATE",
+                 "managed": "PASS"}
+        self.assertTrue(baseline.native_48_candidate(
+            before, after, "CREATED", "PE_AMD64", "LOADED",
+            "CONFIRMED_3010", "COMPLETED"))
+        self.assertFalse(baseline.native_48_candidate(
+            before, after, "CREATED", "PE_AMD64", "NOT_FOUND",
+            "CONFIRMED_3010", "COMPLETED"))
