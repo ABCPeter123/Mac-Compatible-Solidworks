@@ -85,9 +85,23 @@ def parse_probe(raw: bytes, exit_code: int) -> dict[str, str]:
     return result
 
 
-def probe(wine: Path, prefix: Path, fixture: Path, timeout: int = 70) -> dict[str, str]:
+# Only these isolated DLL-load experiments are accepted; do not modify the
+# host Wine prefix or turn off normal Windows DLL loading globally.
+NATIVE_DLL_OVERRIDES = {
+    "native_first": "mscoree=n,b;clr=n,b",
+    "native_only": "mscoree=n;clr=n",
+}
+
+
+def probe(wine: Path, prefix: Path, fixture: Path, timeout: int = 70, *,
+          override: str | None = None) -> dict[str, str]:
+    if override is not None and override not in NATIVE_DLL_OVERRIDES:
+        raise ValueError("Unknown controlled DLL-load experiment")
     env = os.environ.copy()
+    env.pop("WINEDLLOVERRIDES", None)
     env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64", "WINEDEBUG": "-all"})
+    if override is not None:
+        env["WINEDLLOVERRIDES"] = NATIVE_DLL_OVERRIDES[override]
     with tempfile.TemporaryFile() as out:
         try:
             run = subprocess.run(
@@ -143,9 +157,13 @@ def run_installer(wine: Path, prefix: Path, installer: Path, timeout: int) -> tu
     return ("EXIT_ZERO" if rc == 0 else "EXIT_NONZERO", rc)
 
 
-def combine(before: dict, after: dict, termination: str, code: int | None) -> dict:
+def combine(before: dict, after: dict, termination: str, code: int | None,
+            *, native_first: dict | None = None,
+            native_only: dict | None = None) -> dict:
     if termination not in {"START_FAILED", "EXIT_ZERO", "EXIT_NONZERO", "TIMEOUT", "SKIPPED_ALREADY_READY"}:
         raise ValueError("Unsupported termination")
+    native_first = native_first or {"registry": "NOT_VERIFIED", "clr_family": "NOT_VERIFIED", "managed": "NOT_VERIFIED"}
+    native_only = native_only or {"registry": "NOT_VERIFIED", "clr_family": "NOT_VERIFIED", "managed": "NOT_VERIFIED"}
     return {
         "schema": 1,
         "scope": "MICROSOFT_NETFX481_WINE_DISPOSABLE_EXPERIMENT",
@@ -153,12 +171,19 @@ def combine(before: dict, after: dict, termination: str, code: int | None) -> di
         "publisher_signature": "VERIFIED_BY_WINDOWS_CI_NOT_THIS_SCRIPT",
         "before": before,
         "after": after,
+        "after_native_first": native_first,
+        "after_native_only": native_only,
         "install_execution": termination,
         "installer_exit_code": code if termination in {"EXIT_ZERO", "EXIT_NONZERO"} else None,
         "framework_runtime_ready": runtime_ready(after),
+        "native_first_runtime_ready": runtime_ready(native_first),
+        "native_only_runtime_ready": runtime_ready(native_only),
+        "runtime_ready_with_controlled_override": (
+            runtime_ready(native_first) or runtime_ready(native_only)
+        ),
         "new_framework_installation_confirmed": (
-            termination == "EXIT_ZERO"
-            and not runtime_ready(before) and runtime_ready(after)
+            termination == "EXIT_ZERO" and not runtime_ready(before)
+            and (runtime_ready(after) or runtime_ready(native_first) or runtime_ready(native_only))
         ),
         "registry_signal_only": after.get("registry") == "AT_LEAST_481" and not runtime_ready(after),
         "solidworks_compatibility": "NOT_DEMONSTRATED",
@@ -188,7 +213,13 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
         return combine(before, before, "SKIPPED_ALREADY_READY", None)
     termination, code = run_installer(wine, prefix, installer, timeout)
     after = probe(wine, prefix, fixture)
-    return combine(before, after, termination, code)
+    # Try native Microsoft CLR DLL loading without installing or patching any
+    # product binaries. This discriminates Wine Mono being selected by default
+    # from a functioning native CLR that Wine's loader could actually invoke.
+    native_first = probe(wine, prefix, fixture, override="native_first")
+    native_only = probe(wine, prefix, fixture, override="native_only")
+    return combine(before, after, termination, code,
+                   native_first=native_first, native_only=native_only)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -219,6 +250,9 @@ def main(argv: list[str] | None = None) -> int:
     print("Registered .NET 4.8.1 after:", result["after"]["registry"])
     print("Functional managed execution after:", result["after"]["managed"])
     print("Real .NET 4.8.1 readiness:", result["framework_runtime_ready"])
+    print("Native-first Microsoft CLR candidate:", result["after_native_first"]["clr_family"])
+    print("Native-only Microsoft CLR candidate:", result["after_native_only"]["clr_family"])
+    print("Runtime ready with controlled native loading:", result["runtime_ready_with_controlled_override"])
     print("SOLIDWORKS: NOT_DEMONSTRATED")
     return 0
 
