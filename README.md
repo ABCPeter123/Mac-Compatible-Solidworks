@@ -12,6 +12,18 @@ The opt-in [licensed installer trial](.github/workflows/solidworks-bootstrap-tri
 
 **The authentic SOLIDWORKS installer has now been downloaded, digitally verified and executed under hosted Apple Silicon Wine** ([CI run 43494158179](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43494158179)). Its process started and remained running until the bounded 120-second timeout. Installation Manager visibility, completed installation, activation and working CAD remain **NOT VERIFIED**. Later diagnostic runs detected one visible, responsive installer-associated Win32 window, but client-area pixel readback failed. The current probe also checks visible child HWNDs, owned popup windows and composition styles on the next manually dispatched trial, without collecting screenshots or licenses.
 
+## Working desktop SOLIDWORKS access from a Mac without a Mac-hosted VM
+
+The direct Apple Silicon Wine port is still experimental and has not demonstrated a working SOLIDWORKS installation. For actual CAD work, use a **licensed Windows 11 x86-64 workstation** with SOLIDWORKS installed and access it from macOS using the official Microsoft Windows App. The workstation does the CAD execution; there is no Windows VM on the Mac. An available Windows host or hosted Windows workstation, a private LAN/VPN, and a valid license are required.
+
+Generate a safe RDP connection profile without exposing Remote Desktop on the public Internet:
+
+```sh
+python3 -m scripts.solidworks_remote_mac --host 100.100.55.4 --output SOLIDWORKS-Remote.rdp
+```
+
+Open the generated file with Windows App on macOS. The tool refuses public IP endpoints, embeds no credentials, and requires certificate validation. See [Mac remote desktop setup](docs/MAC_REMOTE_DESKTOP.md). This provides real remote Windows SOLIDWORKS rather than claiming a native macOS port.
+
 ## Why this exists
 
 The goal is to identify and fix missing interfaces between SOLIDWORKS, Wine, and macOS. First we establish basic Windows x64 execution and Windows OpenGL/WGL support, then investigate dependencies and installer behavior. We do not try to reverse-engineer Windows in its entirety.
