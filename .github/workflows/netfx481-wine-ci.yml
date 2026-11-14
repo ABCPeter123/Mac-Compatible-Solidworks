@@ -14,6 +14,11 @@ on:
       - 'probes/netfx481_win32_launch.c'
       - 'scripts/netfx481_win32_exit.py'
       - 'tests/test_netfx481_win32_exit.py'
+      - 'scripts/netfx481_payload_audit.py'
+      - 'tests/test_netfx481_payload_audit.py'
+      - 'scripts/netfx481_clr_load.py'
+      - 'tests/test_netfx481_clr_load.py'
+      - 'probes/netfx481_clr_load.c'
   workflow_dispatch:
 
 permissions:
@@ -41,6 +46,13 @@ jobs:
       - name: Test full Win32 exit-code parser and process safety
         shell: pwsh
         run: python -m unittest discover -s tests -p 'test_netfx481_win32_exit.py' -v
+      - name: Test native CLR binary inspection and loader safety
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests -p 'test_netfx481_payload_audit.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Native CLR audit tests failed" }
+          python -m unittest discover -s tests -p 'test_netfx481_clr_load.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "CLR loader tests failed" }
       - name: Compile self-authored Windows x64 process monitor and validate real 3010 preservation
         shell: pwsh
         run: |
@@ -61,6 +73,23 @@ jobs:
           if ($proof -notcontains "SWCOMPAT_WIN32_SETUP_EXIT_HEX=00000BC2") { throw "Full Windows 3010 code not preserved" }
           if ($proof -notcontains "SWCOMPAT_WIN32_SETUP_STATUS=EXIT") { throw "Win32 process status not returned" }
           Write-Output "Verified self-authored Win32 monitor preserves exact Windows 3010 return code"
+      - name: Build and verify actual native Framework64 clr.dll loader on Windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw "MSVC missing" }
+          $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+          $cmdText = "@echo off`r`ncall `"$vcvars`"`r`ncl /nologo /W4 /O2 /Fe:build\\netfx481_clr_load.exe probes\\netfx481_clr_load.c`r`nexit /b %errorlevel%`r`n"
+          Set-Content -LiteralPath build/compile-native-clr-load.cmd -Value $cmdText -Encoding ascii
+          & cmd.exe /d /c build\compile-native-clr-load.cmd
+          if ($LASTEXITCODE -ne 0) { throw "Native CLR loader fixture compilation failed" }
+          $proof = & build\netfx481_clr_load.exe
+          if ($LASTEXITCODE -ne 0 -or $proof -notcontains "SWCOMPAT_CLR_LOAD_STATUS=LOADED") {
+            throw "Reference Windows failed to LoadLibraryW real Framework64 CLR"
+          }
+          Write-Output "Real Windows native CLR PE LoadLibraryW reference passed"
       - name: Compile original C# Framework probe against native Windows Framework
         shell: pwsh
         run: |
@@ -95,6 +124,7 @@ jobs:
             build/netfx481.sha256
             build/netfx481_runtime_probe.exe
             build/netfx481_win32_launch.exe
+            build/netfx481_clr_load.exe
           compression-level: 0
           retention-days: 1
 
@@ -145,6 +175,7 @@ jobs:
             --sha256-file build/netfx481.sha256 \
             --probe build/netfx481_runtime_probe.exe \
             --win32-launcher build/netfx481_win32_launch.exe \
+            --clr-loader build/netfx481_clr_load.exe \
             --output build/netfx481-experiment.json \
             --timeout 210 --agree-disposable-prefix --experiment-clear-false-release --experiment-clear-wow6432-release --experiment-remove-wine-mono --experiment-reboot-after-possible-3010 --experiment-setup-log
       - name: Restore reported Windows 11 profile and retest managed CLR functionality
@@ -207,6 +238,15 @@ jobs:
                   out.write("Windows full 32-bit process exit (hex): **" + win32["exit_hex"] + "**\n\n")
                   out.write("Windows exit classification: **" + win32["category"] + "**\n\n")
                   out.write("Direct bootstrapper child observed: **" + win32["child_seen"] + "**\n\n")
+                  payload = result["payload_audit"]
+                  out.write("CLR file inventory measurement: **" + payload["status"] + "**\n\n")
+                  out.write("Framework64 native CLR before: **" + payload["before"]["CLR64"] + "**\n\n")
+                  out.write("Framework64 native CLR after: **" + payload["after"]["CLR64"] + "**\n\n")
+                  out.write("Framework64 native CLR file change: **" + payload["changes"]["CLR64"] + "**\n\n")
+                  out.write("Framework64 mscorlib after: **" + payload["after"]["MSCORLIB64"] + "**\n\n")
+                  out.write("Framework x86 native CLR after: **" + payload["after"]["CLR32"] + "**\n\n")
+                  out.write("Framework x86 mscorlib after: **" + payload["after"]["MSCORLIB32"] + "**\n\n")
+                  out.write("Real Win32 native CLR LoadLibraryW: **" + result["clr_dll_load"] + "**\n\n")
                   out.write("Direct child lifecycle after parent exit: **" + win32["child_lifecycle"] + "**\n\n")
                   out.write("Observed direct child exit classification: **" + win32["child_exit"] + "**\n\n")
                   out.write("Genuine Microsoft setup /log: **" + result["setup_evidence"]["status"] + "**\n\n")
@@ -245,6 +285,12 @@ jobs:
           assert data["scope"] == "MICROSOFT_NETFX481_WINE_DISPOSABLE_EXPERIMENT"
           assert data["media_sha256_verified"] is True
           assert data["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+          from scripts.netfx481_payload_audit import validate as validate_payload
+          from scripts.netfx481_clr_load import STATUSES as CLR_LOAD_STATES
+          assert validate_payload(data["payload_audit"])
+          assert data["payload_audit"]["status"] == "MEASURED"
+          assert data["clr_dll_load"] in CLR_LOAD_STATES
+          assert data["clr_dll_load"] != "NOT_REQUESTED"
           from scripts.netfx481_win32_exit import validate as validate_win32
           assert validate_win32(data["win32_launch"])
           assert data["win32_launch"]["status"] != "NOT_REQUESTED"
