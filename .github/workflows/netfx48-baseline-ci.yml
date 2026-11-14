@@ -1,0 +1,184 @@
+name: Genuine Microsoft .NET Framework 4.8 Apple Silicon CLR baseline
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/netfx48-baseline-ci.yml'
+      - 'scripts/netfx48_baseline.py'
+      - 'tests/test_netfx48_baseline.py'
+      - 'scripts/netfx481_trial.py'
+      - 'scripts/wine_mono_removal.py'
+      - 'scripts/netfx481_clr_load.py'
+      - 'scripts/netfx481_payload_audit.py'
+      - 'probes/netfx481_runtime_probe.cs'
+      - 'probes/netfx481_clr_load.c'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  authentic-netfx48-windows:
+    name: Authenticate Microsoft 4.8 installer and compile independent Win32 probes
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test safety gate and strict no-leak reporting
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests -p 'test_netfx48_baseline.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Original Microsoft 4.8 safety tests failed" }
+      - name: Compile independent native CLR and managed execution probes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force build | Out-Null
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          if (!(Test-Path $vswhere)) { throw "MSVC locator missing" }
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw "MSVC tools missing" }
+          $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+          if (!(Test-Path $vcvars)) { throw "MSVC x64 environment missing" }
+          $cmdText = "@echo off`r`ncall `"$vcvars`"`r`ncl /nologo /W4 /O2 /Fe:build\netfx481_clr_load.exe probes\netfx481_clr_load.c`r`nexit /b %errorlevel%`r`n"
+          Set-Content -LiteralPath build/compile-netfx48-loader.cmd -Value $cmdText -Encoding ascii
+          & cmd.exe /d /c build\compile-netfx48-loader.cmd
+          if ($LASTEXITCODE -ne 0) { throw "CLR loader compilation failed" }
+          $csc = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          if (!(Test-Path $csc)) { throw "Microsoft C# compiler missing" }
+          & $csc /nologo /target:exe /reference:System.Core.dll /reference:System.Xml.dll /out:build\netfx481_runtime_probe.exe probes\netfx481_runtime_probe.cs
+          if ($LASTEXITCODE -ne 0) { throw "C# fixture compilation failed" }
+          $loader = & build\netfx481_clr_load.exe
+          if ($LASTEXITCODE -ne 0 -or $loader -notcontains 'SWCOMPAT_CLR_LOAD_STATUS=LOADED') {
+            throw "Windows native CLR baseline failed"
+          }
+          & build\netfx481_runtime_probe.exe
+          if ($LASTEXITCODE -ne 0) { throw "Windows managed baseline failed" }
+      - name: Download official Microsoft .NET 4.8 offline installer and validate original Authenticode
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $url = "https://go.microsoft.com/fwlink/?linkid=2088631"
+          $exe = Join-Path (Resolve-Path build) "NDP48-x86-x64-AllOS-ENU.exe"
+          curl.exe --fail --location --retry 3 --max-time 600 --output $exe $url
+          if ($LASTEXITCODE -ne 0) { throw "Official .NET 4.8 offline download failed" }
+          $item = Get-Item -LiteralPath $exe
+          if ($item.Length -lt 15728640 -or $item.Length -gt 262144000) { throw "Unexpected original installer size" }
+          $sig = Get-AuthenticodeSignature -LiteralPath $exe
+          if ($sig.Status -ne [System.Management.Automation.SignatureStatus]::Valid) { throw "Microsoft installer Authenticode invalid" }
+          if ($null -eq $sig.SignerCertificate -or $sig.SignerCertificate.Subject -notmatch '(^|, )O=Microsoft Corporation(,|$)') {
+            throw "Original .NET 4.8 redistributable not Microsoft-signed"
+          }
+          (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant() |
+            Set-Content -LiteralPath build/netfx48.sha256 -NoNewline -Encoding ascii
+          Write-Output "Original .NET Framework 4.8 signed by Microsoft and digest bound"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: authenticated-original-microsoft-netfx48-private
+          path: |
+            build/NDP48-x86-x64-AllOS-ENU.exe
+            build/netfx48.sha256
+            build/netfx481_runtime_probe.exe
+            build/netfx481_clr_load.exe
+          compression-level: 0
+          retention-days: 1
+
+  apple-silicon-native-baseline:
+    name: Check real Microsoft .NET 4.8 CLR deployment under Apple Silicon Wine
+    needs: authentic-netfx48-windows
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: authenticated-original-microsoft-netfx48-private
+          path: build
+      - name: Download and hash-check fixed Apple Silicon Wine 11.21 build
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-devel-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-devel-11.21-osx64.tar.xz"
+          echo "9909b486657e10ab66c7279371ae1f990345b596b3b1b3a0cf21f28af24fa0ce  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-build"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-build"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Initialize original Microsoft runtime experiment in a new disposable prefix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat --prefix "$RUNNER_TEMP/netfx48-prefix" --logs-dir "$RUNNER_TEMP/netfx48-logs" init
+          touch "$RUNNER_TEMP/netfx48-prefix/.swcompat-netfx481-disposable"
+          python3 -m swcompat --prefix "$RUNNER_TEMP/netfx48-prefix" --logs-dir "$RUNNER_TEMP/netfx48-logs" set-winver win10
+      - name: Install only original signed .NET 4.8 and independently check native CLR
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx48_baseline \
+            --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx48-prefix" \
+            --installer build/NDP48-x86-x64-AllOS-ENU.exe \
+            --sha256-file build/netfx48.sha256 \
+            --probe build/netfx481_runtime_probe.exe \
+            --clr-loader build/netfx481_clr_load.exe \
+            --output build/netfx48-baseline.json \
+            --timeout 210 --agree-disposable-prefix
+      - name: Publish only bounded status categories
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx48_baseline import validate
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("## Genuine Microsoft .NET 4.8 on Apple Silicon Wine\n\n")
+              p = Path("build/netfx48-baseline.json")
+              if not p.is_file():
+                  f.write("Experiment incomplete. No runtime compatibility established.\n")
+              else:
+                  data = json.loads(p.read_text())
+                  if not validate(data):
+                      raise ValueError("Unsafe experiment output")
+                  for label, field in (
+                      ("Status", "status"), ("Wine Mono removal", "mono_removal"),
+                      ("Original installer", "installer_execution"),
+                      ("Unix exit category", "unix_exit_category"),
+                      ("CLR64 before", "clr64_before"), ("CLR64 after", "clr64_after"),
+                      ("CLR64 change", "clr64_change"), ("Native loader", "clr_loader"),
+                      ("Managed CLR identity", "managed_identity"),
+                      ("Managed execution", "managed_functionality"),
+                      ("Native 4.8 candidate", "native_48_candidate"),
+                      ("4.8.1 ready", "netfx481_ready"),
+                      ("SOLIDWORKS", "solidworks_compatibility"),
+                  ):
+                      f.write(f"{label}: **{data[field]}**\n\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netfx48-apple-silicon-privacy-safe-result
+          path: build/netfx48-baseline.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Validate the reported test and no false SOLIDWORKS readiness
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.netfx48_baseline import validate
+          report = json.loads(Path("build/netfx48-baseline.json").read_text())
+          assert validate(report)
+          assert report["netfx481_ready"] is False
+          assert report["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+          PY
