@@ -272,7 +272,8 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
             wine_mono_removal: dict | None = None,
             wine_restart: dict[str, str] | None = None,
             setup_evidence: dict | None = None,
-            secondary_evidence: dict | None = None) -> dict:
+            secondary_evidence: dict | None = None,
+            win32_launch: dict | None = None) -> dict:
     if registry_adjustment not in {
         "NOT_REQUESTED", "NOT_APPLICABLE", "CLEARED", "DELETE_FAILED", "STILL_PRESENT_OR_UNVERIFIED"
     }:
@@ -301,7 +302,7 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
     }:
         raise ValueError("Unsupported Wine Mono removal state")
     wine_restart = wine_restart or {"reason": "NOT_REQUESTED", "action": "NOT_REQUESTED"}
-    if wine_restart["reason"] not in {"NOT_REQUESTED", "NO_3010_SIGNAL", "UNIX_194_POSSIBLE_3010"} or wine_restart["action"] not in {
+    if wine_restart["reason"] not in {"NOT_REQUESTED", "NO_3010_SIGNAL", "UNIX_194_POSSIBLE_3010", "WIN32_3010_CONFIRMED"} or wine_restart["action"] not in {
         "NOT_REQUESTED", "NOT_NEEDED", "COMPLETED", "WINEBOOT_MISSING",
         "TIMED_OUT", "START_FAILED", "EXIT_NONZERO"
     }:
@@ -326,6 +327,10 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
     }
     if not validate_secondary_report(secondary_evidence):
         raise ValueError("Unsafe or unexpected secondary log report")
+    from scripts.netfx481_win32_exit import blank as blank_win32, validate as validate_win32
+    win32_launch = win32_launch or blank_win32()
+    if not validate_win32(win32_launch):
+        raise ValueError("Unsafe Win32 launcher evidence")
     return {
         "schema": 1,
         "scope": "MICROSOFT_NETFX481_WINE_DISPOSABLE_EXPERIMENT",
@@ -338,6 +343,7 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
         "wine_restart": wine_restart,
         "setup_evidence": setup_evidence,
         "secondary_evidence": secondary_evidence,
+        "win32_launch": win32_launch,
         "after": after,
         "after_native_first": native_first,
         "after_native_only": native_only,
@@ -351,7 +357,11 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
         ),
         "new_framework_installation_confirmed": (
             (termination == "EXIT_ZERO" or (
-                code == POSSIBLE_3010_UNIX_CODE and wine_restart["action"] == "COMPLETED"
+                code == 3010 and win32_launch["category"] == "REBOOT_REQUIRED"
+                and wine_restart["action"] == "COMPLETED"
+            ) or (
+                code == POSSIBLE_3010_UNIX_CODE and win32_launch["status"] == "NOT_REQUESTED"
+                and wine_restart["action"] == "COMPLETED"
             ))
             and not runtime_ready(before)
             and (runtime_ready(after) or runtime_ready(native_first) or runtime_ready(native_only))
@@ -366,10 +376,11 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
           experiment_clear_wow6432_release: bool = False,
           experiment_remove_wine_mono: bool = False,
           experiment_reboot_after_possible_3010: bool = False,
-          experiment_setup_log: bool = False) -> dict:
+          experiment_setup_log: bool = False,
+          win32_launcher: Path | None = None) -> dict:
     if os.name == "nt":
         raise ValueError("Native Windows execution is not permitted")
-    for path in (wine, prefix, installer, manifest, fixture):
+    for path in (wine, prefix, installer, manifest, fixture, *([win32_launcher] if win32_launcher is not None else [])):
         if path.is_symlink():
             raise ValueError("Symbolic link inputs are not permitted")
     wine = wine.resolve(strict=True)
@@ -377,6 +388,8 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
     installer = installer.resolve(strict=True)
     manifest = manifest.resolve(strict=True)
     fixture = fixture.resolve(strict=True)
+    if win32_launcher is not None:
+        win32_launcher = win32_launcher.resolve(strict=True)
     validate_prefix(prefix)
     if not wine.is_file() or not os.access(wine, os.X_OK):
         raise ValueError("Wine executable is missing")
@@ -393,6 +406,8 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
         raise ValueError("Reboot experiment requires verified Wine Mono removal")
     if experiment_setup_log and not experiment_remove_wine_mono:
         raise ValueError("Microsoft setup diagnostics require verified Wine Mono removal")
+    if win32_launcher is not None and not (experiment_remove_wine_mono and experiment_setup_log):
+        raise ValueError("Win32 launch experiment requires Mono removal and private setup transcript")
     before = probe(wine, prefix, fixture)
     if runtime_ready(before):
         return combine(before, before, "SKIPPED_ALREADY_READY", None)
@@ -423,12 +438,21 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
     if experiment_setup_log:
         from scripts.netfx481_setup_evidence import private_log_path
         log_output = private_log_path(prefix)
+    win32_evidence = None
     try:
-        termination, code = run_installer(
-            wine, prefix, installer, timeout,
-            log_windows_path=(r"C:\swcompat-netfx481-private\framework-setup.txt"
-                              if log_output is not None else None),
-        )
+        if win32_launcher is not None:
+            from scripts.netfx481_win32_exit import launch as win32_launch_process, termination as win32_termination
+            win32_evidence = win32_launch_process(
+                wine, prefix, installer, win32_launcher,
+                timeout=min(timeout + 30, 390),
+            )
+            termination, code = win32_termination(win32_evidence)
+        else:
+            termination, code = run_installer(
+                wine, prefix, installer, timeout,
+                log_windows_path=(r"C:\swcompat-netfx481-private\framework-setup.txt"
+                                  if log_output is not None else None),
+            )
     finally:
         if log_output is not None:
             from scripts.netfx481_setup_evidence import classify_log, discard_log
@@ -436,10 +460,15 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
             discard_log(log_output)
     restart = None
     if experiment_reboot_after_possible_3010:
-        restart = ({"reason": "UNIX_194_POSSIBLE_3010",
-                    "action": wineboot_restart(wine, prefix)}
-                   if termination == "EXIT_NONZERO" and code == POSSIBLE_3010_UNIX_CODE
-                   else {"reason": "NO_3010_SIGNAL", "action": "NOT_NEEDED"})
+        if (win32_evidence is not None and win32_evidence["status"] == "EXIT_CAPTURED"
+                and code == 3010):
+            restart = {"reason": "WIN32_3010_CONFIRMED",
+                       "action": wineboot_restart(wine, prefix)}
+        elif win32_evidence is None and termination == "EXIT_NONZERO" and code == POSSIBLE_3010_UNIX_CODE:
+            restart = {"reason": "UNIX_194_POSSIBLE_3010",
+                       "action": wineboot_restart(wine, prefix)}
+        else:
+            restart = {"reason": "NO_3010_SIGNAL", "action": "NOT_NEEDED"}
     after = probe(wine, prefix, fixture)
     # Try native Microsoft CLR DLL loading without installing or patching any
     # product binaries. This discriminates Wine Mono being selected by default
@@ -457,7 +486,8 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
                    wine_mono_removal=wine_mono_removal,
                    wine_restart=restart,
                    setup_evidence=setup_evidence,
-                   secondary_evidence=secondary_evidence)
+                   secondary_evidence=secondary_evidence,
+                   win32_launch=win32_evidence)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -480,6 +510,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="Reboot Wine only after Unix 194 possibly indicates Windows 3010; requires Mono removal")
     ap.add_argument("--experiment-setup-log", action="store_true",
                     help="Classify private original Microsoft setup /log without uploading or printing raw transcript")
+    ap.add_argument("--win32-launcher", type=Path,
+                    help="Run original verified setup via self-authored Windows CreateProcess fixture, capture real 32-bit exit")
     args = ap.parse_args(argv)
     if not 60 <= args.timeout <= 360:
         ap.error("Invalid bounded timeout")
@@ -493,7 +525,8 @@ def main(argv: list[str] | None = None) -> int:
                        experiment_clear_wow6432_release=args.experiment_clear_wow6432_release,
                        experiment_remove_wine_mono=args.experiment_remove_wine_mono,
                        experiment_reboot_after_possible_3010=args.experiment_reboot_after_possible_3010,
-                       experiment_setup_log=args.experiment_setup_log)
+                       experiment_setup_log=args.experiment_setup_log,
+                       win32_launcher=args.win32_launcher)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     except (OSError, ValueError):
@@ -510,6 +543,9 @@ def main(argv: list[str] | None = None) -> int:
     print("Secondary Microsoft setup files inspected:", result["secondary_evidence"]["files_scanned"])
     print("Secondary Microsoft setup phase:", result["secondary_evidence"]["phase"])
     print("Secondary Microsoft setup error categories:", ",".join(result["secondary_evidence"]["codes"]) or "NONE")
+    print("Original full Win32 exit status:", result["win32_launch"]["exit_hex"])
+    print("Original full Win32 result:", result["win32_launch"]["category"])
+    print("Original Win32 bootstrapper child:", result["win32_launch"]["child_seen"])
     print("Microsoft .NET 4.8.1 original setup:", result["install_execution"])
     print("Independent Microsoft CLR candidate after:", result["after"]["clr_family"])
     print("Registered .NET 4.8.1 after:", result["after"]["registry"])
