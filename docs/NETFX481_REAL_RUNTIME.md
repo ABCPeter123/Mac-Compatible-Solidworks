@@ -174,6 +174,12 @@ The next independent native Win32 monitor stores up to 12 validated direct child
 
 The observation is best effort. A child exiting before the initial snapshot, children started by a service, and descendant processes outside the direct parent may not be captured. `NOT_OBSERVED` never means no child was started; `PARTIAL` means at least one status was not safely verified. When full parent Win32 code is 3010, **a child still active or not fully verified blocks the simulated restart**, rather than potentially interrupting pending installation activity. Only the independent Microsoft CLR readiness gate can establish Framework compatibility.
 
+## Actual child-lifecycle result on Apple Silicon, November 14, 2026
+
+[Genuine signed Microsoft setup run 43620738467](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43620738467) used the new independent Win32 monitor to track direct child processes after original Microsoft Framework 4.8.1 setup returned full Windows `0x00000BC2` (3010). A direct child was **OBSERVED**, the tracked child lifecycle reached **ALL_EXITED**, and the aggregate child exit classification was **REBOOT_REQUIRED**. The subsequent simulated Wine reboot completed. Despite these results, the independent runtime still executed using **Wine Mono**, the expected .NET 4.8.1 Release indicator was unavailable, and native Microsoft CLR readiness remained **FALSE** even after restoring Windows 11.
+
+This evidence rules out a still-running **observed direct child** as the explanation for the premature reboot hypothesis. It does not prove that service-side, descendant, or very short-lived processes completed, and neither parent nor child reboot-required code is evidence that genuine Microsoft CLR files were installed. The next test should independently inspect the **presence and loader identity of actual native Microsoft CLR binaries** before and after setup, not repeat registry or reboot workarounds.
+
 ## Technical boundaries
 
 The independent fixture does not test every SOLIDWORKS managed feature or COM interop, and running Microsoft's CLR under Wine would still not establish CAD readiness. WebView2 browser pixels, native graphics/window composition, installation manager UI, x86 helper processes and activation remain separate compatibility gates.
