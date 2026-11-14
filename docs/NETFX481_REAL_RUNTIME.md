@@ -130,6 +130,14 @@ This experimental `/log` option is opt-in, requires successful Wine Mono removal
 
 This is a successful diagnostic collection but NOT an identified installer root cause. It is possible the main transcript only covers the outer bootstrapper; Microsoft documents additional internal setup logs under Windows `%TEMP%`. A subsequent experiment should inspect those files only in a marked disposable Wine prefix and continue to upload exclusively fixed-schema, nonverbatim results.
 
+## Follow-up: classify Windows TEMP and CBS logs from the original Microsoft setup
+
+The original `/log` trial captured the main transcript, but its allowed failure categories were empty (`phase=UNKNOWN`). Microsoft's .NET deployment guide documents additional setup logs in `%TEMP%`, and standard servicing diagnostics appear in Windows CBS logs. Some failure stages do not appear in the main setup transcript.
+
+The new experiment scans **only** an isolated disposable prefix's `C:\\users`, `C:\\windows\\Temp`, `C:\\Temp` and `C:\\windows\\logs\\CBS` directories. It matches only bounded, well-known Microsoft Framework setup filenames such as `dd_*`, `NetFxSetupEvents.txt`, Framework Setup `.txt/.html`, and `CBS.log`, skipping unrelated files and symlinks. The scanner caps traversal at 120 directories and 24 matching files, reading at most 2 MiB per file. Excessive files, unsupported encodings or unreadable logs produce a partial classification, never an unbounded scan.
+
+Only four fixed source categories, a bounded file count, broad failure phase and preapproved Windows error categories are stored. Original filenames, user paths, event text, registry values, executable data, serials, raw installer logs and unidentified error codes are **never uploaded**. This is classification, not a root-cause finding until a concrete phase or recognized code emerges. Microsoft CLR readiness remains a separate independent execution check.
+
 ## Technical boundaries
 
 The independent fixture does not test every SOLIDWORKS managed feature or COM interop, and running Microsoft's CLR under Wine would still not establish CAD readiness. WebView2 browser pixels, native graphics/window composition, installation manager UI, x86 helper processes and activation remain separate compatibility gates.
