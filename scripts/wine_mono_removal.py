@@ -11,7 +11,7 @@ import re
 import subprocess
 import tempfile
 
-_GUID = re.compile(r"^\{?[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}?$")
+_GUID = re.compile(r"^\{?[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}?$")
 _MONO_NAMES = {"Wine Mono Windows Support", "Wine Mono Runtime", "Wine Mono"}
 MAX_LIST_BYTES = 32768
 MAX_PACKAGES = 8
