@@ -18,6 +18,8 @@ FIELDS = {
     "SCHEMA": {"1"},
     "STATUS": {"EXIT", "START_FAILED", "WAIT_FAILED", "TIMEOUT", "INVALID_ARGUMENT"},
     "CHILD_SEEN": {"OBSERVED", "NOT_OBSERVED", "UNKNOWN"},
+    "CHILD_LIFECYCLE": {"ALL_EXITED", "STILL_ACTIVE", "PARTIAL", "NOT_OBSERVED", "UNKNOWN"},
+    "CHILD_EXIT": {"ALL_ZERO", "REBOOT_REQUIRED", "NONZERO", "NOT_VERIFIED"},
 }
 HEX = re.compile(r"[A-F0-9]{8}\Z")
 MAX_BYTES = 4096
@@ -30,6 +32,8 @@ CATEGORIES = {
     "INSTALL_ALREADY_PRESENT", "OTHER",
 }
 CHILD_VALUES = FIELDS["CHILD_SEEN"] | {"NOT_VERIFIED"}
+LIFECYCLE_VALUES = FIELDS["CHILD_LIFECYCLE"] | {"NOT_VERIFIED"}
+EXIT_VALUES = FIELDS["CHILD_EXIT"]
 
 
 def blank(status: str = "NOT_REQUESTED") -> dict:
@@ -40,6 +44,7 @@ def blank(status: str = "NOT_REQUESTED") -> dict:
         "exit_hex": "NOT_VERIFIED",
         "category": "NOT_AVAILABLE",
         "child_seen": "NOT_VERIFIED",
+        "child_lifecycle": "NOT_VERIFIED", "child_exit": "NOT_VERIFIED",
     }
 
 
@@ -76,10 +81,20 @@ def parse(raw: bytes, process_code: int) -> dict:
         return blank("BAD_REPORT")
     status = values["STATUS"]
     if status == "EXIT" and process_code == 0:
+        child = values["CHILD_SEEN"]
+        lifecycle = values["CHILD_LIFECYCLE"]
+        child_exit = values["CHILD_EXIT"]
+        if ((child == "OBSERVED" and lifecycle not in {"ALL_EXITED", "STILL_ACTIVE", "PARTIAL"})
+                or (child == "NOT_OBSERVED" and lifecycle != "NOT_OBSERVED")
+                or (child == "UNKNOWN" and lifecycle != "UNKNOWN")
+                or (lifecycle == "ALL_EXITED" and child_exit == "NOT_VERIFIED")
+                or (lifecycle != "ALL_EXITED" and child_exit != "NOT_VERIFIED")):
+            return blank("BAD_REPORT")
         code = int(values["EXIT_HEX"], 16)
         return {
             "status": "EXIT_CAPTURED", "exit_hex": values["EXIT_HEX"],
             "category": categorize_exit(code), "child_seen": values["CHILD_SEEN"],
+            "child_lifecycle": lifecycle, "child_exit": child_exit,
         }
     if status != "EXIT" and process_code in (1, 2):
         return {
@@ -91,21 +106,38 @@ def parse(raw: bytes, process_code: int) -> dict:
 
 def validate(report: dict) -> bool:
     if not isinstance(report, dict) or set(report) != {
-        "status", "exit_hex", "category", "child_seen"
+        "status", "exit_hex", "category", "child_seen",
+        "child_lifecycle", "child_exit"
     }:
         return False
     if report["status"] not in VALID_STATUSES:
         return False
-    if report["category"] not in CATEGORIES or report["child_seen"] not in CHILD_VALUES:
+    if (report["category"] not in CATEGORIES or report["child_seen"] not in CHILD_VALUES
+            or report["child_lifecycle"] not in LIFECYCLE_VALUES
+            or report["child_exit"] not in EXIT_VALUES):
         return False
     if report["status"] == "EXIT_CAPTURED":
         return (isinstance(report["exit_hex"], str)
                 and HEX.fullmatch(report["exit_hex"]) is not None
                 and report["category"] == categorize_exit(int(report["exit_hex"], 16))
-                and report["child_seen"] in FIELDS["CHILD_SEEN"])
+                and report["child_seen"] in FIELDS["CHILD_SEEN"]
+                and report["child_lifecycle"] in FIELDS["CHILD_LIFECYCLE"]
+                and report["child_exit"] in FIELDS["CHILD_EXIT"]
+                and ((report["child_seen"] == "OBSERVED"
+                      and report["child_lifecycle"] in {"ALL_EXITED", "STILL_ACTIVE", "PARTIAL"})
+                     or (report["child_seen"] == "NOT_OBSERVED"
+                         and report["child_lifecycle"] == "NOT_OBSERVED")
+                     or (report["child_seen"] == "UNKNOWN"
+                         and report["child_lifecycle"] == "UNKNOWN"))
+                and ((report["child_lifecycle"] == "ALL_EXITED"
+                      and report["child_exit"] != "NOT_VERIFIED")
+                     or (report["child_lifecycle"] != "ALL_EXITED"
+                         and report["child_exit"] == "NOT_VERIFIED")))
     return (report["exit_hex"] == "NOT_VERIFIED"
             and report["category"] == "NOT_AVAILABLE"
-            and report["child_seen"] == "NOT_VERIFIED")
+            and report["child_seen"] == "NOT_VERIFIED"
+            and report["child_lifecycle"] == "NOT_VERIFIED"
+            and report["child_exit"] == "NOT_VERIFIED")
 
 
 def launch(wine: Path, prefix: Path, setup: Path, fixture: Path,
