@@ -100,6 +100,8 @@ def run(wine: Path, prefix: Path, executable: Path, timeout: int = 30) -> dict:
         1 for line in raw.splitlines() if line.startswith(b"SWCOMPAT_CBS_")
     ))
     print("Win32 CBS fixture execution:", status)
+    if rc != 0:
+        print("Win32 fixture Unix process status (numeric):", rc)
     print("Self-authored CBS marker lines:", count)
     if not validate(result):
         raise ValueError("Invalid CBS capability evidence")
