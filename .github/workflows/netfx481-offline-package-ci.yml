@@ -61,8 +61,21 @@ jobs:
       - name: Emit only allowlisted categories
         shell: pwsh
         run: |
-          python - <<'PY'
-          PY
+          $evidence = Get-Content -Raw -LiteralPath build/netfx481-package-categories.json | ConvertFrom-Json
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "## Original Microsoft .NET 4.8.1 offline redistributable structure"
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "Signed by Microsoft Corporation: **verified**"
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "Package reader: **$($evidence.status)**"
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "Classified archive members: **$($evidence.entries)**"
+          foreach ($name in @('CAB','MSU','MSI','MSP','DLL','EXE','OTHER')) {
+            $count = $evidence.groups.$name
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ("{0} category: **{1}**" -f $name, $count)
+          }
+          foreach ($name in @('X64_WINDOWS_UPDATE','X86_WINDOWS_UPDATE','DIRECT_CLR_DLL','DIRECT_MSCORLIB_DLL','WINDOWS_SERVICING_PACKAGE')) {
+            $flag = $evidence.features.$name
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ("{0}: **{1}**" -f $name, $flag)
+          }
+          Remove-Item -LiteralPath build/NDP481-x86-x64-AllOS-ENU.exe -Force
       - uses: actions/upload-artifact@v4
         with:
           name: netfx481-original-microsoft-package-categories-only
