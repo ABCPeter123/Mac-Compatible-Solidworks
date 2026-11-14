@@ -12,13 +12,14 @@ MAX_BYTES = 8 * 1024 * 1024
 MAX_LINE_BYTES = 4096
 STATUS = {"NOT_REQUESTED", "SCANNED", "TRUNCATED", "UNREADABLE"}
 CLASSES = {
-    "CABINET_MEDIA_MISSING", "NETFX_CORE_CAB_MISSING", "CUSTOM_ACTION_BAD_EXE",
+    "CABINET_MEDIA_MISSING", "CABINET_EXTRACT_FAILED", "NETFX_CORE_CAB_MISSING", "CUSTOM_ACTION_BAD_EXE",
     "CUSTOM_ACTION_DLL_LOAD", "MSI_ACTION_INSTALLFILES", "MSI_ACTION_FINALIZE",
     "MSI_CUSTOM_ACTION_UNSUPPORTED", "OTHER_MSI_ERROR",
 }
 _MSI_ERR = re.compile(rb"(?i)\berr:msi:[a-z_0-9]+\s")
 _CAB = re.compile(rb"(?i)\bready_media\s+cabinet\s+not\s+found")
 _NETFX_CAB = re.compile(rb"(?i)\bnetfx_core\.mzz\b")
+_EXTRACT = re.compile(rb"(?i)\b(?:FDICopy failed|failed to extract cabinet)\b")
 _CUSTOM_DLL = re.compile(rb"(?i)\b__wine_msi_call_dll_function\s+failed\s+to\s+load\s+dll")
 _BAD_EXE = re.compile(rb"(?i)\(193\)\s*$")
 _INSTALLFILES = re.compile(rb"(?i)\b(?:ACTION_InstallFiles|action L[\"']?InstallFiles)\b")
@@ -45,6 +46,8 @@ def parse(raw: bytes, *, oversized: bool = False) -> dict:
             classes.add("CABINET_MEDIA_MISSING")
             if _NETFX_CAB.search(line):
                 classes.add("NETFX_CORE_CAB_MISSING")
+        elif _EXTRACT.search(line):
+            classes.add("CABINET_EXTRACT_FAILED")
         elif _CUSTOM_DLL.search(line):
             classes.add("CUSTOM_ACTION_DLL_LOAD")
             if _BAD_EXE.search(line):
