@@ -116,6 +116,14 @@ def parser() -> argparse.ArgumentParser:
     prereq.add_argument("--exe", type=Path, default=ROOT / "build/win_prereq_probe.exe")
     version = sub.add_parser("set-winver", help="Set reported Windows version in isolated Wine prefix")
     version.add_argument("version", choices=["win11", "win10"])
+    audit = sub.add_parser("native-audit", help="Audit genuine SOLIDWORKS installation media and prerequisite files without Wine")
+    audit.add_argument("media", type=Path, help="Original extracted installation media folder or SolidworksSetup.exe")
+    local = sub.add_parser("native-install", help="Interactive, untimed installation from user-supplied SOLIDWORKS media inside a persistent Wine prefix")
+    local.add_argument("media", type=Path, help="Original extracted installation media folder or SolidworksSetup.exe")
+    local.add_argument("--install-prerequisites", action="store_true",
+                       help="Explicitly opt into running original prerequisite installers with visible UI")
+    local.add_argument("--permit-bootstrapper", action="store_true",
+                       help="Explicitly allow the small original web bootstrapper instead of complete installation media")
     installer = sub.add_parser("install", help="Launch a legitimately obtained SOLIDWORKS installer")
     installer.add_argument("exe", type=Path)
     launcher = sub.add_parser("launch", help="Launch an existing Windows executable")
@@ -126,6 +134,9 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    if args.command == "native-install" and args.prefix.expanduser().is_symlink():
+        print("Local installation blocked: symbolic-link Wine prefix is not allowed.", file=sys.stderr)
+        return 2
     prefix, logs = args.prefix.expanduser().resolve(), args.logs_dir.expanduser().resolve()
     if args.command == "analyze":
         log = args.log.expanduser()
@@ -133,6 +144,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Log not found: {log}", file=sys.stderr)
             return 2
         summarize(log)
+        return 0
+    if args.command == "native-audit":
+        from .native_install import scan_media
+        try:
+            inventory = scan_media(args.media)
+        except (OSError, ValueError):
+            print("Media audit failed. Provide a genuine readable media folder or original bootstrapper.", file=sys.stderr)
+            return 2
+        print(json.dumps(inventory.public_report(), indent=2))
         return 0
     wine = find_wine(args.wine)
     if args.command == "doctor":
@@ -146,6 +166,22 @@ def main(argv: list[str] | None = None) -> int:
     if not wine:
         print("Wine not found. Run 'python3 -m swcompat doctor'.", file=sys.stderr)
         return 2
+    if args.command == "native-install":
+        from .native_install import install_local
+        try:
+            return install_local(
+                wine, prefix, logs, args.media,
+                install_prerequisites=args.install_prerequisites,
+                permit_bootstrapper=args.permit_bootstrapper,
+            )
+        except (ValueError, OSError) as exc:
+            # Errors from this path contain only fixed local-stage names, never
+            # the user-supplied media path or executable output.
+            if isinstance(exc, ValueError):
+                print("Local installation blocked: " + str(exc), file=sys.stderr)
+            else:
+                print("Local installation could not access its runtime or media.", file=sys.stderr)
+            return 2
     if args.command == "init":
         boot = wine.with_name("wineboot")
         if not boot.is_file():
@@ -223,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
             output.write("# Launcher command and executable path deliberately omitted\n")
             output.flush()
             try:
-                child = subprocess.Popen(command, env=wine_environment(prefix, debug=True),
+                child = subprocess.Popen(command, cwd=exe.parent, env=wine_environment(prefix, debug=True),
                                          stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
             except OSError as exc:
                 print(f"Launch failed: {exc}", file=sys.stderr)
