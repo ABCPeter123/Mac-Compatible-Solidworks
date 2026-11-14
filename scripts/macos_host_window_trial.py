@@ -102,9 +102,10 @@ def ready_line(process: subprocess.Popen[bytes], timeout: int = 15) -> tuple[boo
         if not chunk:
             break
         seen.extend(chunk)
-        if seen.count(READY) == 1:
-            return True, bytes(seen)
-        if seen.count(READY) > 1:
+        normalized = bytes(seen).replace(b"\r\n", b"\n")
+        if normalized.count(READY) == 1:
+            return True, normalized
+        if normalized.count(READY) > 1:
             break
     return False, bytes(seen)
 
@@ -133,7 +134,7 @@ def run_gui(wine: Path, prefix: Path, fixture: Path, host: Path,
             win.kill()
             win.communicate(timeout=6)
             return "TIMEOUT", captured
-        raw = head + tail
+        raw = (head + tail).replace(b"\r\n", b"\n")
         # Exact CAD app marker grammar, plus one additional host readiness line.
         if is_ready and raw.count(READY) == 1:
             checked = parse_cad(raw.replace(READY, b""), win.returncode, "run")
