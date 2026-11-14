@@ -177,7 +177,7 @@ def initialize_prefix(wine: Path, prefix: Path, logs: Path) -> str:
 
 def install_local(wine: Path, prefix: Path, logs: Path, media: Path, *,
                   install_prerequisites: bool = False, permit_bootstrapper: bool = False,
-                  runner=run_interactive) -> int:
+                  runner=None) -> int:
     """Launch original media, optionally installing selected official prerequisites.
 
     This waits for the interactive installer rather than intentionally killing
@@ -186,6 +186,7 @@ def install_local(wine: Path, prefix: Path, logs: Path, media: Path, *,
     """
     if os.name == "nt":
         raise ValueError("Use this Mac/Linux Wine workflow, never native Windows")
+    runner = runner or run_interactive
     inventory = scan_media(media)
     if inventory.launcher is None:
         raise ValueError("No recognized SOLIDWORKS setup executable in this media")
@@ -197,6 +198,8 @@ def install_local(wine: Path, prefix: Path, logs: Path, media: Path, *,
         if missing:
             # Only fixed public component names, not user filesystem paths.
             raise ValueError("Official prerequisite media missing or ambiguous: " + ", ".join(missing))
+    if prefix.expanduser().is_symlink():
+        raise ValueError("Refusing a symbolic-link Wine prefix")
     prefix = prefix.expanduser().resolve()
     wine = wine.expanduser().resolve()
     if not wine.is_file() or not os.access(wine, os.X_OK):
