@@ -7,9 +7,45 @@ from unittest import mock
 
 from scripts import netfx40_msi_logging_policy as policy
 from scripts import netfx40_msi_evidence as evidence
+from scripts import netfx40_legacy as legacy
 
 
 class VerboseMsiLoggingTests(unittest.TestCase):
+    def test_command_line_forwards_verbose_flag_to_install(self):
+        # The initial CI run silently ignored the flag in main(), causing
+        # the genuine setup to run without the requested logging policy.
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            dummy = root / "fixture.exe"
+            fields = ("status", "winver", "mono", "selftest", "installer_status",
+                      "installer_exit", "installer_child_seen",
+                      "installer_child_lifecycle", "installer_child_exit",
+                      "reboot", "clr64_before", "clr64_after", "clr32_after",
+                      "mscorlib64_after", "native_loader", "runtime_family",
+                      "managed_functionality", "candidate_native40")
+            report = {field: "NOT_RUN" for field in fields}
+            report.update({
+                "inner_msi": evidence.empty(),
+                "wine_msi_errors": __import__(
+                    "scripts.netfx40_wine_msi_errors", fromlist=["empty"]).empty(),
+                "msi_logging_policy": policy.blank(),
+            })
+            args = []
+            for key in ("wine", "prefix", "installer", "launcher", "loader", "managed"):
+                args += ["--" + key, str(dummy)]
+            args += ["--output", str(root / "report.json"),
+                     "--agree-disposable-prefix"]
+            for enabled in (False, True):
+                with self.subTest(enabled=enabled), (
+                    mock.patch.object(legacy, "inspect", return_value=report) as inspect,
+                    mock.patch.object(legacy, "validate", return_value=True),
+                ):
+                    rc = legacy.main(
+                        args + (["--experiment-enable-verbose-msi"] if enabled else []))
+                    self.assertEqual(rc, 0)
+                    self.assertEqual(inspect.call_args.kwargs["enable_verbose_msi"],
+                                     enabled)
+
     def test_policy_matches_microsoft_documented_value(self):
         self.assertEqual(policy.VALUE, "voicewarmupx")
         self.assertEqual(policy.KEY,
