@@ -255,7 +255,7 @@ jobs:
           from scripts.netfx481_setup_evidence import validate_secondary_report
           assert validate_secondary_report(data["secondary_evidence"])
           assert data["wine_restart"]["action"] in {"COMPLETED", "NOT_NEEDED", "WINEBOOT_MISSING", "TIMED_OUT", "START_FAILED", "EXIT_NONZERO"}
-          assert data["wine_restart"]["reason"] in {"UNIX_194_POSSIBLE_3010", "NO_3010_SIGNAL"}
+          assert data["wine_restart"]["reason"] in {"UNIX_194_POSSIBLE_3010", "WIN32_3010_CONFIRMED", "NO_3010_SIGNAL"}
           assert data["wine_mono_removal"]["action"] in {"REMOVED", "NOT_APPLICABLE", "MONO_NOT_REGISTERED", "INVENTORY_FAILED", "REMOVE_FAILED", "VERIFY_FAILED"}
           assert data["wow6432_release"]["action"] in {"CLEARED", "NOT_NEEDED", "NOT_APPLICABLE", "DELETE_FAILED", "QUERY_FAILED", "VERIFY_FAILED"}
           assert "after_native_first" in data and "after_native_only" in data
