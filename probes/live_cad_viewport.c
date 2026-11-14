@@ -89,8 +89,8 @@ static void drain_messages(void) {
 static int received_input(void) {
     return ui.paints > 0 && ui.resizes > 0 &&
            ui.width >= 180 && ui.height >= 160 &&
-           ui.moves > 0 && ui.clicks > 0 && ui.wheels > 0 &&
-           ui.commands > 0 && ui.selected == 1 && ui.zoom == 2 &&
+           ui.moves > 0 && ui.clicks > 0 && ui.wheels == 0 &&
+           ui.commands > 0 && ui.selected == 1 && ui.zoom == 1 &&
            ui.mouse_x == 39 && ui.mouse_y == 47;
 }
 
@@ -299,8 +299,7 @@ int main(int argc, char **argv) {
     InvalidateRect(window, NULL, FALSE);
     UpdateWindow(window);
     if (!PostMessageW(window, WM_MOUSEMOVE, 0, MAKELPARAM(39, 47)) ||
-        !PostMessageW(window, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(39, 47)) ||
-        !PostMessageW(window, WM_MOUSEWHEEL, MAKEWPARAM(0, WHEEL_DELTA), 0)) {
+        !PostMessageW(window, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(39, 47))) {
         failed = "PostSyntheticInput";
         goto done;
     }
@@ -323,7 +322,16 @@ int main(int argc, char **argv) {
         goto done;
     }
     puts("SWCOMPAT_LIVE_EXTRUDE_REDRAW=PASS");
-    if (!render_frame(dc, 3)) {
+    if (!PostMessageW(window, WM_MOUSEWHEEL, MAKEWPARAM(0, WHEEL_DELTA), 0)) {
+        failed = "ZoomPost";
+        goto done;
+    }
+    DWORD zoom_start = GetTickCount();
+    while (ui.wheels < 1 && GetTickCount() - zoom_start < 5000) {
+        drain_messages();
+        Sleep(10);
+    }
+    if (ui.wheels != 1 || ui.zoom != 2 || !render_frame(dc, 3)) {
         failed = "ZoomAndFrame";
         goto done;
     }
