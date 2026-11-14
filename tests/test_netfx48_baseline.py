@@ -61,6 +61,8 @@ class NetFx48BaselineTests(TestCase):
             "unix_exit_category": "POSSIBLE_3010_UNIX_194",
             "win32_selftest_before": "NOT_REQUESTED",
             "win32_selftest_after": "NOT_REQUESTED",
+            "execution_path": "NOT_RUN",
+            "direct_unix_exit_code": None,
             "win32_original_status": "NOT_REQUESTED",
             "win32_original_exit": "NOT_AVAILABLE",
             "setup_log_status": "NOT_REQUESTED",
@@ -81,6 +83,8 @@ class NetFx48BaselineTests(TestCase):
             ("scope", "SOME_OTHER_PREFIX"), ("native_48_candidate", 1),
             ("clr64_after", "/Users/private/clr.dll"),
             ("win32_original_exit", "/Users/private"),
+            ("execution_path", "PRIVATE_PATH"),
+            ("direct_unix_exit_code", 50000),
             ("setup_log_phase", "PRIVATE_INSTALLER_PATH"),
         ]:
             invalid = dict(report)
@@ -163,3 +167,81 @@ class NetFx48BaselineTests(TestCase):
         self.assertFalse(baseline.native_48_candidate(
             before, after, "CREATED", "PE_AMD64", "NOT_FOUND",
             "CONFIRMED_3010", "COMPLETED"))
+
+    def test_signed_direct_fallback_preserves_bounded_unix_return(self):
+        class FakeProcess:
+            def wait(self, timeout):
+                return 17
+
+        with mock.patch.object(baseline, "validate_prefix"):
+            with mock.patch.object(baseline.subprocess, "Popen",
+                                   return_value=FakeProcess()) as popen:
+                outcome = baseline.direct_signed_setup(
+                    Path("/fake/wine"), Path("/fake/disposable"),
+                    Path("/fake/NDP48-x86-x64-AllOS-ENU.exe"), 120,
+                    r"C:\\swcompat-netfx48-private\\framework-setup.txt")
+        self.assertEqual(outcome, ("EXIT_NONZERO", 17))
+        command = popen.call_args.args[0]
+        self.assertEqual(Path(command[1]).name.casefold(), baseline.INSTALLER_NAME)
+        self.assertEqual(command[-2], "/log")
+        self.assertEqual(command[-1], r"C:\\swcompat-netfx48-private\\framework-setup.txt")
+        self.assertTrue(popen.call_args.kwargs["start_new_session"])
+        with mock.patch.object(baseline, "validate_prefix"):
+            with self.assertRaises(ValueError):
+                baseline.direct_signed_setup(
+                    Path("/fake/wine"), Path("/fake/disposable"),
+                    Path("/fake/NDP48-x86-x64-AllOS-ENU.exe"), 120,
+                    r"C:\\private\\not-allowed.txt")
+
+    def test_silent_win32_monitor_falls_back_to_genuine_installer(self):
+        if os.name == "nt":
+            self.skipTest("Wine test is deliberately refused on native Windows")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            wine = root / "wine"
+            wine.write_bytes(b"mock")
+            wine.chmod(0o700)
+            prefix = root / "prefix"
+            (prefix / "drive_c").mkdir(parents=True)
+            installer = root / baseline.INSTALLER_NAME
+            manifest = root / "netfx48.sha256"
+            fixture = root / baseline.PROBE_NAME
+            loader = root / baseline.LOADER_NAME
+            launcher = root / "netfx48_win32_launch.exe"
+            for f in (installer, manifest, fixture, loader, launcher):
+                f.write_bytes(b"fixture")
+            before = {"clr_family": "NOT_VERIFIED", "registry": "NOT_VERIFIED",
+                      "managed": "NOT_VERIFIED"}
+            from scripts.netfx481_payload_audit import ITEMS
+            absent = {key: ("ABSENT", None) for key in ITEMS}
+            evidence = {"status": "NOT_FOUND", "phase": "UNKNOWN", "codes": []}
+            with (
+                mock.patch.object(baseline, "validate_prefix"),
+                mock.patch.object(baseline, "verify_official_media"),
+                mock.patch.object(baseline, "probe", return_value=before),
+                mock.patch.object(baseline, "snapshot", return_value=absent),
+                mock.patch.object(baseline, "clear_unbacked_release", return_value="NOT_NEEDED"),
+                mock.patch.object(baseline, "inventory", return_value=()),
+                mock.patch("scripts.netfx48_win32_exit.selftest",
+                           return_value="NO_OUTPUT"),
+                mock.patch.object(baseline, "direct_signed_setup",
+                                  return_value=("EXIT_NONZERO", 17)) as direct,
+                mock.patch("scripts.netfx481_setup_evidence.classify_log",
+                           return_value=evidence),
+                mock.patch("scripts.netfx481_setup_evidence.discard_log"),
+                mock.patch.object(baseline, "load_clr", return_value="NOT_FOUND"),
+            ):
+                result = baseline.inspect(
+                    wine, prefix, installer, manifest, fixture, loader,
+                    win32_launcher=launcher)
+            self.assertTrue(baseline.validate(result))
+            direct.assert_called_once()
+            self.assertEqual(result["status"], "MEASURED")
+            self.assertEqual(result["execution_path"], "DIRECT_WINE_FALLBACK")
+            self.assertEqual(result["direct_unix_exit_code"], 17)
+            self.assertEqual(result["win32_selftest_before"], "NO_OUTPUT")
+            self.assertEqual(result["win32_selftest_after"], "NO_OUTPUT")
+            self.assertEqual(result["installer_execution"], "EXIT_NONZERO")
+            self.assertEqual(result["win32_original_status"], "NOT_REQUESTED")
+            self.assertEqual(result["clr64_after"], "ABSENT")
+            self.assertFalse(result["native_48_candidate"])
