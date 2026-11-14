@@ -98,6 +98,12 @@ The revised isolated experiment takes this specific signal and performs Wine's d
 
 All statuses are fixed-schema enums with no raw installer logs, executable names, paths, serial numbers or contents of the Microsoft installer. The only positive criterion is actual Microsoft CLR candidate operation plus required registry and managed fixture checks after a confirmed Wine restart. The restart does not establish compatibility on its own.
 
+## First real reboot trial and Wine packaging correction
+
+[Mac run 43563699814](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43563699814) found possible truncated code 3010 (Unix status 194) following successful Wine Mono MSI uninstallation and false registry cleanup, but reported WINEBOOT_MISSING. The macOS Wine application bundle exposes the Wine launch executable without the sibling Unix wineboot wrapper expected by the initial code. No restart happened. The native CLR remained unverified and Mono still handled managed code.
+
+The next run falls back to the standard built-in Windows command `wine wineboot.exe --restart` when the Unix wineboot executable is missing. The fallback has the same strict disposable-prefix marker, bounded runtime, no raw logs and post-restart independent CLR verification. This is still not an assertion that 194 came from true Windows return 3010.
+
 ## Technical boundaries
 
 The independent fixture does not test every SOLIDWORKS managed feature or COM interop, and running Microsoft's CLR under Wine would still not establish CAD readiness. WebView2 browser pixels, native graphics/window composition, installation manager UI, x86 helper processes and activation remain separate compatibility gates.
