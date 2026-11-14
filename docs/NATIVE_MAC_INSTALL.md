@@ -22,18 +22,18 @@ The audit reports fixed status keys for the installer launcher and the official 
 Then start the local interactive installation session:
 
 ```bash
-python3 -m swcompat native-install "/Users/you/Downloads/SOLIDWORKS_MEDIA" --install-prerequisites
+python3 -m swcompat native-install "/Users/you/Downloads/SOLIDWORKS_MEDIA"
 ```
 
 That command:
 
 1. Creates a **persistent** isolated Wine prefix at `~/Library/Application Support/SWCompat/prefixes/solidworks-lab` if it does not exist. It initializes the Wine prefix and sets reported Windows 11 on first creation; it never deletes an existing prefix.
-2. For a complete media folder with all expected prerequisite filenames, launches the original x64 and x86 Visual C++ installers, .NET Framework 4.8.1 installer, Microsoft WebView2, VBA installer packages, and SWCEF MSI **one at a time with their original interactive dialogs**. This is opt-in. It does not supply command-line EULA acceptance, license data, activation workarounds or modifications to original binaries.
-3. Stops at the first nonzero prerequisite installer process exit. A zero exit is **not** proof that a runtime is functional, especially with .NET 4.8.1 and Wine.
+2. Leaves prerequisite installation to the original SOLIDWORKS Installation Manager by default. If the genuine image includes every named package and you explicitly choose `--install-prerequisites`, runs the original x64/x86 Visual C++, .NET Framework 4.8.1, WebView2, VBA, and SWCEF installers **one at a time with interactive dialogs**. It does not supply command-line EULA acceptance, license data, activation workarounds or modifications to binaries.
+3. With this optional advanced prerequisite mode, stops at the first nonzero prerequisite installer exit. Even zero is **not** proof that a runtime is functional, especially with .NET 4.8.1 and Wine. Genuine Windows 11 images may omit the standalone .NET installer because Windows already includes it, but Wine does not become Windows 11 merely by reporting its version. If any required media file is absent, use the normal original Installation Manager launch instead.
 4. Launches the original setup executable **from its media directory** so sibling payloads and relative paths can resolve. The process has **no artificial 120-second timeout**. It waits for the setup launcher to exit rather than terminating the user after an arbitrary CI deadline.
 5. Saves diagnostic output **locally** under `~/Library/Logs/SWCompat`, never uploads installation output or personal details.
 
-If you already installed prerequisites into the same prefix, omit `--install-prerequisites` to launch the original Installation Manager. This does *not* verify installed prerequisites; the runtime may still be missing.
+Manual prerequisite installation is an **advanced, opt-in** troubleshooting path. Invoke `python3 -m swcompat native-install "/Users/you/Downloads/SOLIDWORKS_MEDIA" --install-prerequisites` only when using complete official administrative media and after you understand which prerequisites you intend to install. If expected packages are absent or ambiguous, this mode stops before executing anything. The normal command does *not* verify installed prerequisites; the runtime may still be missing.
 
 For the small official web bootstrapper, the script intentionally requires explicit permission because it usually cannot perform a complete offline installation:
 
