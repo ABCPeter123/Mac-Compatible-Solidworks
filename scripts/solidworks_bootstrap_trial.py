@@ -67,6 +67,7 @@ def validate_prefix(prefix: Path) -> None:
 WINDOW_LINES = {
     "SWCOMPAT_SW_UI_CANDIDATE_PROCESSES",
     "SWCOMPAT_SW_UI_CANDIDATE_WINDOWS",
+    "SWCOMPAT_SW_UI_OWNED_WINDOWS",
     "SWCOMPAT_SW_UI_VISIBLE_LARGE_WINDOWS",
     "SWCOMPAT_SW_UI_PARENT_LAYERED",
     "SWCOMPAT_SW_UI_PARENT_NO_REDIRECTION",
@@ -117,6 +118,8 @@ def parse_window_probe(text: str) -> dict | None:
         return None
     if values["SWCOMPAT_SW_UI_CANDIDATE_WINDOWS"] > values["SWCOMPAT_SW_UI_VISIBLE_LARGE_WINDOWS"]:
         return None
+    if values["SWCOMPAT_SW_UI_OWNED_WINDOWS"] > values["SWCOMPAT_SW_UI_CANDIDATE_WINDOWS"]:
+        return None
     no_candidate = values["SWCOMPAT_SW_UI_CANDIDATE_WINDOWS"] == 0
     for field in WINDOW_ENUMS:
         if field != "SWCOMPAT_SW_UI_CHILD_GDI":
@@ -147,6 +150,7 @@ def parse_window_probe(text: str) -> dict | None:
     return {
         "candidate_processes": values["SWCOMPAT_SW_UI_CANDIDATE_PROCESSES"],
         "candidate_windows": values["SWCOMPAT_SW_UI_CANDIDATE_WINDOWS"],
+        "owned_windows": values["SWCOMPAT_SW_UI_OWNED_WINDOWS"],
         "responsiveness": values["SWCOMPAT_SW_UI_RESPONSIVENESS"],
         "gdi_client": gdi,
         "gdi_failure_stage": stage,
@@ -244,6 +248,7 @@ def attempt_launch(wine: Path, prefix: Path, installer: Path, *, timeout: int, w
             monitor_thread.join(timeout=16)
 
     max_candidate_windows = max((s["candidate_windows"] for s in observations), default=0)
+    max_owned_windows = max((s["owned_windows"] for s in observations), default=0)
     max_candidate_processes = max((s["candidate_processes"] for s in observations), default=0)
     responsiveness = (
         "RESPONSIVE" if any(s["responsiveness"] == "RESPONSIVE" for s in observations)
@@ -303,6 +308,7 @@ def attempt_launch(wine: Path, prefix: Path, installer: Path, *, timeout: int, w
         "census_samples_complete": len(observations),
         "candidate_installer_processes_max": max_candidate_processes,
         "candidate_visible_windows_max": max_candidate_windows,
+        "installer_owned_windows_max": max_owned_windows,
         "installer_hwnd_responsiveness": responsiveness,
         "installer_gdi_client_variation": gdi_client,
         "installer_gdi_failure_stage": gdi_failure_stage,
@@ -366,6 +372,7 @@ def main(argv: list[str] | None = None) -> int:
     if "installer_window_census" in summary:
         print("Win32 installer window census:", summary["installer_window_census"])
         print("Candidate visible windows (max):", summary["candidate_visible_windows_max"])
+        print("Candidate owned popup windows (max):", summary["installer_owned_windows_max"])
         print("Installer HWND responsiveness:", summary["installer_hwnd_responsiveness"])
         print("Installer GDI client readback:", summary["installer_gdi_client_variation"])
         print("Installer GDI failure stage:", summary["installer_gdi_failure_stage"])
