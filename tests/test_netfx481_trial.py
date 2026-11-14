@@ -358,6 +358,23 @@ class DotNet481Tests(unittest.TestCase):
                 self.assertEqual(invoked.call_args.kwargs["env"]["WINEPREFIX"], str(prefix))
                 self.assertEqual(invoked.call_args.kwargs["timeout"], 100)
 
+    def test_wineboot_uses_builtin_windows_program_if_macos_bundle_has_no_wrapper(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            prefix = root / "prefix"
+            (prefix / "drive_c").mkdir(parents=True)
+            (prefix / "system.reg").write_text("")
+            (prefix / trial.SENTINEL).write_text("")
+            wine = root / "wine"
+            wine.write_text("synthetic")
+            wine.chmod(0o755)
+            with mock.patch.object(trial.subprocess, "run", return_value=mock.Mock(returncode=0)) as runner:
+                self.assertEqual(trial.wineboot_restart(wine, prefix), "COMPLETED")
+                self.assertEqual(runner.call_args.args[0],
+                                 [str(wine), "wineboot.exe", "--restart"])
+                self.assertEqual(runner.call_args.kwargs["env"]["WINEPREFIX"], str(prefix))
+                self.assertNotIn("shell", runner.call_args.kwargs)
+
     def test_wineboot_exit_failure_not_treated_as_reboot(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
