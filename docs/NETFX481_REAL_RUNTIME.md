@@ -228,6 +228,12 @@ A separate [GitHub Actions workflow](../.github/workflows/netfx481-offline-packa
 
 **Evidence limitations:** A top-level archive listing might expose only an intermediate CAB/EXE, while nested Microsoft servicing payloads remain hidden. A `NOT_LISTABLE` result says only that the installed reader could not enumerate this SFX format. Neither a CAB/MSU marker nor an installer's Win32 3010 proves that the real native CLR has been deployed. If Windows servicing packages are confirmed, direct Wine install may require unimplemented Windows servicing behavior; the correct next step is to determine whether these packages extract and register without native Windows Update/CBS support, rather than copying Microsoft DLLs by hand.
 
+## Real signed Microsoft package-archive baseline, November 14, 2026
+
+The first [Windows-based official package inspection run 43625361543](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43625361543) succeeded. After verifying Microsoft's genuine signature, the 7-Zip archive reader classified **131 outer archive entries**, including **3 CAB packages**, **27 DLL members** and **zero top-level MSI/MSU members**. At least one CAB filename had an x64 Windows update-style marker. No top-level exact `clr.dll` or `mscorlib.dll` member was found. These observations confirm **embedded CAB servicing containers** in the authentic redistributable, but not the contents of those CABs or why Wine fails installation.
+
+The follow-up Windows workflow securely extracts **only these CAB containers** into a temporary, non-uploaded directory, independently lists each CAB without extracting its individual contents, and publishes only bounded counts of embedded DLL/MUM/CAT/MANIFEST/MSI/EXE/OTHER members plus fixed flags for `clr.dll`, `mscorlib.dll`, and Windows servicing manifests. All raw CAB containers, listings and names remain on the disposable Windows runner and are removed. This distinguishes a deeply nested CLR installation payload from a missing Microsoft update/servicing transaction under Wine.
+
 ## Technical boundaries
 
 The independent fixture does not test every SOLIDWORKS managed feature or COM interop, and running Microsoft's CLR under Wine would still not establish CAD readiness. WebView2 browser pixels, native graphics/window composition, installation manager UI, x86 helper processes and activation remain separate compatibility gates.
