@@ -158,6 +158,14 @@ The Python parser in `scripts/netfx481_win32_exit.py` strictly accepts four synt
 
 The original Microsoft setup and bounded secondary log classifiers remain enabled, and the prefix still restores a Windows 11 reported profile afterward. This diagnostic is for a newly initialized and explicitly marked temporary Wine prefix only.
 
+## Confirmed full Win32 3010 and child process on Apple Silicon, November 14, 2026
+
+[Actual original Microsoft installer run 43619819316](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43619819316) used the self-authored native Windows process monitor on Apple Silicon Wine. The verified original Microsoft Framework 4.8.1 bootstrapper returned **the complete Windows DWORD `0x00000BC2` (3010)**. Thus the earlier Unix code 194 was genuinely truncated Windows reboot-required 3010 in this test, not an unrelated error. `CreateToolhelp32Snapshot` also **observed a direct child process** of the original Microsoft bootstrapper. The observation proves some child activity but does not identify the child, whether it completed, or whether it actually installed the native CLR.
+
+Wine Mono MSI removal, exact false-release cleanup and a subsequent disposable Wine reboot all completed. Despite a **confirmed 3010**, the independently compiled managed fixture still reported **MONO**, the Microsoft Framework Release registry value was **NOT_FOUND**, and native Microsoft CLR readiness after restoring reported Windows 11 was **FALSE**. Microsoft setup `/log` and the single secondary bootstrapper log remained `UNKNOWN` phase with no recognized error code.
+
+The primary CI attempt's final schema-check step failed because its old allowlist did not include the newly verified `WIN32_3010_CONFIRMED` reboot reason. The experiment itself ran and produced a valid result. The schema rule is now corrected and CI re-executed. The next concrete problem is **tracking the observed child installer through its actual completion and error result before reboot**, not assuming the parent process's 3010 means the child finished.
+
 ## Technical boundaries
 
 The independent fixture does not test every SOLIDWORKS managed feature or COM interop, and running Microsoft's CLR under Wine would still not establish CAD readiness. WebView2 browser pixels, native graphics/window composition, installation manager UI, x86 helper processes and activation remain separate compatibility gates.
