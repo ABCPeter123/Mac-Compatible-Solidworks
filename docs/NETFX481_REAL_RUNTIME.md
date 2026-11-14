@@ -252,6 +252,21 @@ A separate read-only, independently compiled x64 Windows fixture compares four *
 
 The Windows reference must confirm that CBS and TrustedInstaller are present. The same binary runs in a fresh, explicitly marked, disposable 64-bit Wine prefix that reports Windows 10. Results are fixed status enums only, with no raw paths, registry contents, services enumeration, Windows error messages, hashes or proprietary files. **Caution:** An exported DISM function or registered service is not proof that the implementation can install the signed Microsoft CAB. An absent component is a concrete compatibility gap; an available component calls for further functionality tests.
 
+## Actual Wine 11.21 servicing infrastructure result, November 14, 2026
+
+The [read-only Apple Silicon run 43627261479](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43627261479) inspected a newly initialized, explicitly marked Wine x64 prefix reporting Windows 10. The direct Python checks returned:
+
+- CBS registration (fixed HKLM component servicing key): **ABSENT**
+- Windows servicing Packages directory: **ABSENT**
+- TrustedInstaller service **registration** (fixed HKLM service key): **ABSENT**
+- `dismapi.dll` on-disk file under standard Windows System32: **ABSENT**
+
+The native Windows reference job passed, including explicit presence checks for CBS registration and the TrustedInstaller service. Our independent Win32 C fixture was unable to start on Apple Silicon Wine, returning Unix process status 53 with zero structured markers even after static CRT linking and dynamic advapi32 API resolution. Its statuses remain **NOT_VERIFIED** and must **not** be reported as evidence of Windows servicing absence. The decisive Wine observations come from the separate read-only disk and Wine registry queries, which ran successfully and produced fixed-schema sanitized evidence.
+
+These results correlate strongly with the existing original Microsoft offline package inspection: the authenticated .NET Framework 4.8.1 EXE contains servicing CABs, and one CAB holds actual `clr.dll` and `mscorlib.dll` together with `.mum`, `.cat` and `.manifest` metadata. Microsoft's original setup and observed child report Win32 3010, but native CLR files never appear in the Wine prefix. The tested environment lacks ordinary Windows servicing registration and package-directory infrastructure. We have **not** isolated the precise CBS / DISM / TrustedInstaller Windows API call that would be required to deploy that Microsoft CAB, and presence of those components alone would never be sufficient to implement Windows servicing.
+
+The next viable engineering comparison is an authenticated **legacy Microsoft .NET Framework 4.0 or 4.8** installation in a disposable Wine prefix using an upstream Winetricks-supported sequence. It may deploy the native CLR through a different legacy installer path, but .NET 4.8 is **not** .NET 4.8.1 and does not establish actual SOLIDWORKS 2026 compatibility. Do not copy Microsoft DLLs manually or spoof additional installed-version values to claim success.
+
 ## Technical boundaries
 
 The independent fixture does not test every SOLIDWORKS managed feature or COM interop, and running Microsoft's CLR under Wine would still not establish CAD readiness. WebView2 browser pixels, native graphics/window composition, installation manager UI, x86 helper processes and activation remain separate compatibility gates.
