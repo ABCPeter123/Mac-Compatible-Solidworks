@@ -124,7 +124,11 @@ jobs:
                   out.write("Framework registry signal: **" + result["after"]["registry"] + "**\n\n")
                   out.write("Independent CLR identity: **" + result["after"]["clr_family"] + "**\n\n")
                   out.write("Real managed operations: **" + result["after"]["managed"] + "**\n\n")
-                  out.write("Framework readiness: **" + str(result["framework_runtime_ready"]) + "**\n\n")
+                  out.write("Default Microsoft CLR readiness: **" + str(result["framework_runtime_ready"]) + "**\\n\\n")
+                  out.write("Native-first CLR family: **" + result["after_native_first"]["clr_family"] + "**\\n\\n")
+                  out.write("Native-first readiness: **" + str(result["native_first_runtime_ready"]) + "**\\n\\n")
+                  out.write("Native-only CLR family: **" + result["after_native_only"]["clr_family"] + "**\\n\\n")
+                  out.write("Native-only readiness: **" + str(result["native_only_runtime_ready"]) + "**\\n\\n")
                   out.write("SOLIDWORKS installation, activation and CAD: **NOT TESTED**\n")
           PY
       - uses: actions/upload-artifact@v4
@@ -145,4 +149,6 @@ jobs:
           assert data["scope"] == "MICROSOFT_NETFX481_WINE_DISPOSABLE_EXPERIMENT"
           assert data["media_sha256_verified"] is True
           assert data["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+          assert "after_native_first" in data and "after_native_only" in data
+          assert type(data["runtime_ready_with_controlled_override"]) is bool
           PY
