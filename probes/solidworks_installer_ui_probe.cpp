@@ -142,6 +142,15 @@ static bool responds_to_null(HWND hwnd) {
 }
 
 struct WindowCounts {
+    int parent_layered = 0;
+    int parent_no_redirection = 0;
+    int child_visible = 0;
+    int child_layered = 0;
+    int child_no_redirection = 0;
+    int child_sampled = 0;
+    int child_gdi_nonuniform = 0;
+    int child_gdi_uniform = 0;
+    int child_gdi_failed = 0;
     int visible_large = 0;
     int candidate_visible = 0;
     int responsive = 0;
@@ -155,6 +164,38 @@ struct WindowCounts {
     std::unordered_set<DWORD> candidate_ids;
 };
 
+/* Only aggregate window flags and bounded GDI variation, never handles,
+ * class names, text, pixels, URLs or external process information.
+ * Child HWNDs may belong to an embedded browser or separate UI process.
+ */
+#ifndef WS_EX_NOREDIRECTIONBITMAP
+#define WS_EX_NOREDIRECTIONBITMAP 0x00200000L
+#endif
+struct ChildWalk {
+    WindowCounts *counts;
+    int visited = 0;
+};
+static BOOL CALLBACK enumerate_child(HWND hwnd, LPARAM userdata) {
+    auto *walk = reinterpret_cast<ChildWalk *>(userdata);
+    if (++walk->visited > 128) return FALSE;
+    RECT area = {};
+    if (!IsWindowVisible(hwnd) || !GetWindowRect(hwnd, &area)
+        || area.right - area.left < 100 || area.bottom - area.top < 100)
+        return TRUE;
+    WindowCounts *counts = walk->counts;
+    ++counts->child_visible;
+    const LONG_PTR ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    if (ex & WS_EX_LAYERED) ++counts->child_layered;
+    if (ex & WS_EX_NOREDIRECTIONBITMAP) ++counts->child_no_redirection;
+    if (counts->child_sampled >= 8) return TRUE;
+    ++counts->child_sampled;
+    const GdiSample child = sample_client_gdi(hwnd);
+    if (child.surface == Surface::NONUNIFORM) ++counts->child_gdi_nonuniform;
+    else if (child.surface == Surface::UNIFORM) ++counts->child_gdi_uniform;
+    else ++counts->child_gdi_failed;
+    return TRUE;
+}
+
 static BOOL CALLBACK enumerate(HWND hwnd, LPARAM userdata) {
     auto *counts = reinterpret_cast<WindowCounts *>(userdata);
     if (!IsWindowVisible(hwnd) || GetWindow(hwnd, GW_OWNER) != nullptr) return TRUE;
@@ -166,6 +207,11 @@ static BOOL CALLBACK enumerate(HWND hwnd, LPARAM userdata) {
     GetWindowThreadProcessId(hwnd, &pid);
     if (!counts->candidate_ids.count(pid)) return TRUE;
     ++counts->candidate_visible;
+    const LONG_PTR ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    if (ex & WS_EX_LAYERED) ++counts->parent_layered;
+    if (ex & WS_EX_NOREDIRECTIONBITMAP) ++counts->parent_no_redirection;
+    ChildWalk walk = {counts};
+    EnumChildWindows(hwnd, enumerate_child, reinterpret_cast<LPARAM>(&walk));
     if (responds_to_null(hwnd)) ++counts->responsive;
     else ++counts->unresponsive;
     const GdiSample sample = sample_client_gdi(hwnd);
@@ -285,6 +331,15 @@ int wmain(int argc, wchar_t **argv) {
     std::printf("SWCOMPAT_SW_UI_GDI_CLIENT=%s\n", surface);
     std::printf("SWCOMPAT_SW_UI_GDI_FAILURE_STAGE=%s\n", stage);
     std::printf("SWCOMPAT_SW_UI_DIRECT_GETPIXEL=%s\n", direct);
+    const char *child_surface = counts.child_visible == 0 ? "NO_CHILD"
+        : counts.child_gdi_nonuniform > 0 ? "NONUNIFORM"
+        : counts.child_gdi_uniform > 0 ? "UNIFORM" : "READBACK_FAILED";
+    std::printf("SWCOMPAT_SW_UI_PARENT_LAYERED=%d\n", counts.parent_layered);
+    std::printf("SWCOMPAT_SW_UI_PARENT_NO_REDIRECTION=%d\n", counts.parent_no_redirection);
+    std::printf("SWCOMPAT_SW_UI_CHILD_VISIBLE=%d\n", counts.child_visible);
+    std::printf("SWCOMPAT_SW_UI_CHILD_LAYERED=%d\n", counts.child_layered);
+    std::printf("SWCOMPAT_SW_UI_CHILD_NO_REDIRECTION=%d\n", counts.child_no_redirection);
+    std::printf("SWCOMPAT_SW_UI_CHILD_GDI=%s\n", child_surface);
     puts("SWCOMPAT_SW_UI_PROBE=COMPLETE");
     return 0;
 }
