@@ -31,6 +31,11 @@ on:
       - 'tests/test_webview2_canvas_report.py'
       - 'scripts/webview2_layout_report.py'
       - 'tests/test_webview2_layout_report.py'
+      - 'swcompat/native_webview2.py'
+      - 'swcompat/native_install.py'
+      - 'swcompat/wine_paths.py'
+      - 'tests/test_native_webview2.py'
+      - 'tests/test_wine_paths.py'
   pull_request:
     paths:
       - '.github/workflows/webview2-runtime-install-ci.yml'
@@ -39,6 +44,11 @@ on:
       - 'scripts/webview2_controller_report.py'
       - 'probes/webview2_controller_probe.cpp'
       - 'probes/webview2/CMakeLists.txt'
+      - 'swcompat/native_webview2.py'
+      - 'swcompat/native_install.py'
+      - 'swcompat/wine_paths.py'
+      - 'tests/test_native_webview2.py'
+      - 'tests/test_wine_paths.py'
   workflow_dispatch:
     inputs:
       require_macos_pixels:
@@ -249,6 +259,24 @@ jobs:
           else
             python3 -m scripts.webview2_runtime_trial "${ARGS[@]}"
           fi
+      - name: Require local Mac WebView2 preparer to detect real installed browser controller
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The preceding trial installed the actual Microsoft-signed x64
+          # runtime. Our user-facing local CLI must detect its real controller
+          # in that same Wine prefix, without reinstalling the runtime.
+          python3 -m swcompat \
+            --wine "$SWCOMPAT_WINE_BIN" \
+            --prefix "$RUNNER_TEMP/webview2-install-prefix" \
+            --logs-dir "$RUNNER_TEMP/swcompat-native-local-logs" \
+            native-webview2 \
+            --installer build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe \
+            --sha256-file build/evergreen-installer.sha256 \
+            --probe build/webview2_controller_probe.exe
+          # Functional controller READY is a dependency test, not browser pixel
+          # presentation or SOLIDWORKS compatibility.
       - name: Verify local HTML DOM JavaScript and pixel-rendered WebView2 on Apple Silicon
         if: runner.os == 'macOS'
         shell: bash

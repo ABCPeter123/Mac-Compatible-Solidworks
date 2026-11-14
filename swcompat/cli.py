@@ -122,6 +122,12 @@ def parser() -> argparse.ArgumentParser:
     local.add_argument("media", type=Path, help="Original extracted installation media folder or SolidworksSetup.exe")
     local.add_argument("--install-prerequisites", action="store_true",
                        help="Explicitly opt into running original prerequisite installers with visible UI")
+    local.add_argument("--require-webview2-probe", type=Path,
+                       help="Fail closed unless independent Win32 x64 WebView2 controller is READY in this prefix")
+    webview = sub.add_parser("native-webview2", help="Install locally supplied Microsoft WebView2 and prove browser controller readiness in persistent Wine")
+    webview.add_argument("--installer", type=Path, required=True, help="Official Microsoft x64 Evergreen standalone installer")
+    webview.add_argument("--sha256-file", type=Path, required=True, help="SHA256 manifest for this official installer")
+    webview.add_argument("--probe", type=Path, required=True, help="Our original Win32 x64 controller probe, with WebView2Loader.dll alongside")
     local.add_argument("--permit-bootstrapper", action="store_true",
                        help="Explicitly allow the small original web bootstrapper instead of complete installation media")
     installer = sub.add_parser("install", help="Launch a legitimately obtained SOLIDWORKS installer")
@@ -134,7 +140,7 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
-    if args.command == "native-install" and args.prefix.expanduser().is_symlink():
+    if args.command in {"native-install", "native-webview2"} and args.prefix.expanduser().is_symlink():
         print("Local installation blocked: symbolic-link Wine prefix is not allowed.", file=sys.stderr)
         return 2
     prefix, logs = args.prefix.expanduser().resolve(), args.logs_dir.expanduser().resolve()
@@ -166,6 +172,17 @@ def main(argv: list[str] | None = None) -> int:
     if not wine:
         print("Wine not found. Run 'python3 -m swcompat doctor'.", file=sys.stderr)
         return 2
+    if args.command == "native-webview2":
+        from .native_webview2 import prepare_webview2
+        try:
+            result = prepare_webview2(wine, prefix, logs, args.installer, args.sha256_file, args.probe)
+        except (OSError, ValueError):
+            print("WebView2 preparation blocked: check official media, SHA-256, Wine and controller probe.", file=sys.stderr)
+            return 2
+        print("Microsoft WebView2 controller:", result["after_controller"])
+        print("Installer action:", result["installer_execution"])
+        print("SOLIDWORKS installation: NOT_VERIFIED")
+        return 0 if result["after_controller"] == "READY" and result["result"] in {"READY", "ALREADY_READY"} else 1
     if args.command == "native-install":
         from .native_install import install_local
         try:
@@ -173,6 +190,7 @@ def main(argv: list[str] | None = None) -> int:
                 wine, prefix, logs, args.media,
                 install_prerequisites=args.install_prerequisites,
                 permit_bootstrapper=args.permit_bootstrapper,
+                require_webview2_probe=args.require_webview2_probe,
             )
         except (ValueError, OSError) as exc:
             # Errors from this path contain only fixed local-stage names, never
@@ -253,7 +271,15 @@ def main(argv: list[str] | None = None) -> int:
         if not exe.is_file() or exe.suffix.lower() not in (".exe", ".msi"):
             print(f"Expected an existing .exe or .msi: {exe}", file=sys.stderr)
             return 2
-        command = [str(wine), str(exe)] if exe.suffix.lower() == ".exe" else [str(wine), "msiexec.exe", "/i", str(exe)]
+        if exe.suffix.lower() == ".msi":
+            from .wine_paths import windows_media_path
+            try:
+                command = [str(wine), "msiexec.exe", "/i", windows_media_path(wine, prefix, exe)]
+            except (ValueError, OSError):
+                print("Windows Installer media path cannot be mapped into this Wine prefix.", file=sys.stderr)
+                return 2
+        else:
+            command = [str(wine), str(exe)]
         log = log_path(logs, args.command)
         with log.open("w", encoding="utf-8") as output:
             output.write("# Launcher command and executable path deliberately omitted\n")

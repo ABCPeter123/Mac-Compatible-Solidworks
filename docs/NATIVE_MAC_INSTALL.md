@@ -43,6 +43,43 @@ python3 -m swcompat native-install "/Users/you/Downloads/SolidworksSetup.exe" --
 
 It may need to download further files, request license details through the original SOLIDWORKS interface and fail under Wine. The program does not handle or store the serial.
 
+
+## Verify actual WebView2 operation before SOLIDWORKS
+
+The installer needs Windows-compatible browser services. A registry entry or a downloaded Microsoft package is **not sufficient** to prove these services work under Wine. The project now provides a local, functional WebView2 setup and controller test in the **same persistent Wine prefix** that the original SOLIDWORKS installer uses.
+
+1. Obtain the official **Microsoft Edge WebView2 Evergreen Standalone x64 Installer** directly from Microsoft's [WebView2 download page](https://developer.microsoft.com/en-us/microsoft-edge/webview2/). Do not use an untrusted mirror. Keep the original name.
+2. Obtain our independently built, original Windows x64 \`webview2_controller_probe.exe\` alongside the official SDK \`WebView2Loader.dll\` from the \`signed-webview2-evergreen-x64-and-controller\` artifact of the [WebView2 runtime CI workflow](../.github/workflows/webview2-runtime-install-ci.yml). The workflow pins the official SDK and verifies the Microsoft publisher signature before producing the artifact. These are not SOLIDWORKS binaries; the artifact expires quickly and may need a new authorized CI run.
+3. Pin the hash of your downloaded official runtime file:
+
+   \`\`\`bash
+   shasum -a 256 "/path/to/MicrosoftEdgeWebView2RuntimeInstallerX64.exe" | awk '{print $1}' > /path/to/evergreen-installer.sha256
+   \`\`\`
+
+   This verifies local file integrity against your recorded digest, **not Microsoft Authenticode**. The local macOS command does not authenticate Microsoft's signature itself; official download provenance and the Windows CI signature verification remain separate.
+4. Prepare and test the actual persistent Mac Wine prefix using the original Microsoft executable:
+
+   \`\`\`bash
+   python3 -m swcompat native-webview2 \
+     --installer "/path/to/MicrosoftEdgeWebView2RuntimeInstallerX64.exe" \
+     --sha256-file "/path/to/evergreen-installer.sha256" \
+     --probe "/path/to/webview2_controller_probe.exe"
+   \`\`\`
+
+   If already functional, it returns \`ALREADY_READY\` without reinstalling. Otherwise it attempts Microsoft's documented silent runtime installer and then runs the independent Windows x64 COM controller probe. A zero installer exit alone is never considered success.
+5. When the result is \`READY\`, use an optional fail-closed gate on the original SOLIDWORKS Installation Manager launch:
+
+   \`\`\`bash
+   python3 -m swcompat native-install "/path/to/SOLIDWORKS_MEDIA" \
+     --require-webview2-probe "/path/to/webview2_controller_probe.exe"
+   \`\`\`
+
+This tests real WebView2 environment and controller creation, not actual browser pixels, installer UI, working .NET Framework 4.8.1, activation, or CAD. The runtime report contains only fixed status values in a private local JSON under \`~/Library/Logs/SWCompat\`. The official Microsoft executable stays on your machine.
+
+### Windows Installer path correction
+
+Optional MSI prerequisite installation now converts each actual macOS media path to an **absolute Windows drive path** using Wine's \`winepath\` before invoking \`msiexec.exe\`. A verified \`Z:\` mapping may be used only when the Wine prefix really maps that drive to \`/\`. If neither can resolve the path, the installer stops rather than silently passing an invalid Unix file path. The older \`swcompat launch <package.msi>\` path receives the same correction.
+
 ## Important compatibility blockers
 
 Dassault's 2026 guide requires .NET Framework 4.8.1 and both the 32-bit and 64-bit Visual C++ 2022 redistributables; it also identifies WebView2, Visual Basic, SWCEF and other prerequisites. Some installers assume real Windows OS components that Wine may not implement correctly. A successful file scan or process launch is **not** a runtime capability test.

@@ -30,6 +30,9 @@ class NativeMediaTests(unittest.TestCase):
         self.prefix = self.root / "prefix"
         (self.prefix / "drive_c").mkdir(parents=True)
         (self.prefix / "system.reg").write_text("Wine registry")
+        (self.prefix / "dosdevices").mkdir()
+        if os.name != "nt":
+            (self.prefix / "dosdevices" / "z:").symlink_to("/")
         self.logs = self.root / "private-logs"
 
     def add_full_media(self):
@@ -99,7 +102,9 @@ class NativeMediaTests(unittest.TestCase):
         self.assertEqual([c.kwargs["label"] for c in runner.call_args_list],
                          [name for name, _ in COMPONENTS] + ["solidworks-setup"])
         for call in runner.call_args_list:
-            self.assertEqual(call.kwargs["cwd"], Path(call.args[0][-1]).parent)
+            label = call.kwargs["label"]
+            expected = self.media if label == "solidworks-setup" else self.media / "prerequisites"
+            self.assertEqual(call.kwargs["cwd"].resolve(), expected.resolve())
             self.assertNotIn("timeout", call.kwargs)
         self.assertEqual([Path(p).resolve() for p in runner.call_args.args[0]],
                          [self.wine.resolve(), (self.media / "setup.exe").resolve()])
@@ -115,6 +120,8 @@ class NativeMediaTests(unittest.TestCase):
         self.assertEqual(len(msi_calls), 3)
         for call in msi_calls:
             self.assertEqual(call.args[0][1:3], ["msiexec.exe", "/i"])
+            self.assertRegex(call.args[0][3], r"^[A-Za-z]:\\")
+            self.assertNotIn(str(self.root), call.args[0][3])
 
     def test_failed_dependency_prevents_solidworks_launch(self):
         self.add_full_media()
