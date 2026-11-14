@@ -5,6 +5,9 @@ on:
     paths:
       - '.github/workflows/netfx40-legacy-ci.yml'
       - 'scripts/netfx40_legacy.py'
+      - 'scripts/netfx40_msi_logging_policy.py'
+      - 'tests/test_netfx40_msi_logging_policy.py'
+      - 'docs/NETFX40_VERBOSE_MSI_POLICY.md'
       - 'scripts/netfx40_msi_evidence.py'
       - 'scripts/netfx40_wine_msi_errors.py'
       - 'tests/test_netfx40_wine_msi_errors.py'
@@ -38,6 +41,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx40_legacy.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msi_evidence.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_wine_msi_errors.py' -v
+          python -m unittest discover -s tests -p 'test_netfx40_msi_logging_policy.py' -v
 
   authentic-netfx40-windows:
     name: Authenticate original Microsoft .NET 4.0 and compile CLR probes
@@ -57,6 +61,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Nested MSI privacy and failure-action tests failed" }
           python -m unittest discover -s tests -p 'test_netfx40_wine_msi_errors.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Wine MSI error evidence regression failed" }
+          python -m unittest discover -s tests -p 'test_netfx40_msi_logging_policy.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Opt-in MSI policy safety regression failed" }
 
       - name: Compile independent native CLR and managed execution probes
         shell: pwsh
@@ -168,7 +174,8 @@ jobs:
             --loader build/netfx481_clr_load.exe \
             --launcher build/netfx40_win32_launch.exe \
             --output build/netfx40-baseline.json \
-            --timeout 210 --agree-disposable-prefix
+            --timeout 210 --agree-disposable-prefix \
+            --experiment-enable-verbose-msi
       - name: Publish only bounded .NET 4.0 status categories
         if: always()
         shell: bash
@@ -196,6 +203,8 @@ jobs:
                       f.write(f"{field}: **{r[field]}**\n\n")
                   for field in ("status", "classes", "msi_error_lines"):
                       f.write(f"wine_msi_{field}: **{r['wine_msi_errors'][field]}**\n\n")
+                  for field in ("activation", "restoration"):
+                      f.write(f"msi_logging_{field}: **{r['msi_logging_policy'][field]}**\n\n")
                   for field in ("status", "files_scanned", "msi_files",
                                 "primary_source", "msi_result",
                                 "first_failed_action_class", "errors", "causality"):
@@ -224,6 +233,9 @@ jobs:
           assert validate_msi(r["inner_msi"])
           from scripts.netfx40_wine_msi_errors import validate as validate_wine_msi
           assert validate_wine_msi(r["wine_msi_errors"])
+          from scripts.netfx40_msi_logging_policy import validate as validate_policy
+          assert validate_policy(r["msi_logging_policy"])
+          assert r["msi_logging_policy"] == {"activation": "APPLIED", "restoration": "REMOVED"}
           assert r["netfx481_ready"] is False
           assert r["solidworks_compatibility"] == "NOT_DEMONSTRATED"
           PY
