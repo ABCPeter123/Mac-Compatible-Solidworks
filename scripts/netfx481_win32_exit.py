@@ -100,6 +100,7 @@ def parse(raw: bytes, process_code: int) -> dict:
         return {
             "status": status, "exit_hex": "NOT_VERIFIED",
             "category": "NOT_AVAILABLE", "child_seen": "NOT_VERIFIED",
+            "child_lifecycle": "NOT_VERIFIED", "child_exit": "NOT_VERIFIED",
         }
     return blank("BAD_REPORT")
 

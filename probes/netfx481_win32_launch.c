@@ -18,7 +18,13 @@
 #define COMMAND_LIMIT 8192u
 #define MAX_CHILDREN 12
 #define PREFIX L"SWCOMPAT_WIN32_SETUP"
+#ifdef SWCOMPAT_NETFX48
+#define LOG_FILE L"C:\\swcompat-netfx48-private\\framework-setup.txt"
+#define ORIGINAL_SETUP_FILENAME L"NDP48-x86-x64-AllOS-ENU.exe"
+#else
 #define LOG_FILE L"C:\\swcompat-netfx481-private\\framework-setup.txt"
+#define ORIGINAL_SETUP_FILENAME L"NDP481-x86-x64-AllOS-ENU.exe"
+#endif
 
 static void report(const char *state, DWORD code, const char *child,
                    const char *lifecycle, const char *child_exit) {
@@ -32,7 +38,7 @@ static void report(const char *state, DWORD code, const char *child,
 }
 
 static int permitted_media(const wchar_t *path) {
-    const wchar_t *expected = L"NDP481-x86-x64-AllOS-ENU.exe";
+    const wchar_t *expected = ORIGINAL_SETUP_FILENAME;
     size_t len, need, i;
     if (path == NULL || !(path[0] >= L'A' && path[0] <= L'Z')
         && !(path[0] >= L'a' && path[0] <= L'z'))

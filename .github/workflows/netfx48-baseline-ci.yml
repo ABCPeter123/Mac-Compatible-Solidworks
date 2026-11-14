@@ -5,6 +5,9 @@ on:
     paths:
       - '.github/workflows/netfx48-baseline-ci.yml'
       - 'scripts/netfx48_baseline.py'
+      - 'scripts/netfx48_win32_exit.py'
+      - 'probes/netfx481_win32_launch.c'
+      - 'tests/test_netfx48_win32_exit.py'
       - 'tests/test_netfx48_baseline.py'
       - 'scripts/netfx481_trial.py'
       - 'scripts/wine_mono_removal.py'
@@ -32,6 +35,8 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_netfx48_baseline.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Original Microsoft 4.8 safety tests failed" }
+          python -m unittest discover -s tests -p 'test_netfx48_win32_exit.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Original 4.8 Win32 exit parser safety tests failed" }
       - name: Compile independent native CLR and managed execution probes
         shell: pwsh
         run: |
@@ -47,6 +52,14 @@ jobs:
           Set-Content -LiteralPath build/compile-netfx48-loader.cmd -Value $cmdText -Encoding ascii
           & cmd.exe /d /c build\compile-netfx48-loader.cmd
           if ($LASTEXITCODE -ne 0) { throw "CLR loader compilation failed" }
+          $cmdText = "@echo off`r`ncall `"$vcvars`"`r`ncl /nologo /W4 /O2 /DSWCOMPAT_NETFX48 /Fe:build\netfx48_win32_launch.exe probes\netfx481_win32_launch.c`r`nexit /b %errorlevel%`r`n"
+          Set-Content -LiteralPath build/compile-netfx48-launcher.cmd -Value $cmdText -Encoding ascii
+          & cmd.exe /d /c build\compile-netfx48-launcher.cmd
+          if ($LASTEXITCODE -ne 0) { throw "Exact 4.8 Win32 launcher compilation failed" }
+          $selftest = & build\netfx48_win32_launch.exe --selftest-3010
+          if ($LASTEXITCODE -ne 0 -or $selftest -notcontains 'SWCOMPAT_WIN32_SETUP_EXIT_HEX=00000BC2') {
+            throw "Exact 4.8 Windows process exit selftest failed"
+          }
           $csc = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
           if (!(Test-Path $csc)) { throw "Microsoft C# compiler missing" }
           & $csc /nologo /target:exe /reference:System.Core.dll /reference:System.Xml.dll /out:build\netfx481_runtime_probe.exe probes\netfx481_runtime_probe.cs
@@ -83,6 +96,7 @@ jobs:
             build/netfx48.sha256
             build/netfx481_runtime_probe.exe
             build/netfx481_clr_load.exe
+            build/netfx48_win32_launch.exe
           compression-level: 0
           retention-days: 1
 
@@ -130,6 +144,7 @@ jobs:
             --sha256-file build/netfx48.sha256 \
             --probe build/netfx481_runtime_probe.exe \
             --clr-loader build/netfx481_clr_load.exe \
+            --win32-launcher build/netfx48_win32_launch.exe \
             --output build/netfx48-baseline.json \
             --timeout 210 --agree-disposable-prefix
       - name: Publish only bounded status categories
@@ -152,7 +167,15 @@ jobs:
                   for label, field in (
                       ("Status", "status"), ("Wine Mono removal", "mono_removal"),
                       ("Original installer", "installer_execution"),
-                      ("Unix exit category", "unix_exit_category"),
+                      ("Installer execution path", "execution_path"),
+                      ("Direct Unix exit code", "direct_unix_exit_code"),
+                      ("Windows exit category", "unix_exit_category"),
+                      ("Win32 launcher selftest before Mono cleanup", "win32_selftest_before"),
+                      ("Win32 launcher selftest after Mono cleanup", "win32_selftest_after"),
+                      ("Win32 original process status", "win32_original_status"),
+                      ("Win32 original exit", "win32_original_exit"),
+                      ("Private setup log availability", "setup_log_status"),
+                      ("Original setup failure phase", "setup_log_phase"),
                       ("CLR64 before", "clr64_before"), ("CLR64 after", "clr64_after"),
                       ("CLR64 change", "clr64_change"), ("Native loader", "clr_loader"),
                       ("Managed CLR identity", "managed_identity"),
@@ -179,6 +202,18 @@ jobs:
           from scripts.netfx48_baseline import validate
           report = json.loads(Path("build/netfx48-baseline.json").read_text())
           assert validate(report)
+          assert report["status"] == "MEASURED"
+          assert report["installer_execution"] in {"EXIT_ZERO", "EXIT_NONZERO"}
+          assert report["execution_path"] in {"WIN32_MONITOR", "DIRECT_WINE_FALLBACK"}
+          if report["execution_path"] == "WIN32_MONITOR":
+              assert report["win32_selftest_after"] == "PASS"
+              assert report["win32_original_status"] == "EXIT_CAPTURED"
+              assert report["direct_unix_exit_code"] is None
+          else:
+              assert report["win32_selftest_after"] != "PASS"
+              assert report["win32_original_status"] == "NOT_REQUESTED"
+              assert type(report["direct_unix_exit_code"]) is int
+          assert report["clr64_after"] in {"ABSENT", "PE_AMD64", "PE_I386", "PE_OTHER", "NOT_PE", "LINKED", "IO_ERROR", "INVALID_SIZE"}
           assert report["netfx481_ready"] is False
           assert report["solidworks_compatibility"] == "NOT_DEMONSTRATED"
           PY
