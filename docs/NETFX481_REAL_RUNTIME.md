@@ -146,6 +146,18 @@ Wine Mono MSI removal succeeded (1 installed, 0 remaining), the original Microso
 
 This evidence does **not** show which internal Microsoft package fails, and absence of a scanned log is not proof that a subsystem did not execute. The next target should distinguish the original Windows process's full 32-bit exit status from Wine's Unix status and establish whether the bootstrapper actually launches its child installation payload.
 
+## Exact Win32 bootstrapper exit and best-effort process handoff experiment
+
+Previous macOS Wine runs returned Unix process code 194 from the genuine signed Microsoft Framework 4.8.1 offline installer. The code is ambiguous: the full Windows code could be 3010 (reboot required) or an unrelated 32-bit status truncated by Wine's Unix boundary. The installer never established a verified native CLR, even after a successful Wine reboot.
+
+This experiment builds our own **independent x64 native Windows CreateProcessW fixture** from `probes/netfx481_win32_launch.c` using Microsoft's Windows MSVC toolchain. On a native Windows reference runner it executes a selftest that exits with Windows code 3010, proving `GetExitCodeProcess` captures the complete DWORD `00000BC2` rather than Unix's low-eight-bit 194. The original Microsoft signed setup exe, separately hash-verified and not modified, is then launched by that same fixture under Apple Silicon Wine with a full Wine Windows drive path.
+
+The harness launches only the expected offline installer filename, with fixed `/q /norestart /log` arguments and a predefined private log location. It waits for its original Windows process with a bounded timeout, obtains the **entire Win32 exit DWORD**, and polls Windows process snapshots for a **direct child process observed** indication. `NOT_OBSERVED` does **not** prove the setup lacked child processes; a short-lived child or service-side installation may escape polling. No raw process names, command lines, paths, setup output, product identifiers, license material, or arbitrary stdout are published.
+
+The Python parser in `scripts/netfx481_win32_exit.py` strictly accepts four synthetic evidence markers and returns only an exact uppercase 8-digit hexadecimal code, fixed exit category, capture status and child observation. It cannot fabricate a successful install from an invalid launcher report. A true 3010 triggers the same disposable-prefix Wine restart, but remains **insufficient** for a compatibility claim without the independently executed native Microsoft CLR fixture and registry checks. If the full Win32 code is not 3010, the previous assumed reboot interpretation is discarded.
+
+The original Microsoft setup and bounded secondary log classifiers remain enabled, and the prefix still restores a Windows 11 reported profile afterward. This diagnostic is for a newly initialized and explicitly marked temporary Wine prefix only.
+
 ## Technical boundaries
 
 The independent fixture does not test every SOLIDWORKS managed feature or COM interop, and running Microsoft's CLR under Wine would still not establish CAD readiness. WebView2 browser pixels, native graphics/window composition, installation manager UI, x86 helper processes and activation remain separate compatibility gates.
