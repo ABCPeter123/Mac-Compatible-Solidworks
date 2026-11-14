@@ -16,14 +16,18 @@
 
 #define WAIT_LIMIT_MS 210000u
 #define COMMAND_LIMIT 8192u
+#define MAX_CHILDREN 12
 #define PREFIX L"SWCOMPAT_WIN32_SETUP"
 #define LOG_FILE L"C:\\swcompat-netfx481-private\\framework-setup.txt"
 
-static void report(const char *state, DWORD code, const char *child) {
+static void report(const char *state, DWORD code, const char *child,
+                   const char *lifecycle, const char *child_exit) {
     printf("SWCOMPAT_WIN32_SETUP_SCHEMA=1\n");
     printf("SWCOMPAT_WIN32_SETUP_STATUS=%s\n", state);
     printf("SWCOMPAT_WIN32_SETUP_EXIT_HEX=%08lX\n", (unsigned long)code);
     printf("SWCOMPAT_WIN32_SETUP_CHILD_SEEN=%s\n", child);
+    printf("SWCOMPAT_WIN32_SETUP_CHILD_LIFECYCLE=%s\n", lifecycle);
+    printf("SWCOMPAT_WIN32_SETUP_CHILD_EXIT=%s\n", child_exit);
     fflush(stdout);
 }
 
@@ -47,24 +51,91 @@ static int permitted_media(const wchar_t *path) {
         && path[len - need - 1] == L'\\';
 }
 
-static int seen_direct_child(DWORD pid) {
+typedef struct {
+    DWORD pid;
+    HANDLE handle;
+} CHILD_RECORD;
+
+static void census_children(DWORD parent, CHILD_RECORD children[MAX_CHILDREN],
+                            int *count, int *observed, int *census_valid,
+                            int *overflow) {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     PROCESSENTRY32W entry;
-    int found = 0;
+    int i, known;
     if (snap == INVALID_HANDLE_VALUE)
-        return -1;
+        return;
+    *census_valid = 1;
     ZeroMemory(&entry, sizeof(entry));
     entry.dwSize = sizeof(entry);
     if (Process32FirstW(snap, &entry)) {
         do {
-            if (entry.th32ParentProcessID == pid && entry.th32ProcessID != pid) {
-                found = 1;
-                break;
+            if (entry.th32ParentProcessID != parent || entry.th32ProcessID == parent)
+                continue;
+            *observed = 1;
+            known = 0;
+            for (i = 0; i < *count; ++i) {
+                if (children[i].pid == entry.th32ProcessID) {
+                    known = 1;
+                    break;
+                }
             }
+            if (known)
+                continue;
+            if (*count >= MAX_CHILDREN) {
+                *overflow = 1;
+                continue;
+            }
+            children[*count].pid = entry.th32ProcessID;
+            children[*count].handle = OpenProcess(
+                SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+                FALSE, entry.th32ProcessID);
+            (*count)++;
         } while (Process32NextW(snap, &entry));
     }
     CloseHandle(snap);
-    return found;
+}
+
+static void finish_children(CHILD_RECORD children[MAX_CHILDREN], int count,
+                            int observed, int overflow,
+                            const char **lifecycle, const char **exit_summary) {
+    int i, unknown = overflow, active = 0, failures = 0, reboot = 0, exits = 0;
+    DWORD wait, exit_code;
+    if (!observed) {
+        *lifecycle = "NOT_OBSERVED";
+        *exit_summary = "NOT_VERIFIED";
+        return;
+    }
+    for (i = 0; i < count; ++i) {
+        if (children[i].handle == NULL) {
+            unknown = 1;
+            continue;
+        }
+        /* Maximum 1.5 seconds per child, 18 seconds total. */
+        wait = WaitForSingleObject(children[i].handle, 1500);
+        if (wait == WAIT_TIMEOUT) {
+            active = 1;
+        } else if (wait != WAIT_OBJECT_0 ||
+                   !GetExitCodeProcess(children[i].handle, &exit_code)) {
+            unknown = 1;
+        } else {
+            exits++;
+            if (exit_code == 3010u)
+                reboot++;
+            else if (exit_code != 0)
+                failures++;
+        }
+        CloseHandle(children[i].handle);
+    }
+    if (active) {
+        *lifecycle = "STILL_ACTIVE";
+        *exit_summary = "NOT_VERIFIED";
+    } else if (unknown || exits != count) {
+        *lifecycle = "PARTIAL";
+        *exit_summary = "NOT_VERIFIED";
+    } else {
+        *lifecycle = "ALL_EXITED";
+        *exit_summary = failures ? "NONZERO" : reboot ? "REBOOT_REQUIRED" : "ALL_ZERO";
+    }
 }
 
 int wmain(int argc, wchar_t **argv) {
@@ -72,24 +143,28 @@ int wmain(int argc, wchar_t **argv) {
     STARTUPINFOW startup;
     PROCESS_INFORMATION pi;
     DWORD result, exit_code = 0xFFFFFFFFu;
-    int observed = 0, census_valid = 0, snap;
+    CHILD_RECORD children[MAX_CHILDREN] = {{0, NULL}};
+    int child_count = 0, child_overflow = 0;
+    int observed = 0, census_valid = 0;
     int selftest = (argc == 2 && wcscmp(argv[1], L"--selftest-3010") == 0);
     const char *child_status;
+    const char *child_lifecycle = "UNKNOWN";
+    const char *child_exit = "NOT_VERIFIED";
 
     if (!selftest && (argc != 2 || !permitted_media(argv[1]))) {
-        report("INVALID_ARGUMENT", 0xFFFFFFFFu, "UNKNOWN");
+        report("INVALID_ARGUMENT", 0xFFFFFFFFu, "UNKNOWN", "UNKNOWN", "NOT_VERIFIED");
         return 1;
     }
     if (selftest) {
         UINT len = GetSystemDirectoryW(app, COMMAND_LIMIT - 16u);
         if (!len || len >= COMMAND_LIMIT - 16u ||
             wcscat_s(app, COMMAND_LIMIT, L"\\cmd.exe") != 0) {
-            report("START_FAILED", 0xFFFFFFFFu, "UNKNOWN");
+            report("START_FAILED", 0xFFFFFFFFu, "UNKNOWN", "UNKNOWN", "NOT_VERIFIED");
             return 1;
         }
         if (swprintf_s(command, COMMAND_LIMIT,
                 L"\"%ls\" /d /c exit 3010", app) < 0) {
-            report("START_FAILED", 0xFFFFFFFFu, "UNKNOWN");
+            report("START_FAILED", 0xFFFFFFFFu, "UNKNOWN", "UNKNOWN", "NOT_VERIFIED");
             return 1;
         }
     } else {
@@ -97,7 +172,7 @@ int wmain(int argc, wchar_t **argv) {
             swprintf_s(command, COMMAND_LIMIT,
                 L"\"%ls\" /q /norestart /log \"%ls\"",
                 app, LOG_FILE) < 0) {
-            report("INVALID_ARGUMENT", 0xFFFFFFFFu, "UNKNOWN");
+            report("INVALID_ARGUMENT", 0xFFFFFFFFu, "UNKNOWN", "UNKNOWN", "NOT_VERIFIED");
             return 1;
         }
     }
@@ -106,7 +181,7 @@ int wmain(int argc, wchar_t **argv) {
     startup.cb = sizeof(startup);
     if (!CreateProcessW(app, command, NULL, NULL, FALSE,
                         CREATE_NO_WINDOW, NULL, NULL, &startup, &pi)) {
-        report("START_FAILED", GetLastError(), "UNKNOWN");
+        report("START_FAILED", GetLastError(), "UNKNOWN", "UNKNOWN", "NOT_VERIFIED");
         return 1;
     }
     result = WAIT_TIMEOUT;
@@ -117,11 +192,8 @@ int wmain(int argc, wchar_t **argv) {
             result = WaitForSingleObject(pi.hProcess, 100);
             if (result != WAIT_TIMEOUT)
                 break;
-            snap = seen_direct_child(pi.dwProcessId);
-            if (snap >= 0)
-                census_valid = 1;
-            if (snap > 0)
-                observed = 1;
+            census_children(pi.dwProcessId, children, &child_count,
+                            &observed, &census_valid, &child_overflow);
             elapsed += 100;
         }
     }
@@ -130,20 +202,25 @@ int wmain(int argc, wchar_t **argv) {
         WaitForSingleObject(pi.hProcess, 5000);
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
-        report("TIMEOUT", 0xFFFFFFFFu, "UNKNOWN");
+        report("TIMEOUT", 0xFFFFFFFFu, "UNKNOWN", "UNKNOWN", "NOT_VERIFIED");
         return 2;
     }
     if (result != WAIT_OBJECT_0 ||
         !GetExitCodeProcess(pi.hProcess, &exit_code)) {
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
-        report("WAIT_FAILED", 0xFFFFFFFFu, "UNKNOWN");
+        report("WAIT_FAILED", 0xFFFFFFFFu, "UNKNOWN", "UNKNOWN", "NOT_VERIFIED");
         return 2;
     }
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     child_status = observed ? "OBSERVED" : (census_valid ? "NOT_OBSERVED" : "UNKNOWN");
-    report("EXIT", exit_code, child_status);
+    if (observed)
+        finish_children(children, child_count, observed, child_overflow,
+                        &child_lifecycle, &child_exit);
+    else
+        child_lifecycle = census_valid ? "NOT_OBSERVED" : "UNKNOWN";
+    report("EXIT", exit_code, child_status, child_lifecycle, child_exit);
     /* Harness success means it captured the exit code, NOT installer success. */
     return 0;
 }
