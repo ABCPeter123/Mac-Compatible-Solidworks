@@ -177,6 +177,11 @@ jobs:
                   out.write("Genuine Microsoft setup /log: **" + result["setup_evidence"]["status"] + "**\n\n")
                   out.write("Microsoft setup failure stage: **" + result["setup_evidence"]["phase"] + "**\n\n")
                   out.write("Recognized Windows error categories: **" + ", ".join(result["setup_evidence"]["codes"] or ["NONE"]) + "**\n\n")
+                  other = result["secondary_evidence"]
+                  out.write("Secondary Windows setup log collection: **" + other["status"] + "**\n\n")
+                  out.write("Secondary source files inspected: **" + str(other["files_scanned"]) + "**\n\n")
+                  out.write("Secondary setup failure stage: **" + other["phase"] + "**\n\n")
+                  out.write("Secondary Windows error categories: **" + ", ".join(other["codes"] or ["NONE"]) + "**\n\n")
                   out.write("Framework registry signal: **" + result["after"]["registry"] + "**\n\n")
                   out.write("Independent CLR identity: **" + result["after"]["clr_family"] + "**\n\n")
                   out.write("Real managed operations: **" + result["after"]["managed"] + "**\n\n")
@@ -211,6 +216,8 @@ jobs:
           assert evidence["phase"] in KNOWN_PHASES
           assert isinstance(evidence["codes"], list)
           assert all(code in KNOWN_CODES.values() for code in evidence["codes"])
+          from scripts.netfx481_setup_evidence import validate_secondary_report
+          assert validate_secondary_report(data["secondary_evidence"])
           assert data["wine_restart"]["action"] in {"COMPLETED", "NOT_NEEDED", "WINEBOOT_MISSING", "TIMED_OUT", "START_FAILED", "EXIT_NONZERO"}
           assert data["wine_restart"]["reason"] in {"UNIX_194_POSSIBLE_3010", "NO_3010_SIGNAL"}
           assert data["wine_mono_removal"]["action"] in {"REMOVED", "NOT_APPLICABLE", "MONO_NOT_REGISTERED", "INVENTORY_FAILED", "REMOVE_FAILED", "VERIFY_FAILED"}
