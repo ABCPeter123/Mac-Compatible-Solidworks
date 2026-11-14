@@ -195,7 +195,9 @@ def trial(wine: Path, prefix: Path, fixture: Path, host: Path) -> dict:
             except OSError:
                 pass
         cleaned = model_file_state(doc) == "ABSENT"
-    host_visible = native == "PASS" and wine_screen == "PASS"
+    host_visible = (native == "PASS" and wine_screen == "PASS"
+                    and app == "PASS" and file_check == "EXACT"
+                    and independent == "PASS" and cleaned)
     return {
         "schema": 1, "scope": "HOST_WINDOW_SCREENSHOT_NOT_SOLIDWORKS",
         "native_control": native,
@@ -228,7 +230,12 @@ def validate(report: dict) -> bool:
             or type(report["host_window_visibility_proven"]) is not bool):
         return False
     return report["host_window_visibility_proven"] == (
-        report["native_control"] == "PASS" and report["wine_host_pixels"] == "PASS"
+        report["native_control"] == "PASS"
+        and report["wine_host_pixels"] == "PASS"
+        and report["windows_3d_session"] == "PASS"
+        and report["saved_model"] == "EXACT"
+        and report["independent_model_reopen"] == "PASS"
+        and report["cleanup"] == "REMOVED"
     )
 
 
