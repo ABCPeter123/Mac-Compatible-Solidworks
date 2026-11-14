@@ -22,6 +22,16 @@ class WineMsiErrorTests(unittest.TestCase):
         self.assertNotIn("secret", str(report))
         self.assertNotIn("msi5857", str(report))
 
+    def test_cabinet_extraction_is_not_the_same_as_missing_media(self):
+        raw = (
+            b'0150:err:msi:extract_cabinet FDICopy failed\n'
+            b'0150:err:msi:ACTION_InstallFiles Failed to extract cabinet: L"netfx_core.mzz"\n'
+        )
+        r = w.parse(raw)
+        self.assertTrue(w.validate(r))
+        self.assertEqual(r["classes"], ["CABINET_EXTRACT_FAILED"])
+        self.assertEqual(r["msi_error_lines"], 2)
+
     def test_does_not_trigger_on_text_without_actual_wine_err_msi(self):
         data = (
             b'xxx:fixme:msi:ready_media cabinet not found: L"C:\\netfx_core.mzz"\n'
