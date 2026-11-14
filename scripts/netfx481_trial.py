@@ -227,14 +227,15 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
             *, native_first: dict | None = None,
             native_only: dict | None = None,
             registry_adjustment: str = "NOT_REQUESTED",
-            wow6432_release: dict[str, str] | None = None) -> dict:
+            wow6432_release: dict[str, str] | None = None,
+            wine_mono_removal: dict | None = None) -> dict:
     if registry_adjustment not in {
         "NOT_REQUESTED", "NOT_APPLICABLE", "CLEARED", "DELETE_FAILED", "STILL_PRESENT_OR_UNVERIFIED"
     }:
         raise ValueError("Unsupported registry adjustment")
     if termination not in {
         "START_FAILED", "EXIT_ZERO", "EXIT_NONZERO", "TIMEOUT",
-        "SKIPPED_ALREADY_READY", "SKIPPED_REGISTRY_NOT_CORRECTED"
+        "SKIPPED_ALREADY_READY", "SKIPPED_REGISTRY_NOT_CORRECTED", "SKIPPED_MONO_NOT_REMOVED"
     }:
         raise ValueError("Unsupported termination")
     native_first = native_first or {"registry": "NOT_VERIFIED", "clr_family": "NOT_VERIFIED", "managed": "NOT_VERIFIED"}
@@ -247,6 +248,14 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
         "QUERY_FAILED", "DELETE_FAILED", "VERIFY_FAILED"
     }:
         raise ValueError("Unsupported 32-bit correction state")
+    wine_mono_removal = wine_mono_removal or {
+        "before": None, "after": None, "action": "NOT_TESTED"
+    }
+    if wine_mono_removal["action"] not in {
+        "NOT_TESTED", "NOT_APPLICABLE", "REMOVED", "INVENTORY_FAILED",
+        "MONO_NOT_REGISTERED", "REMOVE_FAILED", "VERIFY_FAILED"
+    }:
+        raise ValueError("Unsupported Wine Mono removal state")
     return {
         "schema": 1,
         "scope": "MICROSOFT_NETFX481_WINE_DISPOSABLE_EXPERIMENT",
@@ -255,6 +264,7 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
         "before": before,
         "registry_adjustment": registry_adjustment,
         "wow6432_release": wow6432_release,
+        "wine_mono_removal": wine_mono_removal,
         "after": after,
         "after_native_first": native_first,
         "after_native_only": native_only,
@@ -277,7 +287,8 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
 
 def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Path,
           timeout: int = 210, *, experiment_clear_false_release: bool = False,
-          experiment_clear_wow6432_release: bool = False) -> dict:
+          experiment_clear_wow6432_release: bool = False,
+          experiment_remove_wine_mono: bool = False) -> dict:
     if os.name == "nt":
         raise ValueError("Native Windows execution is not permitted")
     for path in (wine, prefix, installer, manifest, fixture):
@@ -296,6 +307,10 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
     verify_media(installer, manifest)
     if experiment_clear_wow6432_release and not experiment_clear_false_release:
         raise ValueError("32-bit correction requires 64-bit correction opt-in")
+    if experiment_remove_wine_mono and not (
+        experiment_clear_false_release and experiment_clear_wow6432_release
+    ):
+        raise ValueError("Wine Mono removal requires both controlled registry corrections")
     before = probe(wine, prefix, fixture)
     if runtime_ready(before):
         return combine(before, before, "SKIPPED_ALREADY_READY", None)
@@ -312,6 +327,15 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
             return combine(before, before, "SKIPPED_REGISTRY_NOT_CORRECTED", None,
                            registry_adjustment=registry_adjustment,
                            wow6432_release=wow6432)
+    wine_mono_removal = None
+    if experiment_remove_wine_mono:
+        from scripts.wine_mono_removal import remove_mono
+        wine_mono_removal = remove_mono(wine, prefix, before)
+        if wine_mono_removal["action"] != "REMOVED":
+            return combine(before, before, "SKIPPED_MONO_NOT_REMOVED", None,
+                           registry_adjustment=registry_adjustment,
+                           wow6432_release=wow6432,
+                           wine_mono_removal=wine_mono_removal)
     termination, code = run_installer(wine, prefix, installer, timeout)
     after = probe(wine, prefix, fixture)
     # Try native Microsoft CLR DLL loading without installing or patching any
@@ -322,7 +346,8 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
     return combine(before, after, termination, code,
                    native_first=native_first, native_only=native_only,
                    registry_adjustment=registry_adjustment,
-                   wow6432_release=wow6432)
+                   wow6432_release=wow6432,
+                   wine_mono_removal=wine_mono_removal)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -339,6 +364,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="Only in marked disposable prefixes, remove a spoofed Mono .NET 4.8.1 Release value before official setup")
     ap.add_argument("--experiment-clear-wow6432-release", action="store_true",
                     help="Also correct Mono's false 32-bit Wow6432Node Release value; requires --experiment-clear-false-release")
+    ap.add_argument("--experiment-remove-wine-mono", action="store_true",
+                    help="Uninstall Wine Mono MSI in marked disposable prefix before Microsoft .NET; requires both registry flags")
     args = ap.parse_args(argv)
     if not 60 <= args.timeout <= 360:
         ap.error("Invalid bounded timeout")
@@ -349,13 +376,15 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("Report would overwrite input or symlink")
         result = trial(args.wine, args.prefix, args.installer, args.sha256_file, args.probe, args.timeout,
                        experiment_clear_false_release=args.experiment_clear_false_release,
-                       experiment_clear_wow6432_release=args.experiment_clear_wow6432_release)
+                       experiment_clear_wow6432_release=args.experiment_clear_wow6432_release,
+                       experiment_remove_wine_mono=args.experiment_remove_wine_mono)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     except (OSError, ValueError):
         ap.error("Trial refused: inspect disposable Wine setup and verified Microsoft package")
     print("False 4.8.1 registry release correction:", result["registry_adjustment"])
     print("32-bit false release correction:", result["wow6432_release"]["action"])
+    print("Wine Mono MSI uninstall:", result["wine_mono_removal"]["action"])
     print("Microsoft .NET 4.8.1 original setup:", result["install_execution"])
     print("Independent Microsoft CLR candidate after:", result["after"]["clr_family"])
     print("Registered .NET 4.8.1 after:", result["after"]["registry"])
