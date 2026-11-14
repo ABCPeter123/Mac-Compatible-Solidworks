@@ -84,5 +84,31 @@ class CBSProbeTests(unittest.TestCase):
         self.assertFalse(cbs.validate(unsafe))
 
 
+    def test_cbs_probe_resolves_relative_build_exe_before_changing_cwd(self):
+        # In prior CI, run(build/fixture.exe) with cwd=build/ attempted
+        # build/build/fixture.exe and produced Unix 53 with no protocol.
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp:
+            root = Path(temp)
+            prefix = root / "prefix"
+            (prefix / "drive_c").mkdir(parents=True)
+            (prefix / "system.reg").write_text("")
+            (prefix / SENTINEL).write_text("")
+            exe = root / "netfx481_cbs_capability.exe"
+            exe.write_bytes(b"synthetic")
+            relative = exe.relative_to(Path.cwd())
+            wine = root / "wine"
+            wine.write_bytes(b"synthetic")
+            with mock.patch.object(cbs.subprocess, "run") as process:
+                def execute(command, **kwargs):
+                    self.assertEqual(command[1], str(exe))
+                    self.assertEqual(kwargs["cwd"], exe.parent)
+                    kwargs["stdout"].write(valid(registry="ABSENT"))
+                    return mock.Mock(returncode=0)
+                process.side_effect = execute
+                result = cbs.run(wine, prefix, relative)
+            self.assertEqual(result["registry"], "ABSENT")
+            process.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
