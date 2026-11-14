@@ -1,0 +1,152 @@
+name: Windows Installer infrastructure reference vs Apple Silicon Wine
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/msi-service-capability-ci.yml'
+      - 'probes/msi_service_capability.c'
+      - 'scripts/msi_service_capability.py'
+      - 'tests/test_msi_service_capability.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-reference:
+    name: Verify original Windows msiserver and MSI API baseline
+    runs-on: windows-2025
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check strict read-only MSI infrastructure evidence
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests -p 'test_msi_service_capability.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Unsafe MSI infrastructure parser" }
+      - name: Build and execute same self-authored Windows C fixture
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force build | Out-Null
+          $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw "MSVC x64 toolchain missing" }
+          $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+          $commands = @(
+            '@echo off'
+            ('call "' + $vcvars + '"')
+            'cl /nologo /W4 /O2 /MT /Fe:build\msi_service_capability.exe probes\msi_service_capability.c Advapi32.lib'
+            'exit /b %errorlevel%'
+          )
+          Set-Content -LiteralPath build/compile-msi.cmd -Value $commands -Encoding ascii
+          & cmd.exe /d /c build\compile-msi.cmd
+          if ($LASTEXITCODE -ne 0) { throw "MSI probe compile failed" }
+          $result = & build\msi_service_capability.exe
+          if ($LASTEXITCODE -ne 0) { throw "Native Windows MSI probe failed" }
+          if ($result -notcontains 'SWCOMPAT_MSI_SCHEMA=1' -or
+              $result -notcontains 'SWCOMPAT_MSI_REGISTRY=PRESENT' -or
+              $result -notcontains 'SWCOMPAT_MSI_SERVICE=PRESENT' -or
+              $result -notcontains 'SWCOMPAT_MSI_DLL_API=BOTH_PRESENT' -or
+              $result -notcontains 'SWCOMPAT_MSI_EXEC=PRESENT') {
+            throw "Native Windows MSI infrastructure reference mismatch"
+          }
+          Write-Output "Native Windows service registration, SCM, msi.dll exports and msiexec present"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: self-authored-windows-installer-probe
+          path: build/msi_service_capability.exe
+          retention-days: 1
+
+  apple-silicon-wine:
+    name: Read-only Windows Installer facility inventory under Apple Silicon Wine XP
+    needs: windows-reference
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: self-authored-windows-installer-probe
+          path: build
+      - name: Acquire identical hash-pinned Wine 11.21 build
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-devel-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-devel-11.21-osx64.tar.xz"
+          echo "9909b486657e10ab66c7279371ae1f990345b596b3b1b3a0cf21f28af24fa0ce  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-build"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-build"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Initialize isolated marked Wine prefix with legacy Windows XP profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat --prefix "$RUNNER_TEMP/msi-prefix" --logs-dir "$RUNNER_TEMP/msi-logs" init
+          touch "$RUNNER_TEMP/msi-prefix/.swcompat-netfx481-disposable"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from scripts.netfx40_legacy import set_legacy_winver
+          assert set_legacy_winver(
+              Path(os.environ["SWCOMPAT_WINE"]),
+              Path(os.environ["RUNNER_TEMP"]) / "msi-prefix") == "APPLIED"
+          PY
+      - name: Execute read-only original Windows MSI facilities diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.msi_service_capability \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/msi-prefix" \
+            --fixture build/msi_service_capability.exe \
+            --output build/msi-service-capability.json
+      - name: Publish only allowed Windows Installer enum statuses
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.msi_service_capability import validate, NO_REPORT
+          path = Path("build/msi-service-capability.json")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("## Read-only Windows Installer APIs under pinned Apple Silicon Wine\n\n")
+              if not path.exists():
+                  f.write("No completed native MSI fixture result.\n")
+              else:
+                  report = json.loads(path.read_text())
+                  if not validate(report):
+                      raise ValueError("Unsafe Windows Installer probe evidence")
+                  for key in ("registry", "service", "service_state", "dll_api", "exec"):
+                      f.write(f"{key}: **{report[key]}**\n\n")
+                  f.write("API or service presence is NOT MSI install functionality.\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-wine-msi-status-only
+          path: build/msi-service-capability.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Require actual native fixture execution without claiming installation
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.msi_service_capability import NO_REPORT, validate
+          data = json.loads(Path("build/msi-service-capability.json").read_text())
+          assert validate(data)
+          assert data != NO_REPORT
+          PY
