@@ -12,7 +12,7 @@ The program then exercises and verifies changes in a single live application ses
 2. **Selection:** Deliver a synthetic mouse click, check the Win32 event counters and child selection button, then verify the selected front pixels change to green.
 3. **Extrusion-like edit:** Click a Win32 child button. Widen the model from 10 to 12 mm and add a synthetic second feature. Verify that a previously background pixel is now covered by the geometry.
 4. **Zoom:** Deliver a synthetic mouse wheel event, change zoom from 1 to 2, and verify a farther-away pixel is now covered.
-5. **Rotation:** Deliver a synthetic keyboard event, rotate the 3D vertices 15 degrees around Y, and verify the actual depth-tested redraw.
+5. **Rotation:** Deliver a synthetic keyboard event, rotate the 3D vertices 15 degrees around Y, and verify the depth-tested redraw **and a changed silhouette pixel** that was previously covered by the model.
 6. **Persistence:** Save a versioned original synthetic model to a fixed temporary Win32 file with WriteFile and FlushFileBuffers. Reopen and compare exact structured contents in the current process.
 7. **Independent reopen:** End the GUI process, launch the same original Windows executable in a second process, read the same file independently and verify exact data. The host also checks every expected byte before deleting the temporary file.
 
