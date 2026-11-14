@@ -6,12 +6,20 @@ from scripts import netfx481_win32_exit as win32
 from scripts import netfx481_trial as trial
 
 
-def sample(code="00000BC2", child="NOT_OBSERVED", status="EXIT"):
+def sample(code="00000BC2", child="NOT_OBSERVED", status="EXIT",
+           lifecycle=None, child_exit=None):
+    if lifecycle is None:
+        lifecycle = ("ALL_EXITED" if child == "OBSERVED" else
+                     "NOT_OBSERVED" if child == "NOT_OBSERVED" else "UNKNOWN")
+    if child_exit is None:
+        child_exit = "ALL_ZERO" if lifecycle == "ALL_EXITED" else "NOT_VERIFIED"
     return ("\n".join([
         "SWCOMPAT_WIN32_SETUP_SCHEMA=1",
         "SWCOMPAT_WIN32_SETUP_STATUS=" + status,
         "SWCOMPAT_WIN32_SETUP_EXIT_HEX=" + code,
         "SWCOMPAT_WIN32_SETUP_CHILD_SEEN=" + child,
+        "SWCOMPAT_WIN32_SETUP_CHILD_LIFECYCLE=" + lifecycle,
+        "SWCOMPAT_WIN32_SETUP_CHILD_EXIT=" + child_exit,
     ]) + "\n").encode("ascii")
 
 
@@ -20,7 +28,8 @@ class FullExitTests(TestCase):
         report = win32.parse(sample(), 0)
         self.assertEqual(report, {
             "status": "EXIT_CAPTURED", "exit_hex": "00000BC2",
-            "category": "REBOOT_REQUIRED", "child_seen": "NOT_OBSERVED"
+            "category": "REBOOT_REQUIRED", "child_seen": "NOT_OBSERVED",
+            "child_lifecycle": "NOT_OBSERVED", "child_exit": "NOT_VERIFIED"
         })
         self.assertEqual(win32.termination(report), ("EXIT_NONZERO", 3010))
         self.assertEqual(3010 % 256, 194)
@@ -55,6 +64,41 @@ class FullExitTests(TestCase):
         self.assertEqual(result["child_seen"], "NOT_OBSERVED")
         self.assertNotIn("did_not_start_child", result)
         self.assertEqual(win32.parse(sample(child="NONE"), 0)["status"], "BAD_REPORT")
+
+    def test_child_lifecycle_must_match_observation_and_exit_state(self):
+        running = win32.parse(
+            sample(child="OBSERVED", lifecycle="STILL_ACTIVE",
+                   child_exit="NOT_VERIFIED"), 0
+        )
+        self.assertEqual(running["child_lifecycle"], "STILL_ACTIVE")
+        self.assertEqual(running["child_exit"], "NOT_VERIFIED")
+        self.assertTrue(win32.validate(running))
+        exited = win32.parse(
+            sample(child="OBSERVED", lifecycle="ALL_EXITED", child_exit="NONZERO"), 0
+        )
+        self.assertEqual(exited["child_exit"], "NONZERO")
+        for kwargs in [
+            dict(child="NOT_OBSERVED", lifecycle="ALL_EXITED"),
+            dict(child="OBSERVED", lifecycle="NOT_OBSERVED"),
+            dict(child="OBSERVED", lifecycle="STILL_ACTIVE", child_exit="ALL_ZERO"),
+            dict(child="OBSERVED", lifecycle="ALL_EXITED", child_exit="NOT_VERIFIED"),
+        ]:
+            with self.subTest(kwargs=kwargs):
+                self.assertEqual(win32.parse(sample(**kwargs), 0)["status"],
+                                 "BAD_REPORT")
+
+    def test_reboot_requires_child_completion_or_no_observed_child(self):
+        old = {"registry": "NOT_FOUND", "clr_family": "MONO", "managed": "PASS"}
+        ready = {"registry": "AT_LEAST_481", "clr_family": "MICROSOFT_CLR_CANDIDATE", "managed": "PASS"}
+        active = win32.parse(
+            sample(child="OBSERVED", lifecycle="STILL_ACTIVE"), 0
+        )
+        result = trial.combine(
+            old, ready, "EXIT_NONZERO", 3010, win32_launch=active,
+            wine_restart={"reason": "WIN32_3010_CONFIRMED",
+                          "action": "SKIPPED_CHILD_ACTIVE"},
+        )
+        self.assertFalse(result["new_framework_installation_confirmed"])
 
     def test_failed_process_does_not_copy_arbitrary_data(self):
         for status in ("START_FAILED", "WAIT_FAILED", "TIMEOUT"):
