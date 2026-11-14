@@ -36,7 +36,8 @@ class VerboseMsiLoggingTests(unittest.TestCase):
             args += ["--output", str(root / "report.json"),
                      "--agree-disposable-prefix"]
             for enabled in (False, True):
-                with self.subTest(enabled=enabled), (
+                with (
+                    self.subTest(enabled=enabled),
                     mock.patch.object(legacy, "inspect", return_value=report) as inspect,
                     mock.patch.object(legacy, "validate", return_value=True),
                 ):
