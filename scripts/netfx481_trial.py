@@ -123,6 +123,39 @@ def runtime_ready(state: dict[str, str]) -> bool:
             and state.get("managed") == "PASS")
 
 
+# The genuine .NET installer may see a spoofed Wine Release value and
+# short-circuit even when the actual managed runtime is Wine Mono. Only the
+# explicit experiment may remove this SINGLE value in a disposable prefix.
+NETFX_FULL_KEY = r"HKLM\Software\Microsoft\NET Framework Setup\NDP\v4\Full"
+
+
+def clear_false_release(wine: Path, prefix: Path, before: dict) -> str:
+    validate_prefix(prefix)
+    if before.get("registry") != "AT_LEAST_481" or before.get("clr_family") != "MONO":
+        return "NOT_APPLICABLE"
+    env = os.environ.copy()
+    env.pop("WINEDLLOVERRIDES", None)
+    env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64", "WINEDEBUG": "-all"})
+    def reg(*arguments: str) -> int | None:
+        try:
+            result = subprocess.run(
+                [str(wine), "reg.exe", *arguments], cwd=prefix, env=env,
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, timeout=20, check=False,
+            )
+            return result.returncode
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+    # Never delete the entire framework key, all registry hives, or any
+    # host Windows value. The change exists only in the marked Wine prefix.
+    deleted = reg("delete", NETFX_FULL_KEY, "/v", "Release", "/f")
+    if deleted != 0:
+        return "DELETE_FAILED"
+    # Only count correction if the exact release indicator really vanished.
+    query = reg("query", NETFX_FULL_KEY, "/v", "Release")
+    return "CLEARED" if query == 1 else "STILL_PRESENT_OR_UNVERIFIED"
+
+
 def run_installer(wine: Path, prefix: Path, installer: Path, timeout: int) -> tuple[str, int | None]:
     env = os.environ.copy()
     env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64", "WINEDEBUG": "-all"})
@@ -159,8 +192,16 @@ def run_installer(wine: Path, prefix: Path, installer: Path, timeout: int) -> tu
 
 def combine(before: dict, after: dict, termination: str, code: int | None,
             *, native_first: dict | None = None,
-            native_only: dict | None = None) -> dict:
-    if termination not in {"START_FAILED", "EXIT_ZERO", "EXIT_NONZERO", "TIMEOUT", "SKIPPED_ALREADY_READY"}:
+            native_only: dict | None = None,
+            registry_adjustment: str = "NOT_REQUESTED") -> dict:
+    if registry_adjustment not in {
+        "NOT_REQUESTED", "NOT_APPLICABLE", "CLEARED", "DELETE_FAILED", "STILL_PRESENT_OR_UNVERIFIED"
+    }:
+        raise ValueError("Unsupported registry adjustment")
+    if termination not in {
+        "START_FAILED", "EXIT_ZERO", "EXIT_NONZERO", "TIMEOUT",
+        "SKIPPED_ALREADY_READY", "SKIPPED_REGISTRY_NOT_CORRECTED"
+    }:
         raise ValueError("Unsupported termination")
     native_first = native_first or {"registry": "NOT_VERIFIED", "clr_family": "NOT_VERIFIED", "managed": "NOT_VERIFIED"}
     native_only = native_only or {"registry": "NOT_VERIFIED", "clr_family": "NOT_VERIFIED", "managed": "NOT_VERIFIED"}
@@ -170,6 +211,7 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
         "media_sha256_verified": True,
         "publisher_signature": "VERIFIED_BY_WINDOWS_CI_NOT_THIS_SCRIPT",
         "before": before,
+        "registry_adjustment": registry_adjustment,
         "after": after,
         "after_native_first": native_first,
         "after_native_only": native_only,
@@ -191,7 +233,7 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
 
 
 def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Path,
-          timeout: int = 210) -> dict:
+          timeout: int = 210, *, experiment_clear_false_release: bool = False) -> dict:
     if os.name == "nt":
         raise ValueError("Native Windows execution is not permitted")
     for path in (wine, prefix, installer, manifest, fixture):
@@ -211,6 +253,12 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
     before = probe(wine, prefix, fixture)
     if runtime_ready(before):
         return combine(before, before, "SKIPPED_ALREADY_READY", None)
+    registry_adjustment = "NOT_REQUESTED"
+    if experiment_clear_false_release:
+        registry_adjustment = clear_false_release(wine, prefix, before)
+        if registry_adjustment in {"DELETE_FAILED", "STILL_PRESENT_OR_UNVERIFIED"}:
+            return combine(before, before, "SKIPPED_REGISTRY_NOT_CORRECTED", None,
+                           registry_adjustment=registry_adjustment)
     termination, code = run_installer(wine, prefix, installer, timeout)
     after = probe(wine, prefix, fixture)
     # Try native Microsoft CLR DLL loading without installing or patching any
@@ -219,7 +267,8 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
     native_first = probe(wine, prefix, fixture, override="native_first")
     native_only = probe(wine, prefix, fixture, override="native_only")
     return combine(before, after, termination, code,
-                   native_first=native_first, native_only=native_only)
+                   native_first=native_first, native_only=native_only,
+                   registry_adjustment=registry_adjustment)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -232,6 +281,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--timeout", type=int, default=210)
     ap.add_argument("--agree-disposable-prefix", action="store_true", required=True)
+    ap.add_argument("--experiment-clear-false-release", action="store_true",
+                    help="Only in marked disposable prefixes, remove a spoofed Mono .NET 4.8.1 Release value before official setup")
     args = ap.parse_args(argv)
     if not 60 <= args.timeout <= 360:
         ap.error("Invalid bounded timeout")
@@ -240,11 +291,13 @@ def main(argv: list[str] | None = None) -> int:
             args.installer.resolve(), args.sha256_file.resolve(), args.probe.resolve()
         }:
             raise ValueError("Report would overwrite input or symlink")
-        result = trial(args.wine, args.prefix, args.installer, args.sha256_file, args.probe, args.timeout)
+        result = trial(args.wine, args.prefix, args.installer, args.sha256_file, args.probe, args.timeout,
+                       experiment_clear_false_release=args.experiment_clear_false_release)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     except (OSError, ValueError):
         ap.error("Trial refused: inspect disposable Wine setup and verified Microsoft package")
+    print("False 4.8.1 registry release correction:", result["registry_adjustment"])
     print("Microsoft .NET 4.8.1 original setup:", result["install_execution"])
     print("Independent Microsoft CLR candidate after:", result["after"]["clr_family"])
     print("Registered .NET 4.8.1 after:", result["after"]["registry"])
