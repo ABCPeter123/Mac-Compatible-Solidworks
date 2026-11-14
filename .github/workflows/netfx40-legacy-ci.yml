@@ -1,4 +1,4 @@
-name: Genuine Microsoft .NET Framework 4.8 Apple Silicon CLR baseline
+name: Original Microsoft .NET 4.0 legacy CLR on Apple Silicon Wine
 
 on:
   pull_request:
@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   absolute-path-regressions:
-    name: Verify relative Wine paths on POSIX without vendor binaries
+    name: Verify .NET 4.0 native CLR false-positive regressions on POSIX
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -31,10 +31,9 @@ jobs:
       - name: Run absolute media and fixture path regression tests
         run: |
           python -m unittest discover -s tests -p 'test_netfx40_legacy.py' -v
-          python -m unittest discover -s tests -p 'test_netfx40_legacy.py' -v
 
   authentic-netfx40-windows:
-    name: Authenticate Microsoft 4.8 installer and compile independent Win32 probes
+    name: Authenticate original Microsoft .NET 4.0 and compile CLR probes
     runs-on: windows-2025
     timeout-minutes: 20
     steps:
@@ -46,7 +45,7 @@ jobs:
         shell: pwsh
         run: |
           python -m unittest discover -s tests -p 'test_netfx40_legacy.py' -v
-          if ($LASTEXITCODE -ne 0) { throw "Original Microsoft 4.8 safety tests failed" }
+          if ($LASTEXITCODE -ne 0) { throw "Original Microsoft 4.0 safety tests failed" }
 
       - name: Compile independent native CLR and managed execution probes
         shell: pwsh
