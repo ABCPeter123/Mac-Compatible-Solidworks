@@ -156,14 +156,19 @@ static int render_frame(HDC dc, int phase) {
     glReadBuffer(buffered ? GL_BACK : GL_FRONT);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     unsigned char center[3] = {0}, edge[3] = {0};
-    int edge_x = (int)((phase >= 3 ? 0.25 : 0.3625) * ui.width);
+    /* At zoom 2, the unrotated right edge is x=+0.60 NDC.
+     * Rotating 15 degrees about Y shifts the front face to the left.
+     * A pixel at +0.50 must change from green to background after rotation. */
+    int edge_x = (int)((phase >= 4 ? 0.75 :
+                         phase >= 3 ? 0.25 : 0.3625) * ui.width);
     glReadPixels(ui.width/2, ui.height/2, 1, 1, GL_RGB, GL_UNSIGNED_BYTE, center);
     glReadPixels(edge_x, ui.height/2, 1, 1, GL_RGB, GL_UNSIGNED_BYTE, edge);
     GLenum error = glGetError();
     int center_ok = rgb_near(center, ui.selected ? 30 : 235,
                             ui.selected ? 209 : 38, 38);
-    int edge_ok = phase >= 2 ? rgb_near(edge, 30, 209, 38)
-                             : rgb_near(edge, 20, 26, 41);
+    int edge_ok = phase == 4 || phase < 2
+        ? rgb_near(edge, 20, 26, 41)
+        : rgb_near(edge, 30, 209, 38);
     return error == GL_NO_ERROR && center_ok && edge_ok && SwapBuffers(dc) != 0;
 }
 
@@ -345,7 +350,7 @@ int main(int argc, char **argv) {
         drain_messages();
         Sleep(10);
     }
-    if (ui.rotations != 1 || ui.yaw != 15 || !render_frame(dc, 3)) {
+    if (ui.rotations != 1 || ui.yaw != 15 || !render_frame(dc, 4)) {
         failed = "RotationAndFrame";
         goto done;
     }
