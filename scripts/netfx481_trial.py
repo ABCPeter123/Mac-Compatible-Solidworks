@@ -127,25 +127,58 @@ def runtime_ready(state: dict[str, str]) -> bool:
 # short-circuit even when the actual managed runtime is Wine Mono. Only the
 # explicit experiment may remove this SINGLE value in a disposable prefix.
 NETFX_FULL_KEY = r"HKLM\Software\Microsoft\NET Framework Setup\NDP\v4\Full"
+NETFX_WOW6432_FULL_KEY = r"HKLM\Software\Wow6432Node\Microsoft\NET Framework Setup\NDP\v4\Full"
+
+
+def reg_code(wine: Path, prefix: Path, *arguments: str) -> int | None:
+    """Execute isolated registry commands without exposing their output."""
+    validate_prefix(prefix)
+    env = os.environ.copy()
+    env.pop("WINEDLLOVERRIDES", None)
+    env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64", "WINEDEBUG": "-all"})
+    try:
+        result = subprocess.run(
+            [str(wine), "reg.exe", *arguments], cwd=prefix, env=env,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, timeout=20, check=False,
+        )
+        return result.returncode
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def clear_false_wow6432_release(wine: Path, prefix: Path, before: dict) -> dict[str, str]:
+    """Remove only a proven false Mono Release from the 32-bit registry view.
+
+    Winetricks issue 2367 documents stale Wow6432Node registration blocking
+    Microsoft .NET installation in Wine-derived environments. Never modify
+    an unmarked or established Wine prefix.
+    """
+    validate_prefix(prefix)
+    if before.get("clr_family") != "MONO" or before.get("registry") != "AT_LEAST_481":
+        return {"before": "NOT_APPLICABLE", "action": "NOT_APPLICABLE", "after": "NOT_APPLICABLE"}
+    key = NETFX_WOW6432_FULL_KEY
+    initial = reg_code(wine, prefix, "query", key, "/v", "Release")
+    if initial == 1:
+        return {"before": "ABSENT", "action": "NOT_NEEDED", "after": "ABSENT"}
+    if initial != 0:
+        return {"before": "UNVERIFIED", "action": "QUERY_FAILED", "after": "UNVERIFIED"}
+    deleted = reg_code(wine, prefix, "delete", key, "/v", "Release", "/f")
+    if deleted != 0:
+        return {"before": "PRESENT", "action": "DELETE_FAILED", "after": "UNVERIFIED"}
+    checked = reg_code(wine, prefix, "query", key, "/v", "Release")
+    return {
+        "before": "PRESENT",
+        "action": "CLEARED" if checked == 1 else "VERIFY_FAILED",
+        "after": "ABSENT" if checked == 1 else "UNVERIFIED",
+    }
 
 
 def clear_false_release(wine: Path, prefix: Path, before: dict) -> str:
     validate_prefix(prefix)
     if before.get("registry") != "AT_LEAST_481" or before.get("clr_family") != "MONO":
         return "NOT_APPLICABLE"
-    env = os.environ.copy()
-    env.pop("WINEDLLOVERRIDES", None)
-    env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64", "WINEDEBUG": "-all"})
-    def reg(*arguments: str) -> int | None:
-        try:
-            result = subprocess.run(
-                [str(wine), "reg.exe", *arguments], cwd=prefix, env=env,
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, timeout=20, check=False,
-            )
-            return result.returncode
-        except (OSError, subprocess.TimeoutExpired):
-            return None
+    reg = lambda *arguments: reg_code(wine, prefix, *arguments)
     # Never delete the entire framework key, all registry hives, or any
     # host Windows value. The change exists only in the marked Wine prefix.
     deleted = reg("delete", NETFX_FULL_KEY, "/v", "Release", "/f")
@@ -193,7 +226,8 @@ def run_installer(wine: Path, prefix: Path, installer: Path, timeout: int) -> tu
 def combine(before: dict, after: dict, termination: str, code: int | None,
             *, native_first: dict | None = None,
             native_only: dict | None = None,
-            registry_adjustment: str = "NOT_REQUESTED") -> dict:
+            registry_adjustment: str = "NOT_REQUESTED",
+            wow6432_release: dict[str, str] | None = None) -> dict:
     if registry_adjustment not in {
         "NOT_REQUESTED", "NOT_APPLICABLE", "CLEARED", "DELETE_FAILED", "STILL_PRESENT_OR_UNVERIFIED"
     }:
@@ -205,6 +239,14 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
         raise ValueError("Unsupported termination")
     native_first = native_first or {"registry": "NOT_VERIFIED", "clr_family": "NOT_VERIFIED", "managed": "NOT_VERIFIED"}
     native_only = native_only or {"registry": "NOT_VERIFIED", "clr_family": "NOT_VERIFIED", "managed": "NOT_VERIFIED"}
+    wow6432_release = wow6432_release or {
+        "before": "NOT_TESTED", "action": "NOT_TESTED", "after": "NOT_TESTED"
+    }
+    if wow6432_release["action"] not in {
+        "NOT_TESTED", "NOT_APPLICABLE", "NOT_NEEDED", "CLEARED",
+        "QUERY_FAILED", "DELETE_FAILED", "VERIFY_FAILED"
+    }:
+        raise ValueError("Unsupported 32-bit correction state")
     return {
         "schema": 1,
         "scope": "MICROSOFT_NETFX481_WINE_DISPOSABLE_EXPERIMENT",
@@ -212,6 +254,7 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
         "publisher_signature": "VERIFIED_BY_WINDOWS_CI_NOT_THIS_SCRIPT",
         "before": before,
         "registry_adjustment": registry_adjustment,
+        "wow6432_release": wow6432_release,
         "after": after,
         "after_native_first": native_first,
         "after_native_only": native_only,
@@ -233,7 +276,8 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
 
 
 def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Path,
-          timeout: int = 210, *, experiment_clear_false_release: bool = False) -> dict:
+          timeout: int = 210, *, experiment_clear_false_release: bool = False,
+          experiment_clear_wow6432_release: bool = False) -> dict:
     if os.name == "nt":
         raise ValueError("Native Windows execution is not permitted")
     for path in (wine, prefix, installer, manifest, fixture):
@@ -250,6 +294,8 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
     if fixture.name.casefold() != "netfx481_runtime_probe.exe" or not fixture.is_file():
         raise ValueError("Original compiled .NET runtime fixture missing")
     verify_media(installer, manifest)
+    if experiment_clear_wow6432_release and not experiment_clear_false_release:
+        raise ValueError("32-bit correction requires 64-bit correction opt-in")
     before = probe(wine, prefix, fixture)
     if runtime_ready(before):
         return combine(before, before, "SKIPPED_ALREADY_READY", None)
@@ -259,6 +305,13 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
         if registry_adjustment in {"DELETE_FAILED", "STILL_PRESENT_OR_UNVERIFIED"}:
             return combine(before, before, "SKIPPED_REGISTRY_NOT_CORRECTED", None,
                            registry_adjustment=registry_adjustment)
+    wow6432 = None
+    if experiment_clear_wow6432_release:
+        wow6432 = clear_false_wow6432_release(wine, prefix, before)
+        if wow6432["action"] in {"QUERY_FAILED", "DELETE_FAILED", "VERIFY_FAILED"}:
+            return combine(before, before, "SKIPPED_REGISTRY_NOT_CORRECTED", None,
+                           registry_adjustment=registry_adjustment,
+                           wow6432_release=wow6432)
     termination, code = run_installer(wine, prefix, installer, timeout)
     after = probe(wine, prefix, fixture)
     # Try native Microsoft CLR DLL loading without installing or patching any
@@ -268,7 +321,8 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
     native_only = probe(wine, prefix, fixture, override="native_only")
     return combine(before, after, termination, code,
                    native_first=native_first, native_only=native_only,
-                   registry_adjustment=registry_adjustment)
+                   registry_adjustment=registry_adjustment,
+                   wow6432_release=wow6432)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -283,6 +337,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--agree-disposable-prefix", action="store_true", required=True)
     ap.add_argument("--experiment-clear-false-release", action="store_true",
                     help="Only in marked disposable prefixes, remove a spoofed Mono .NET 4.8.1 Release value before official setup")
+    ap.add_argument("--experiment-clear-wow6432-release", action="store_true",
+                    help="Also correct Mono's false 32-bit Wow6432Node Release value; requires --experiment-clear-false-release")
     args = ap.parse_args(argv)
     if not 60 <= args.timeout <= 360:
         ap.error("Invalid bounded timeout")
@@ -292,12 +348,14 @@ def main(argv: list[str] | None = None) -> int:
         }:
             raise ValueError("Report would overwrite input or symlink")
         result = trial(args.wine, args.prefix, args.installer, args.sha256_file, args.probe, args.timeout,
-                       experiment_clear_false_release=args.experiment_clear_false_release)
+                       experiment_clear_false_release=args.experiment_clear_false_release,
+                       experiment_clear_wow6432_release=args.experiment_clear_wow6432_release)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     except (OSError, ValueError):
         ap.error("Trial refused: inspect disposable Wine setup and verified Microsoft package")
     print("False 4.8.1 registry release correction:", result["registry_adjustment"])
+    print("32-bit false release correction:", result["wow6432_release"]["action"])
     print("Microsoft .NET 4.8.1 original setup:", result["install_execution"])
     print("Independent Microsoft CLR candidate after:", result["after"]["clr_family"])
     print("Registered .NET 4.8.1 after:", result["after"]["registry"])

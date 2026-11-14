@@ -136,6 +136,109 @@ class DotNet481Tests(unittest.TestCase):
                 self.assertEqual(options["env"]["WINEPREFIX"], str(root))
                 self.assertNotIn("shell", options)
 
+    def test_wow6432_release_requires_proven_mono_and_disposable_prefix(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "drive_c").mkdir()
+            (root / "system.reg").write_text("")
+            with mock.patch.object(trial, "reg_code") as reg:
+                with self.assertRaises(ValueError):
+                    trial.clear_false_wow6432_release(Path("wine"), root, state(runtime="MONO"))
+                (root / trial.SENTINEL).write_text("")
+                result = trial.clear_false_wow6432_release(Path("wine"), root, state())
+                self.assertEqual(result["action"], "NOT_APPLICABLE")
+                reg.assert_not_called()
+
+    def test_wow6432_release_present_is_deleted_and_readback_verified(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "drive_c").mkdir()
+            (root / "system.reg").write_text("")
+            (root / trial.SENTINEL).write_text("")
+            with mock.patch.object(trial, "reg_code", side_effect=[0, 0, 1]) as reg:
+                result = trial.clear_false_wow6432_release(
+                    Path("wine"), root, state(runtime="MONO"))
+            self.assertEqual(result, {
+                "before": "PRESENT", "action": "CLEARED", "after": "ABSENT"
+            })
+            self.assertEqual(reg.call_count, 3)
+            self.assertEqual(reg.call_args_list[0].args[2:], (
+                "query", trial.NETFX_WOW6432_FULL_KEY, "/v", "Release"
+            ))
+            self.assertEqual(reg.call_args_list[1].args[2:], (
+                "delete", trial.NETFX_WOW6432_FULL_KEY, "/v", "Release", "/f"
+            ))
+            self.assertEqual(reg.call_args_list[2].args[2:], reg.call_args_list[0].args[2:])
+
+    def test_wow6432_absent_skips_deletion(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "drive_c").mkdir()
+            (root / "system.reg").write_text("")
+            (root / trial.SENTINEL).write_text("")
+            with mock.patch.object(trial, "reg_code", return_value=1) as reg:
+                result = trial.clear_false_wow6432_release(
+                    Path("wine"), root, state(runtime="MONO"))
+            self.assertEqual(result["action"], "NOT_NEEDED")
+            reg.assert_called_once()
+
+    def test_wow6432_delete_failure_stops_before_real_installer(self):
+        if trial.os.name == "nt":
+            self.skipTest("This is an intentional real-Wine-only operation")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            prefix = root / "prefix"
+            (prefix / "drive_c").mkdir(parents=True)
+            (prefix / "system.reg").write_text("")
+            (prefix / trial.SENTINEL).write_text("")
+            wine = root / "wine"
+            wine.write_bytes(b"synthetic")
+            wine.chmod(0o755)
+            installer = root / "NDP481-x86-x64-AllOS-ENU.exe"
+            installer.write_bytes(b"synthetic")
+            manifest = root / "hash.txt"
+            manifest.write_text("0" * 64)
+            fixture = root / "netfx481_runtime_probe.exe"
+            fixture.write_bytes(b"synthetic")
+            bad = {"before": "PRESENT", "action": "DELETE_FAILED", "after": "UNVERIFIED"}
+            with mock.patch.object(trial, "verify_media", return_value=True), \
+                 mock.patch.object(trial, "probe", return_value=state(runtime="MONO")), \
+                 mock.patch.object(trial, "clear_false_release", return_value="CLEARED"), \
+                 mock.patch.object(trial, "clear_false_wow6432_release", return_value=bad), \
+                 mock.patch.object(trial, "run_installer") as install:
+                result = trial.trial(
+                    wine, prefix, installer, manifest, fixture,
+                    experiment_clear_false_release=True,
+                    experiment_clear_wow6432_release=True,
+                )
+            self.assertEqual(result["wow6432_release"], bad)
+            self.assertEqual(result["install_execution"], "SKIPPED_REGISTRY_NOT_CORRECTED")
+            install.assert_not_called()
+
+    def test_wow6432_override_requires_explicit_64bit_opt_in(self):
+        if trial.os.name == "nt":
+            self.skipTest("Native Windows execution intentionally rejected")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "drive_c").mkdir()
+            (root / "system.reg").write_text("")
+            (root / trial.SENTINEL).write_text("")
+            wine = root / "wine"
+            wine.write_bytes(b"synthetic")
+            wine.chmod(0o755)
+            installer = root / "NDP481-x86-x64-AllOS-ENU.exe"
+            installer.write_bytes(b"synthetic")
+            manifest = root / "hash.txt"
+            manifest.write_text("0" * 64)
+            fixture = root / "netfx481_runtime_probe.exe"
+            fixture.write_bytes(b"synthetic")
+            with mock.patch.object(trial, "verify_media", return_value=True), \
+                 mock.patch.object(trial, "probe") as managed:
+                with self.assertRaisesRegex(ValueError, "requires 64-bit"):
+                    trial.trial(wine, root, installer, manifest, fixture,
+                                experiment_clear_wow6432_release=True)
+                managed.assert_not_called()
+
     def test_no_registry_deletion_without_mono_false_release_or_marker(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
