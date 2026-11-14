@@ -13,6 +13,8 @@ on:
       - 'tests/test_solidworks_ui_census.py'
       - 'scripts/solidworks_ui_gdi_reference.py'
       - 'tests/test_solidworks_ui_gdi_reference.py'
+      - 'scripts/solidworks_runtime_gate.py'
+      - 'tests/test_solidworks_runtime_gate.py'
   pull_request:
     paths:
       - '.github/workflows/solidworks-bootstrap-trial.yml'
@@ -25,6 +27,8 @@ on:
       - 'tests/test_solidworks_ui_census.py'
       - 'scripts/solidworks_ui_gdi_reference.py'
       - 'tests/test_solidworks_ui_gdi_reference.py'
+      - 'scripts/solidworks_runtime_gate.py'
+      - 'tests/test_solidworks_runtime_gate.py'
   workflow_dispatch:
 permissions:
   contents: read
@@ -48,6 +52,7 @@ jobs:
       - run: python -m unittest discover -s tests -p "test_solidworks_private_media_fetch.py" -v
       - run: python -m unittest discover -s tests -p "test_solidworks_ui_census.py" -v
       - run: python -m unittest discover -s tests -p "test_solidworks_ui_gdi_reference.py" -v
+      - run: python -m unittest discover -s tests -p "test_solidworks_runtime_gate.py" -v
       - name: Build and smoke-test original Win32 x64 installer UI census
         if: runner.os == 'Windows'
         shell: pwsh
@@ -69,6 +74,57 @@ jobs:
           path: build/solidworks_installer_ui_probe.exe
           if-no-files-found: error
           retention-days: 1
+  verify-webview2-runtime:
+    name: Verify Microsoft WebView2 and compile controller readiness probe
+    if: github.event_name == 'workflow_dispatch'
+    needs: synthetic-tests
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify pinned official Microsoft WebView2 SDK and compile x64 controller
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          $sdkUrl = "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.4314.35/microsoft.web.webview2.1.0.4314.35.nupkg"
+          curl.exe --fail --location --retry 3 --output build/sdk.zip $sdkUrl
+          if ($LASTEXITCODE -ne 0) { throw "Official WebView2 SDK download failed" }
+          if ((Get-FileHash build/sdk.zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne "90778deb1b77e36292828b4b5833c9255c27533f40e0ddd55891ae718944edc4") { throw "SDK SHA256 mismatch" }
+          Expand-Archive -LiteralPath build/sdk.zip -DestinationPath build/sdk -Force
+          Copy-Item build/sdk/runtimes/win-x64/native/WebView2Loader.dll build/WebView2Loader.dll
+          if ((Get-FileHash build/WebView2Loader.dll -Algorithm SHA256).Hash.ToLowerInvariant() -ne "d3fce90bdeecb08596e377dea6a316354dd8949e32ff09b89d51be00c14e21b6") { throw "WebView2 loader SHA256 mismatch" }
+          $sdk = (Resolve-Path build/sdk/build/native/include).Path
+          cmake -S probes/webview2 -B build/webview2-msvc -G "Visual Studio 18 2026" -A x64 "-DWEBVIEW2_SDK_INCLUDE=$sdk"
+          if ($LASTEXITCODE -ne 0) { throw "Controller CMake failed" }
+          cmake --build build/webview2-msvc --config Release --target webview2_controller_probe --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "Controller MSVC build failed" }
+          Copy-Item build/webview2-msvc/Release/webview2_controller_probe.exe build/webview2_controller_probe.exe
+      - name: Verify official Microsoft-signed Evergreen x64 standalone runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          curl.exe --fail --location --retry 3 --max-time 360 --output build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe "https://go.microsoft.com/fwlink/?linkid=2124701"
+          if ($LASTEXITCODE -ne 0) { throw "Official WebView2 runtime download failed" }
+          $file = Get-Item build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe
+          if ($file.Length -lt 8388608 -or $file.Length -gt 471859200) { throw "Invalid runtime installer size" }
+          $sig = Get-AuthenticodeSignature -LiteralPath $file.FullName
+          if ($sig.Status -ne [System.Management.Automation.SignatureStatus]::Valid) { throw "Invalid Microsoft signature" }
+          if ($null -eq $sig.SignerCertificate -or $sig.SignerCertificate.Subject -notmatch '(^|, )O=Microsoft Corporation(,|$)') { throw "Unexpected installer publisher" }
+          $sha = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -Path build/evergreen-installer.sha256 -Value $sha -NoNewline -Encoding ascii
+          Write-Output "Microsoft runtime publisher and SHA-256 verified"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-webview2-runtime-for-solidworks
+          path: |
+            build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe
+            build/evergreen-installer.sha256
+            build/webview2_controller_probe.exe
+            build/WebView2Loader.dll
+          retention-days: 1
+          compression-level: 0
+
   verify-signed-media:
     name: Verify original SOLIDWORKS publisher and digest
     if: github.event_name == 'workflow_dispatch'
@@ -116,7 +172,7 @@ jobs:
   first-macos-launch:
     name: Test real bootstrapper process under Apple Silicon Wine
     if: github.event_name == 'workflow_dispatch'
-    needs: verify-signed-media
+    needs: [verify-signed-media, verify-webview2-runtime]
     runs-on: macos-15
     timeout-minutes: 23
     env:
@@ -130,6 +186,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: swcompat-original-win32-installer-ui-probe
+          path: build
+      - uses: actions/download-artifact@v4
+        with:
+          name: signed-webview2-runtime-for-solidworks
           path: build
       - name: Install checksum-pinned Wine 11.21 on Apple Silicon
         shell: bash
@@ -152,6 +212,21 @@ jobs:
           python3 -m swcompat --wine "$SWCOMPAT_WINE_BIN" --prefix "$PREFIX" --logs-dir "$RUNNER_TEMP/swcompat-internal-logs" set-winver win11
           test -d "$PREFIX/drive_c" && test -f "$PREFIX/system.reg"
           touch "$PREFIX/.swcompat-solidworks-installer-disposable"
+      - name: Install signed WebView2 into the real SOLIDWORKS Wine prefix and require READY controller
+        shell: bash
+        run: |
+          set -euo pipefail
+          PREFIX="$RUNNER_TEMP/swcompat-solidworks-first-launch"
+          touch "$PREFIX/.swcompat-webview2-disposable"
+          python3 -m scripts.webview2_runtime_trial \
+            --wine "$SWCOMPAT_WINE_BIN" --prefix "$PREFIX" \
+            --installer build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe \
+            --sha256-file build/evergreen-installer.sha256 \
+            --probe build/webview2_controller_probe.exe \
+            --output build/solidworks-webview2-prerequisite.json \
+            --timeout-seconds 240 --agree-disposable-prefix
+          python3 -m scripts.solidworks_runtime_gate \
+            --input build/solidworks-webview2-prerequisite.json --require-ready
       - name: Establish nonproprietary Win32 HWND and GDI baseline on Apple Silicon Wine
         shell: bash
         run: |
@@ -178,6 +253,13 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m scripts.solidworks_bootstrap_trial --wine "$SWCOMPAT_WINE_BIN" --prefix "$RUNNER_TEMP/swcompat-solidworks-first-launch" --agree-disposable-prefix --installer build/SolidworksSetup.exe --sha256 "$SWCOMPAT_INSTALLER_SHA256" --window-probe build/solidworks_installer_ui_probe.exe --timeout-seconds 120 --output build/solidworks-macos-trial.json
+      - name: Summarize WebView2 readiness without copying raw output
+        if: always()
+        shell: bash
+        run: |
+          if [ -f build/solidworks-webview2-prerequisite.json ]; then
+            python3 -m scripts.solidworks_runtime_gate --input build/solidworks-webview2-prerequisite.json >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Summarize synthetic Mac Wine GDI reference
         if: always()
         shell: bash
@@ -218,6 +300,7 @@ jobs:
         with:
           name: solidworks-bootstrap-apple-silicon-sanitized
           path: |
+            build/solidworks-webview2-prerequisite.json
             build/solidworks-macos-gdi-reference.json
             build/solidworks-macos-fetch.json
             build/solidworks-macos-preflight.json
@@ -227,4 +310,5 @@ jobs:
       - name: Delete proprietary media
         if: always()
         shell: bash
-        run: rm -f build/SolidworksSetup.exe
+        run: |
+          rm -f build/SolidworksSetup.exe build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe build/evergreen-installer.sha256 build/webview2_controller_probe.exe build/WebView2Loader.dll
