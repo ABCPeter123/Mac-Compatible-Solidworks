@@ -111,6 +111,14 @@ The next diagnostic distinguishes the *first failed API stage* in the original w
 
 The readback controls distinguish acquisition of a DC, copying into a DIB, and reading individual pixels. A synthetic test passing or an installer `GetPixel` returning multiple colors **still does not verify painted macOS window pixels, successful installation, or CAD functionality**.
 
+## Genuine installer Win32 drawing failure and child-window follow-up
+
+The November 13, 2026 user-authorized [manual run #43550466404](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43550466404) verified the authentic publisher/digest and passed the original synthetic GDI reference on hosted Apple Silicon Wine (`REFERENCE_PASS`). The real installer started with one visible, responsive Win32 window and stayed active to the bounded 120-second timeout. Both direct `GetPixel` and client `StretchBlt` readback failed; the first recorded failed operation was **`STRETCH_BLT_FAILED`**. The window's DC was obtained and a bitmap was created and selected successfully before copying failed. This narrows the original Win32 GDI readback limitation but **does not prove that macOS screen pixels cannot render or that installation is impossible**.
+
+The next diagnostic checks whether content may live on **child HWNDs** of the installer window, potentially an embedded browser or other composed UI. It enumerates at most 128 descendants of each candidate installer HWND, aggregates only visible children with window rectangles at least 100×100, and attempts the same bounded GDI client sample on up to eight child HWNDs total. It also counts the `WS_EX_LAYERED` and `WS_EX_NOREDIRECTIONBITMAP` extended styles on candidate parent/child HWNDs. These are **window-structure hints**, not evidence of the actual graphics backend or successfully painted macOS pixels.
+
+The sanitized statuses are `installer_child_visible_max`, `installer_child_gdi`, `installer_parent_layered_max`, `installer_parent_no_redirection_max`, `installer_child_layered_max` and `installer_child_no_redirection_max`. No child window text, classes, handles, IDs, pixels, screenshots, paths, URLs or serials are uploaded. If a child GDI surface can be read while its parent cannot, investigate which child displays the interface; if all client readbacks fail, investigate Wine compositing/redirection or other native display verification. The workflow does not perform license activation or install SOLIDWORKS.
+
 ## What the workflow actually tests
 
 On native Windows Server, it downloads the executable over HTTPS, verifies its full SHA-256 and PE structure, and checks that the Authenticode publisher is valid and identifies SOLIDWORKS or Dassault. **It does not execute the installer on Windows.** A mismatch aborts the Mac test.

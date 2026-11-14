@@ -8,7 +8,7 @@ from subprocess import CompletedProcess, TimeoutExpired
 from scripts.solidworks_bootstrap_trial import parse_window_probe, sample_window_census
 
 
-def window_sample(processes=1, windows=1, visible=2):
+def window_sample(processes=1, windows=1, visible=2, child=0, parent_layered=0, parent_no_redirection=0, child_layered=0, child_no_redirection=0):
     return (
         f"SWCOMPAT_SW_UI_CANDIDATE_PROCESSES={processes}\n"
         f"SWCOMPAT_SW_UI_CANDIDATE_WINDOWS={windows}\n"
@@ -17,6 +17,12 @@ def window_sample(processes=1, windows=1, visible=2):
         f"SWCOMPAT_SW_UI_GDI_CLIENT={'NONUNIFORM' if windows else 'NO_CANDIDATE'}\n"
         f"SWCOMPAT_SW_UI_GDI_FAILURE_STAGE={'NONE' if windows else 'NO_CANDIDATE'}\n"
         f"SWCOMPAT_SW_UI_DIRECT_GETPIXEL={'NONUNIFORM' if windows else 'NO_CANDIDATE'}\n"
+        f"SWCOMPAT_SW_UI_PARENT_LAYERED={parent_layered}\n"
+        f"SWCOMPAT_SW_UI_PARENT_NO_REDIRECTION={parent_no_redirection}\n"
+        f"SWCOMPAT_SW_UI_CHILD_VISIBLE={child}\n"
+        f"SWCOMPAT_SW_UI_CHILD_LAYERED={child_layered}\n"
+        f"SWCOMPAT_SW_UI_CHILD_NO_REDIRECTION={child_no_redirection}\n"
+        f"SWCOMPAT_SW_UI_CHILD_GDI={'NONUNIFORM' if child else 'NO_CHILD'}\n"
         "SWCOMPAT_SW_UI_PROBE=COMPLETE\n"
     )
 
@@ -26,13 +32,17 @@ class Win32WindowCensusTests(unittest.TestCase):
         self.assertEqual(parse_window_probe(window_sample()), {
             "candidate_processes": 1, "candidate_windows": 1,
             "responsiveness": "RESPONSIVE", "gdi_client": "NONUNIFORM",
-            "gdi_failure_stage": "NONE", "direct_getpixel": "NONUNIFORM"})
+            "gdi_failure_stage": "NONE", "direct_getpixel": "NONUNIFORM",
+            "parent_layered": 0, "parent_no_redirection": 0, "child_visible": 0,
+            "child_layered": 0, "child_no_redirection": 0, "child_gdi": "NO_CHILD"})
 
     def test_absence_does_not_prove_no_ui(self):
         self.assertEqual(parse_window_probe(window_sample(0, 0, 1)), {
             "candidate_processes": 0, "candidate_windows": 0,
             "responsiveness": "NO_CANDIDATE", "gdi_client": "NO_CANDIDATE",
-            "gdi_failure_stage": "NO_CANDIDATE", "direct_getpixel": "NO_CANDIDATE"})
+            "gdi_failure_stage": "NO_CANDIDATE", "direct_getpixel": "NO_CANDIDATE",
+            "parent_layered": 0, "parent_no_redirection": 0, "child_visible": 0,
+            "child_layered": 0, "child_no_redirection": 0, "child_gdi": "NO_CHILD"})
 
     def test_reject_missing_completed_marker(self):
         self.assertIsNone(parse_window_probe(window_sample().replace(
@@ -101,6 +111,30 @@ class Win32WindowCensusTests(unittest.TestCase):
     def test_reject_inconsistent_getpixel_without_candidate(self):
         self.assertIsNone(parse_window_probe(window_sample(0, 0, 1).replace(
             "DIRECT_GETPIXEL=NO_CANDIDATE", "DIRECT_GETPIXEL=NONUNIFORM")))
+
+    def test_child_visible_surface_and_no_redirection_aggregate(self):
+        result = parse_window_probe(window_sample(
+            child=2, parent_no_redirection=1, child_layered=1, child_no_redirection=1))
+        self.assertEqual(result["child_visible"], 2)
+        self.assertEqual(result["child_gdi"], "NONUNIFORM")
+        self.assertEqual(result["parent_no_redirection"], 1)
+        self.assertEqual(result["child_no_redirection"], 1)
+
+    def test_reject_child_surface_without_visible_child(self):
+        self.assertIsNone(parse_window_probe(window_sample().replace(
+            "CHILD_GDI=NO_CHILD", "CHILD_GDI=NONUNIFORM")))
+        self.assertIsNone(parse_window_probe(window_sample(child=1).replace(
+            "CHILD_GDI=NONUNIFORM", "CHILD_GDI=NO_CHILD")))
+
+    def test_reject_more_child_layered_than_visible(self):
+        self.assertIsNone(parse_window_probe(window_sample(child=1, child_layered=2)))
+        self.assertIsNone(parse_window_probe(window_sample(child=1, child_no_redirection=2)))
+
+    def test_reject_parent_layered_without_candidate(self):
+        self.assertIsNone(parse_window_probe(window_sample(
+            processes=0, windows=0, visible=1, parent_layered=1)))
+        self.assertIsNone(parse_window_probe(window_sample(
+            processes=0, windows=0, visible=1, child=1)))
 
     def test_reject_bad_integer(self):
         for bad in ("-1", "1.5", "0x20", "serial123", "999999999999"):
