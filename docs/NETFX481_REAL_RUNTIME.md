@@ -80,6 +80,14 @@ This is a destructive runtime replacement and is therefore permitted only in a n
 
 No raw uninstaller output, Microsoft installer logs, paths, MSI GUIDs, hashes or product serials are uploaded in the JSON result. Only action enums and counts are reported.
 
+## Verified Wine Mono MSI removal and the possible reboot result
+
+The complete [Apple Silicon original-Microsoft setup run 43563308094](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43563308094) verified both fake Release values were cleared, successfully uninstalled **one registered Wine Mono MSI**, and confirmed there were **zero** remaining registered Wine Mono packages. Unlike prior runs, it reached actual Microsoft Framework setup with Mono's support package removed.
+
+The original Microsoft installer returned raw Unix-side subprocess status **194**, which the existing trial reported as EXIT_NONZERO. The true Windows code **3010** (success, restart required) reduces to 194 when truncated to the lower eight Unix exit-status bits, but raw 194 alone is **not proof** the Windows code was 3010. Microsoft documents 3010 as successful installation requiring a restart. The existing trial did not simulate that restart before its managed verification.
+
+After setup, the managed fixture still executed with Mono, the Framework registry Release was NOT_FOUND and Microsoft CLR readiness was FALSE. The next test should perform an isolated Wine reboot using the supported `wineboot --restart` command when raw status 194 is observed, then retest native CLR identity and real managed operations. A reboot is not considered success unless the independent CLR readiness gate passes.
+
 ## Technical boundaries
 
 The independent fixture does not test every SOLIDWORKS managed feature or COM interop, and running Microsoft's CLR under Wine would still not establish CAD readiness. WebView2 browser pixels, native graphics/window composition, installation manager UI, x86 helper processes and activation remain separate compatibility gates.
