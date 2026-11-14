@@ -210,6 +210,14 @@ The upstream [Bottles .NET 4.8.1 dependency recipe](https://github.com/bottlesde
 
 The monitored process and original media remain bounded and signature/hash-verified. The workflow repeats the native `clr.dll`/`mscorlib.dll` before/after PE audit, independent `LoadLibraryW`, full Win32 exit/child classification, and functional CLR/managed tests. This is a narrowly scoped compatibility hypothesis; `fusion=b` alone does **not** establish actual Microsoft .NET or SOLIDWORKS readiness. Tests verify that the override is absent for all non-installation subprocesses and that no positive result can be inferred from the setting.
 
+## Apple Silicon result with Bottles Fusion builtin-only override, November 14, 2026
+
+[Real signed Microsoft 4.8.1 CI run 43624232628](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43624232628) applied Bottles' documented `WINEDLLOVERRIDES=fusion=b` **only while launching the original Microsoft setup**. The sanitized trial verified the scope as `fusion_setup_override=BUILTIN_ONLY`. Wine Mono MSI removal and earlier registry fixes remained in place.
+
+The genuine installer still returned full Windows `3010` (reboot required) and the observed child had completed. The native `Framework64/v4.0.30319/clr.dll` was **ABSENT before** and **ABSENT after** the setup and Wine restart. The independent Windows `LoadLibraryW` probe returned **NOT_FOUND**. The native CLR readiness check and the post-Windows-11-restoration managed runtime check both remained **FALSE**.
+
+The Bottles `fusion=b` dependency recipe therefore **did not fix** the missing CLR payload in this pinned Apple Silicon Wine environment, even though the original installer command and Mono removal matched Bottles' recipe. This result does not invalidate Bottles' recipe on other Wine versions or prefixes; it rules out this single override as a sufficient change under our tested conditions. Further work should isolate the original Microsoft payload extraction/servicing transaction or test a version-staged official Framework installation in an isolated disposable prefix, rather than changing DLL load order again.
+
 ## Technical boundaries
 
 The independent fixture does not test every SOLIDWORKS managed feature or COM interop, and running Microsoft's CLR under Wine would still not establish CAD readiness. WebView2 browser pixels, native graphics/window composition, installation manager UI, x86 helper processes and activation remain separate compatibility gates.
