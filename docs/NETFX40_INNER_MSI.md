@@ -36,3 +36,11 @@ References:
 - Microsoft, [Diagnosing Installation Errors](https://devblogs.microsoft.com/setup/diagnosing-installation-errors/).
 - Microsoft, [.NET Framework Deployment Guide](https://learn.microsoft.com/en-us/dotnet/framework/deployment/deployment-guide-for-developers).
 - Wine Mono, [Compatibility README](https://github.com/wine-mono/wine-mono).
+
+## Additional targeted Wine internal MSI error capture
+
+An [upstream Winetricks .NET 4.0 failure report](https://github.com/Winetricks/winetricks/issues/1792) contains a particularly actionable example: Wine could not locate the original `netfx_core.mzz` cabinet needed by an MSI `InstallFiles` action, and several extracted temporary MSI custom-action DLLs failed to load with Windows error 193 (bad executable format). The outer transaction then reported 1603. This was observed in an older Wine build, **not verified as our current Apple Silicon failure**.
+
+The legacy original Microsoft installer trial now scopes `WINEDEBUG=-all,err+msi` only to its signed bootstrapper's execution. The output is stored in a short-lived anonymous private file, with a bounded 8 MiB read; it is **never printed or uploaded**. The classifier emits only these fixed public categories: CABINET_MEDIA_MISSING, NETFX_CORE_CAB_MISSING, CUSTOM_ACTION_BAD_EXE, CUSTOM_ACTION_DLL_LOAD, MSI_ACTION_INSTALLFILES, MSI_ACTION_FINALIZE, MSI_CUSTOM_ACTION_UNSUPPORTED or OTHER_MSI_ERROR. A too-large trace produces TRUNCATED rather than a false negative.
+
+This provides a second independent signal when Microsoft installer logs are missing, and helps decide whether to inspect Wine's cabinet resolution, WOW64 custom-action loader or other MSI APIs. An error channel marker alone still does not establish a missing API implementation. A narrow fix should only follow a reproducible failing Windows function or cabinet/media resolution operation in a self-authored minimal test.
