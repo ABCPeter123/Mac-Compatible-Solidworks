@@ -1,5 +1,6 @@
 """Synthetic, zero-vendor-binary tests for the .NET 4.8 control experiment."""
 import hashlib
+import os
 import json
 from pathlib import Path
 import tempfile
@@ -109,6 +110,8 @@ class NetFx48BaselineTests(TestCase):
                     Path("/fake/wine"), Path("/fake/disposable"), "HKLM\\Unrelated")
 
     def test_unverified_preflight_still_executes_original_installer(self):
+        if os.name == "nt":
+            self.skipTest("Unix-only Wine safety gate; mock scenario cannot run on native Windows")
         # An absent managed runtime is exactly why the official setup is needed.
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
