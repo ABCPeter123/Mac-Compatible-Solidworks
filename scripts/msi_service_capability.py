@@ -67,12 +67,13 @@ def validate(report: dict) -> bool:
             return False
     if report == NO_REPORT:
         return True
-    return (report["registry"] != "NOT_VERIFIED"
-            and report["service"] != "NOT_VERIFIED"
-            and report["service_state"] != "NOT_VERIFIED" if report["service"] == "PRESENT"
-            else (report["registry"] != "NOT_VERIFIED"
-                  and report["service"] != "NOT_VERIFIED"
-                  and report["service_state"] == "NOT_VERIFIED"))
+    if any(report[name] == "NOT_VERIFIED"
+           for name in ("registry", "service", "dll_api", "exec")):
+        return False
+    if report["service"] == "PRESENT":
+        return report["service_state"] in (
+            FIELDS["SERVICE_STATE"] - {"NOT_VERIFIED"})
+    return report["service_state"] == "NOT_VERIFIED"
 
 
 def run(wine: Path, prefix: Path, fixture: Path, timeout: int = 35) -> dict[str, str]:
