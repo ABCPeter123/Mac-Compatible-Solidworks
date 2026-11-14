@@ -29,6 +29,7 @@ SETUP_LOG = re.compile(
     r"(?i)^Microsoft \.NET Framework 4 Setup_[a-z0-9_(). -]{1,116}\.(?:txt|log|html)$"
 )
 DD_LOG = re.compile(r"(?i)^dd_[a-z0-9_(). -]{1,110}\.(?:txt|log)$")
+VERBOSE_MSI_LOG = re.compile(r"(?i)^msi[a-f0-9]{2,16}\.log$")
 _ACTION_FAILED = re.compile(
     r"(?i)\bAction ended\s+\d{1,2}:\d{2}:\d{2}:\s*"
     r"([a-z][a-z0-9_. -]{0,90})\.\s*Return value 3\b"
@@ -64,7 +65,7 @@ ACTION_CLASSES = {
     "FILESYSTEM", "CUSTOM_ACTION", "FINALIZE_CASCADE", "UNKNOWN",
 }
 STATUS = {"NO_LOG", "SCANNED", "PARTIAL_SCAN", "INVALID_ROOT"}
-SOURCES = {"NONE", "NESTED_MSI", "BOOTSTRAPPER_TEMP"}
+SOURCES = {"NONE", "NESTED_MSI", "VERBOSE_MSI", "BOOTSTRAPPER_TEMP"}
 MSI_RESULT = {"NOT_FOUND", "FAILURE_MARKER", "NO_FAILURE_MARKER"}
 CAUSALITY = {"NOT_ESTABLISHED", "ACTION_HINT_ONLY"}
 
@@ -192,9 +193,10 @@ def scan(prefix: Path) -> dict:
                     x for x in subdirs if not (current / x).is_symlink()
                 )[:24]
             for filename in sorted(files):
-                group = 2 if MSI_LOG.fullmatch(filename) else (
-                    1 if SETUP_LOG.fullmatch(filename) or DD_LOG.fullmatch(filename) else 0
-                )
+                group = (3 if VERBOSE_MSI_LOG.fullmatch(filename) else
+                         2 if MSI_LOG.fullmatch(filename) else
+                         1 if SETUP_LOG.fullmatch(filename) or DD_LOG.fullmatch(filename)
+                         else 0)
                 if group == 0:
                     continue
                 file = current / filename
@@ -205,10 +207,17 @@ def scan(prefix: Path) -> dict:
                     partial = True
                     break
                 result["files_scanned"] += 1
-                if group == 2:
+                if group >= 2:
                     result["msi_files"] += 1
                 try:
                     with file.open("rb") as stream:
+                        # Microsoft verbose MSI logs can exceed 4 MiB. Read
+                        # only their tail, where the failing action and
+                        # rollback summary are normally recorded. Never
+                        # read or export unbounded logs.
+                        if group == 3 and file.stat().st_size > MAX_FILE_BYTES:
+                            partial = True
+                            stream.seek(-MAX_FILE_BYTES, 2)
                         raw = stream.read(MAX_FILE_BYTES + 1)
                     classified = classify_msi_log(raw)
                     if not classified["readable"]:
@@ -227,7 +236,8 @@ def scan(prefix: Path) -> dict:
     if candidates:
         group, top = candidates[0]
         result.update({
-            "primary_source": "NESTED_MSI" if group == 2 else "BOOTSTRAPPER_TEMP",
+            "primary_source": ("VERBOSE_MSI" if group == 3 else
+                               "NESTED_MSI" if group == 2 else "BOOTSTRAPPER_TEMP"),
             "msi_result": "FAILURE_MARKER" if top["failure"] else "NO_FAILURE_MARKER",
             "first_failed_action_class": top["action"],
             "errors": sorted(set().union(*(set(c[1]["errors"]) for c in candidates))),
