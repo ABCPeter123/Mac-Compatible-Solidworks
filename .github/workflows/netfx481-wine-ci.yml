@@ -207,6 +207,8 @@ jobs:
                   out.write("Windows full 32-bit process exit (hex): **" + win32["exit_hex"] + "**\n\n")
                   out.write("Windows exit classification: **" + win32["category"] + "**\n\n")
                   out.write("Direct bootstrapper child observed: **" + win32["child_seen"] + "**\n\n")
+                  out.write("Direct child lifecycle after parent exit: **" + win32["child_lifecycle"] + "**\n\n")
+                  out.write("Observed direct child exit classification: **" + win32["child_exit"] + "**\n\n")
                   out.write("Genuine Microsoft setup /log: **" + result["setup_evidence"]["status"] + "**\n\n")
                   out.write("Microsoft setup failure stage: **" + result["setup_evidence"]["phase"] + "**\n\n")
                   out.write("Recognized Windows error categories: **" + ", ".join(result["setup_evidence"]["codes"] or ["NONE"]) + "**\n\n")
@@ -254,7 +256,7 @@ jobs:
           assert all(code in KNOWN_CODES.values() for code in evidence["codes"])
           from scripts.netfx481_setup_evidence import validate_secondary_report
           assert validate_secondary_report(data["secondary_evidence"])
-          assert data["wine_restart"]["action"] in {"COMPLETED", "NOT_NEEDED", "WINEBOOT_MISSING", "TIMED_OUT", "START_FAILED", "EXIT_NONZERO"}
+          assert data["wine_restart"]["action"] in {"COMPLETED", "NOT_NEEDED", "WINEBOOT_MISSING", "TIMED_OUT", "START_FAILED", "EXIT_NONZERO", "SKIPPED_CHILD_ACTIVE", "SKIPPED_CHILD_UNVERIFIED"}
           assert data["wine_restart"]["reason"] in {"UNIX_194_POSSIBLE_3010", "WIN32_3010_CONFIRMED", "NO_3010_SIGNAL"}
           assert data["wine_mono_removal"]["action"] in {"REMOVED", "NOT_APPLICABLE", "MONO_NOT_REGISTERED", "INVENTORY_FAILED", "REMOVE_FAILED", "VERIFY_FAILED"}
           assert data["wow6432_release"]["action"] in {"CLEARED", "NOT_NEEDED", "NOT_APPLICABLE", "DELETE_FAILED", "QUERY_FAILED", "VERIFY_FAILED"}
