@@ -7,6 +7,8 @@ on:
       - 'probes/netfx481_runtime_probe.cs'
       - 'scripts/netfx481_trial.py'
       - 'tests/test_netfx481_trial.py'
+      - 'scripts/wine_mono_removal.py'
+      - 'tests/test_wine_mono_removal.py'
   workflow_dispatch:
 
 permissions:
@@ -25,6 +27,9 @@ jobs:
       - name: Validate self-authored framework verification tests
         shell: pwsh
         run: python -m unittest discover -s tests -p 'test_netfx481_trial.py' -v
+      - name: Validate verified Wine Mono MSI uninstall safety tests
+        shell: pwsh
+        run: python -m unittest discover -s tests -p 'test_wine_mono_removal.py' -v
       - name: Compile original C# Framework probe against native Windows Framework
         shell: pwsh
         run: |
@@ -108,7 +113,7 @@ jobs:
             --sha256-file build/netfx481.sha256 \
             --probe build/netfx481_runtime_probe.exe \
             --output build/netfx481-experiment.json \
-            --timeout 210 --agree-disposable-prefix --experiment-clear-false-release --experiment-clear-wow6432-release
+            --timeout 210 --agree-disposable-prefix --experiment-clear-false-release --experiment-clear-wow6432-release --experiment-remove-wine-mono
       - name: Restore reported Windows 11 profile and retest managed CLR functionality
         if: always()
         shell: bash
@@ -156,6 +161,7 @@ jobs:
                   out.write("False preexisting .NET registry adjustment: **" + result["registry_adjustment"] + "**\n\n")
                   out.write("32-bit Wine Mono Release prior: **" + result["wow6432_release"]["before"] + "**\n\n")
                   out.write("32-bit Wine Mono Release correction: **" + result["wow6432_release"]["action"] + "**\n\n")
+                  out.write("Registered Wine Mono MSI removal: **" + result["wine_mono_removal"]["action"] + "**\n\n")
                   out.write("32-bit Wine Mono Release afterward: **" + result["wow6432_release"]["after"] + "**\n\n")
                   out.write("Microsoft setup temporary reported OS: **" + result.get("install_os_profile", "NOT_VERIFIED") + "**\n\n")
                   out.write("Wine profile restored: **" + result.get("post_restore_os_profile", "NOT_VERIFIED") + "**\n\n")
@@ -189,6 +195,7 @@ jobs:
           assert data["scope"] == "MICROSOFT_NETFX481_WINE_DISPOSABLE_EXPERIMENT"
           assert data["media_sha256_verified"] is True
           assert data["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+          assert data["wine_mono_removal"]["action"] in {"REMOVED", "NOT_APPLICABLE", "MONO_NOT_REGISTERED", "INVENTORY_FAILED", "REMOVE_FAILED", "VERIFY_FAILED"}
           assert data["wow6432_release"]["action"] in {"CLEARED", "NOT_NEEDED", "NOT_APPLICABLE", "DELETE_FAILED", "QUERY_FAILED", "VERIFY_FAILED"}
           assert "after_native_first" in data and "after_native_only" in data
           assert type(data["runtime_ready_with_controlled_override"]) is bool
