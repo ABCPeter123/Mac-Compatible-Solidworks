@@ -5,6 +5,11 @@ on:
     paths:
       - '.github/workflows/netfx40-legacy-ci.yml'
       - 'scripts/netfx40_legacy.py'
+      - 'scripts/netfx40_msi_evidence.py'
+      - 'scripts/netfx40_wine_msi_errors.py'
+      - 'tests/test_netfx40_wine_msi_errors.py'
+      - 'tests/test_netfx40_msi_evidence.py'
+      - 'docs/NETFX40_INNER_MSI.md'
       - 'probes/netfx481_win32_launch.c'
       - 'tests/test_netfx40_legacy.py'
       - 'scripts/netfx481_trial.py'
@@ -31,6 +36,8 @@ jobs:
       - name: Run absolute media and fixture path regression tests
         run: |
           python -m unittest discover -s tests -p 'test_netfx40_legacy.py' -v
+          python -m unittest discover -s tests -p 'test_netfx40_msi_evidence.py' -v
+          python -m unittest discover -s tests -p 'test_netfx40_wine_msi_errors.py' -v
 
   authentic-netfx40-windows:
     name: Authenticate original Microsoft .NET 4.0 and compile CLR probes
@@ -46,6 +53,10 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_netfx40_legacy.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Original Microsoft 4.0 safety tests failed" }
+          python -m unittest discover -s tests -p 'test_netfx40_msi_evidence.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Nested MSI privacy and failure-action tests failed" }
+          python -m unittest discover -s tests -p 'test_netfx40_wine_msi_errors.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Wine MSI error evidence regression failed" }
 
       - name: Compile independent native CLR and managed execution probes
         shell: pwsh
@@ -183,6 +194,12 @@ jobs:
                                 "managed_functionality", "candidate_native40",
                                 "netfx481_ready", "solidworks_compatibility"):
                       f.write(f"{field}: **{r[field]}**\n\n")
+                  for field in ("status", "classes", "msi_error_lines"):
+                      f.write(f"wine_msi_{field}: **{r['wine_msi_errors'][field]}**\n\n")
+                  for field in ("status", "files_scanned", "msi_files",
+                                "primary_source", "msi_result",
+                                "first_failed_action_class", "errors", "causality"):
+                      f.write(f"nested_msi_{field}: **{r['inner_msi'][field]}**\n\n")
           PY
       - uses: actions/upload-artifact@v4
         if: always()
@@ -203,6 +220,10 @@ jobs:
           assert r["status"] == "MEASURED"
           assert r["selftest"] == "PASS"
           assert r["installer_status"] == "EXIT_CAPTURED"
+          from scripts.netfx40_msi_evidence import validate as validate_msi
+          assert validate_msi(r["inner_msi"])
+          from scripts.netfx40_wine_msi_errors import validate as validate_wine_msi
+          assert validate_wine_msi(r["wine_msi_errors"])
           assert r["netfx481_ready"] is False
           assert r["solidworks_compatibility"] == "NOT_DEMONSTRATED"
           PY

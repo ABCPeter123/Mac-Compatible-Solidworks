@@ -25,6 +25,8 @@ from scripts.netfx481_clr_load import run as clr_load, STATUSES as LOAD_STATES
 from scripts.netfx481_win32_exit import (
     parse as parse_win32, CATEGORIES, CHILD_VALUES, LIFECYCLE_VALUES, EXIT_VALUES,
 )
+from scripts.netfx40_msi_evidence import scan as scan_inner_msi, empty as empty_msi, validate as validate_msi
+from scripts.netfx40_wine_msi_errors import parse as parse_wine_msi, empty as empty_wine_msi, validate as validate_wine_msi, MAX_BYTES as WINE_MSI_MAX
 from scripts.wine_mono_removal import inventory, remove_mono
 from swcompat.wine_paths import windows_media_path
 
@@ -63,6 +65,8 @@ def _env(prefix: Path, *, installation: bool = False) -> dict[str, str]:
     if installation:
         # Upstream Winetricks load_dotnet40 uses this override only for setup.
         env["WINEDLLOVERRIDES"] = "fusion=b"
+        # Narrow Wine error channel, captured privately, never printed raw.
+        env["WINEDEBUG"] = "-all,err+msi"
     return env
 
 
@@ -86,12 +90,13 @@ def _run(wine: Path, prefix: Path, fixture: Path, arguments: list[str],
     if fixture.is_symlink() or not fixture.is_file() or fixture.name.casefold() != LAUNCHER_NAME:
         raise ValueError("Expected self-authored .NET 4.0 Win32 launcher")
     env = _env(prefix, installation=setup)
-    with tempfile.TemporaryFile() as output:
+    with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as private_errors:
         try:
             result = subprocess.run(
                 [str(wine), str(fixture), *arguments], cwd=fixture.parent,
                 env=env, stdin=subprocess.DEVNULL, stdout=output,
-                stderr=subprocess.DEVNULL, check=False, timeout=timeout,
+                stderr=private_errors if setup else subprocess.DEVNULL,
+                check=False, timeout=timeout,
             )
             code = result.returncode
             failed = None
@@ -101,11 +106,17 @@ def _run(wine: Path, prefix: Path, fixture: Path, arguments: list[str],
             code, failed = 124, "PROCESS_FAILED"
         output.seek(0)
         raw = output.read(4097)
+        private_errors.seek(0)
+        diagnostic = private_errors.read(WINE_MSI_MAX + 1) if setup else b""
+    wine_errors = parse_wine_msi(diagnostic) if setup else empty_wine_msi()
     if failed:
         return {"status": failed, "category": "NOT_AVAILABLE",
                 "exit_hex": "NOT_VERIFIED", "child_seen": "NOT_VERIFIED",
-                "child_lifecycle": "NOT_VERIFIED", "child_exit": "NOT_VERIFIED"}
-    return parse_win32(raw, code)
+                "child_lifecycle": "NOT_VERIFIED", "child_exit": "NOT_VERIFIED",
+                "wine_msi_errors": wine_errors}
+    result = parse_win32(raw, code)
+    result["wine_msi_errors"] = wine_errors
+    return result
 
 
 def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
@@ -135,6 +146,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
         "installer_child_seen": "NOT_VERIFIED",
         "installer_child_lifecycle": "NOT_VERIFIED",
         "installer_child_exit": "NOT_VERIFIED",
+        "inner_msi": empty_msi(),
+        "wine_msi_errors": empty_wine_msi(),
         "reboot": "NOT_RUN",
         "clr64_before": disk_before["CLR64"][0],
         "clr64_after": disk_before["CLR64"][0],
@@ -191,6 +204,10 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
     report["installer_child_seen"] = installed.get("child_seen", "NOT_VERIFIED")
     report["installer_child_lifecycle"] = installed.get("child_lifecycle", "NOT_VERIFIED")
     report["installer_child_exit"] = installed.get("child_exit", "NOT_VERIFIED")
+    # Inspect the actual nested MSI failure before reboot can clear TEMP logs.
+    # Raw logs NEVER leave this marked disposable prefix.
+    report["inner_msi"] = scan_inner_msi(prefix)
+    report["wine_msi_errors"] = installed.get("wine_msi_errors", empty_wine_msi())
     if installed["status"] == "EXIT_CAPTURED" and installed["category"] == "REBOOT_REQUIRED":
         report["reboot"] = wineboot_restart(wine, prefix)
     else:
@@ -226,7 +243,8 @@ def validate(r: dict) -> bool:
         and set(r) == {"schema", "scope", "status", "winver", "registry64", "registry32",
                        "mono", "selftest", "installer_status", "installer_exit",
                        "installer_exit_hex", "installer_child_seen",
-                       "installer_child_lifecycle", "installer_child_exit",
+                       "installer_child_lifecycle", "installer_child_exit", "inner_msi",
+                       "wine_msi_errors",
                        "reboot", "clr64_before", "clr64_after",
                        "clr32_before", "clr32_after", "mscorlib64_after",
                        "native_loader", "runtime_family", "managed_functionality",
@@ -241,6 +259,8 @@ def validate(r: dict) -> bool:
         and r["installer_child_seen"] in CHILD_VALUES
         and r["installer_child_lifecycle"] in LIFECYCLE_VALUES
         and r["installer_child_exit"] in EXIT_VALUES
+        and validate_msi(r["inner_msi"])
+        and validate_wine_msi(r["wine_msi_errors"])
         and (r["installer_status"] != "EXIT_CAPTURED" or
              ((r["installer_child_seen"] == "OBSERVED" and
                r["installer_child_lifecycle"] in {"ALL_EXITED", "PARTIAL", "STILL_ACTIVE"})
@@ -298,6 +318,11 @@ def main(argv: list[str] | None = None) -> int:
                 "clr32_after", "mscorlib64_after", "native_loader",
                 "runtime_family", "managed_functionality", "candidate_native40"):
         print("Native .NET 4.0", key, report[key])
+    for key in ("status", "files_scanned", "msi_files", "primary_source",
+                "msi_result", "first_failed_action_class", "errors", "causality"):
+        print("Original .NET 4.0 nested MSI", key, report["inner_msi"][key])
+    for key in ("status", "classes", "msi_error_lines"):
+        print("Wine MSI narrow error channel", key, report["wine_msi_errors"][key])
     return 0
 
 
