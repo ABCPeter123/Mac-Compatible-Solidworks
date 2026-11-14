@@ -166,6 +166,20 @@ Wine Mono MSI removal, exact false-release cleanup and a subsequent disposable W
 
 The primary CI attempt's final schema-check step failed because its old allowlist did not include the newly verified `WIN32_3010_CONFIRMED` reboot reason. The experiment itself ran and produced a valid result. The schema rule is now corrected and CI re-executed. The next concrete problem is **tracking the observed child installer through its actual completion and error result before reboot**, not assuming the parent process's 3010 means the child finished.
 
+## Follow-up: observe the child installer until completion before reboot
+
+The first native Windows monitor confirmed that the authenticated Microsoft Framework bootstrapper exits with full Windows DWORD `0x00000BC2` (3010, reboot required) and **observes a direct child process**, yet the CLR still runs under Mono afterward. The original monitor captured only existence of a child, not whether that installation child had finished before our simulated Wine reboot.
+
+The next independent native Win32 monitor stores up to 12 validated direct child process handles seen in bounded Toolhelp32 snapshots while the original Microsoft parent installer executes. After the parent exits, it waits at most 1.5 seconds per observed child (18 seconds total), reads completed child exit statuses through `GetExitCodeProcess`, and reports only an allowlisted **lifecycle** (`ALL_EXITED`, `STILL_ACTIVE`, `PARTIAL`, `NOT_OBSERVED`, `UNKNOWN`) and coarse exit classification (`ALL_ZERO`, `REBOOT_REQUIRED`, `NONZERO`, `NOT_VERIFIED`). It never uploads child PIDs, process names, command lines, paths or raw error logs.
+
+The observation is best effort. A child exiting before the initial snapshot, children started by a service, and descendant processes outside the direct parent may not be captured. `NOT_OBSERVED` never means no child was started; `PARTIAL` means at least one status was not safely verified. When full parent Win32 code is 3010, **a child still active or not fully verified blocks the simulated restart**, rather than potentially interrupting pending installation activity. Only the independent Microsoft CLR readiness gate can establish Framework compatibility.
+
+## Actual child-lifecycle result on Apple Silicon, November 14, 2026
+
+[Genuine signed Microsoft setup run 43620738467](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43620738467) used the new independent Win32 monitor to track direct child processes after original Microsoft Framework 4.8.1 setup returned full Windows `0x00000BC2` (3010). A direct child was **OBSERVED**, the tracked child lifecycle reached **ALL_EXITED**, and the aggregate child exit classification was **REBOOT_REQUIRED**. The subsequent simulated Wine reboot completed. Despite these results, the independent runtime still executed using **Wine Mono**, the expected .NET 4.8.1 Release indicator was unavailable, and native Microsoft CLR readiness remained **FALSE** even after restoring Windows 11.
+
+This evidence rules out a still-running **observed direct child** as the explanation for the premature reboot hypothesis. It does not prove that service-side, descendant, or very short-lived processes completed, and neither parent nor child reboot-required code is evidence that genuine Microsoft CLR files were installed. The next test should independently inspect the **presence and loader identity of actual native Microsoft CLR binaries** before and after setup, not repeat registry or reboot workarounds.
+
 ## Technical boundaries
 
 The independent fixture does not test every SOLIDWORKS managed feature or COM interop, and running Microsoft's CLR under Wine would still not establish CAD readiness. WebView2 browser pixels, native graphics/window composition, installation manager UI, x86 helper processes and activation remain separate compatibility gates.
