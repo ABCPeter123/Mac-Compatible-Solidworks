@@ -9,6 +9,8 @@ on:
       - 'tests/test_netfx481_trial.py'
       - 'scripts/wine_mono_removal.py'
       - 'tests/test_wine_mono_removal.py'
+      - 'scripts/netfx481_setup_evidence.py'
+      - 'tests/test_netfx481_setup_evidence.py'
   workflow_dispatch:
 
 permissions:
@@ -30,6 +32,9 @@ jobs:
       - name: Validate verified Wine Mono MSI uninstall safety tests
         shell: pwsh
         run: python -m unittest discover -s tests -p 'test_wine_mono_removal.py' -v
+      - name: Validate privacy-safe setup log classification
+        shell: pwsh
+        run: python -m unittest discover -s tests -p 'test_netfx481_setup_evidence.py' -v
       - name: Compile original C# Framework probe against native Windows Framework
         shell: pwsh
         run: |
@@ -113,7 +118,7 @@ jobs:
             --sha256-file build/netfx481.sha256 \
             --probe build/netfx481_runtime_probe.exe \
             --output build/netfx481-experiment.json \
-            --timeout 210 --agree-disposable-prefix --experiment-clear-false-release --experiment-clear-wow6432-release --experiment-remove-wine-mono --experiment-reboot-after-possible-3010
+            --timeout 210 --agree-disposable-prefix --experiment-clear-false-release --experiment-clear-wow6432-release --experiment-remove-wine-mono --experiment-reboot-after-possible-3010 --experiment-setup-log
       - name: Restore reported Windows 11 profile and retest managed CLR functionality
         if: always()
         shell: bash
@@ -169,6 +174,9 @@ jobs:
                   out.write("Wine profile restored: **" + result.get("post_restore_os_profile", "NOT_VERIFIED") + "**\n\n")
                   out.write("Framework readiness after restoring Windows 11: **" + str(result.get("post_restore_framework_ready", False)) + "**\n\n")
                   out.write("Original signed Microsoft offline setup: **" + result["install_execution"] + "**\n\n")
+                  out.write("Genuine Microsoft setup /log: **" + result["setup_evidence"]["status"] + "**\n\n")
+                  out.write("Microsoft setup failure stage: **" + result["setup_evidence"]["phase"] + "**\n\n")
+                  out.write("Recognized Windows error categories: **" + ", ".join(result["setup_evidence"]["codes"] or ["NONE"]) + "**\n\n")
                   out.write("Framework registry signal: **" + result["after"]["registry"] + "**\n\n")
                   out.write("Independent CLR identity: **" + result["after"]["clr_family"] + "**\n\n")
                   out.write("Real managed operations: **" + result["after"]["managed"] + "**\n\n")
@@ -197,6 +205,12 @@ jobs:
           assert data["scope"] == "MICROSOFT_NETFX481_WINE_DISPOSABLE_EXPERIMENT"
           assert data["media_sha256_verified"] is True
           assert data["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+          from scripts.netfx481_setup_evidence import KNOWN_CODES, KNOWN_PHASES, KNOWN_RESULTS
+          evidence = data["setup_evidence"]
+          assert evidence["status"] in KNOWN_RESULTS
+          assert evidence["phase"] in KNOWN_PHASES
+          assert isinstance(evidence["codes"], list)
+          assert all(code in KNOWN_CODES.values() for code in evidence["codes"])
           assert data["wine_restart"]["action"] in {"COMPLETED", "NOT_NEEDED", "WINEBOOT_MISSING", "TIMED_OUT", "START_FAILED", "EXIT_NONZERO"}
           assert data["wine_restart"]["reason"] in {"UNIX_194_POSSIBLE_3010", "NO_3010_SIGNAL"}
           assert data["wine_mono_removal"]["action"] in {"REMOVED", "NOT_APPLICABLE", "MONO_NOT_REGISTERED", "INVENTORY_FAILED", "REMOVE_FAILED", "VERIFY_FAILED"}
