@@ -101,8 +101,8 @@ class NativeMediaTests(unittest.TestCase):
         for call in runner.call_args_list:
             self.assertEqual(call.kwargs["cwd"], Path(call.args[0][-1]).parent)
             self.assertNotIn("timeout", call.kwargs)
-        self.assertEqual(runner.call_args.args[0],
-                         [str(self.wine), str(self.media / "setup.exe")])
+        self.assertEqual([Path(p).resolve() for p in runner.call_args.args[0]],
+                         [self.wine.resolve(), (self.media / "setup.exe").resolve()])
 
     def test_msi_invoked_with_msiexec_not_as_plain_exe(self):
         self.add_full_media()
