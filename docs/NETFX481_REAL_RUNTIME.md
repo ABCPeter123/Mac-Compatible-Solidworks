@@ -124,6 +124,12 @@ Allowed phases are servicing, Windows Installer/MSI, extraction, prerequisites, 
 
 This experimental `/log` option is opt-in, requires successful Wine Mono removal, and is not enabled for a user's existing long-lived Wine prefix. The CI artifact contains the sanitized report only, never the original installer transcript.
 
+## First original Microsoft `/log` result, November 14, 2026
+
+[Real Apple Silicon CI run 43612965379](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43612965379) validated that Microsoft's original signed .NET Framework installer did produce a private transcript at the explicit Windows `/log` destination. The classifier returned **CLASSIFIED**, but did **not** find an allowlisted error code or identifiable servicing/MSI/extraction/prerequisite stage; the fixed evidence fields were `phase=UNKNOWN` and `codes=[]`. The original setup still returned EXIT_NONZERO, and the independent Microsoft CLR / Windows 11 post-restore readiness checks remained FALSE.
+
+This is a successful diagnostic collection but NOT an identified installer root cause. It is possible the main transcript only covers the outer bootstrapper; Microsoft documents additional internal setup logs under Windows `%TEMP%`. A subsequent experiment should inspect those files only in a marked disposable Wine prefix and continue to upload exclusively fixed-schema, nonverbatim results.
+
 ## Technical boundaries
 
 The independent fixture does not test every SOLIDWORKS managed feature or COM interop, and running Microsoft's CLR under Wine would still not establish CAD readiness. WebView2 browser pixels, native graphics/window composition, installation manager UI, x86 helper processes and activation remain separate compatibility gates.
