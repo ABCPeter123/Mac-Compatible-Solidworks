@@ -317,6 +317,65 @@ class DotNet481Tests(unittest.TestCase):
             self.assertEqual(result["install_execution"], "SKIPPED_MONO_NOT_REMOVED")
             installer_runner.assert_not_called()
 
+    def test_possible_windows_3010_needs_completed_wine_reboot_and_real_clr(self):
+        self.assertEqual(3010 % 256, trial.POSSIBLE_3010_UNIX_CODE)
+        prior = state(runtime="MONO")
+        unknown = trial.combine(prior, prior, "EXIT_NONZERO", 194,
+                                wine_restart={"reason": "UNIX_194_POSSIBLE_3010",
+                                              "action": "COMPLETED"})
+        self.assertFalse(unknown["new_framework_installation_confirmed"])
+        good = trial.combine(prior, state(), "EXIT_NONZERO", 194,
+                             wine_restart={"reason": "UNIX_194_POSSIBLE_3010",
+                                           "action": "COMPLETED"})
+        self.assertTrue(good["new_framework_installation_confirmed"])
+        failed = trial.combine(prior, state(), "EXIT_NONZERO", 194,
+                               wine_restart={"reason": "UNIX_194_POSSIBLE_3010",
+                                             "action": "TIMED_OUT"})
+        self.assertFalse(failed["new_framework_installation_confirmed"])
+        other = trial.combine(prior, state(), "EXIT_NONZERO", 67)
+        self.assertFalse(other["new_framework_installation_confirmed"])
+
+    def test_wineboot_restart_requires_disposable_prefix_and_sibling_binary(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            prefix = root / "prefix"
+            (prefix / "drive_c").mkdir(parents=True)
+            (prefix / "system.reg").write_text("")
+            boot = root / "wineboot"
+            boot.write_text("synthetic boot")
+            boot.chmod(0o755)
+            wine = root / "wine"
+            wine.write_text("synthetic Wine")
+            wine.chmod(0o755)
+            with mock.patch.object(trial.subprocess, "run") as invoked:
+                with self.assertRaises(ValueError):
+                    trial.wineboot_restart(wine, prefix)
+                invoked.assert_not_called()
+            (prefix / trial.SENTINEL).write_text("")
+            with mock.patch.object(trial.subprocess, "run", return_value=mock.Mock(returncode=0)) as invoked:
+                self.assertEqual(trial.wineboot_restart(wine, prefix), "COMPLETED")
+                self.assertEqual(invoked.call_args.args[0], [str(boot), "--restart"])
+                self.assertEqual(invoked.call_args.kwargs["env"]["WINEPREFIX"], str(prefix))
+                self.assertEqual(invoked.call_args.kwargs["timeout"], 100)
+
+    def test_wineboot_exit_failure_not_treated_as_reboot(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            prefix = root / "prefix"
+            (prefix / "drive_c").mkdir(parents=True)
+            (prefix / "system.reg").write_text("")
+            (prefix / trial.SENTINEL).write_text("")
+            boot = root / "wineboot"
+            boot.write_text("synthetic")
+            boot.chmod(0o755)
+            wine = root / "wine"
+            wine.write_text("synthetic")
+            wine.chmod(0o755)
+            with mock.patch.object(trial.subprocess, "run", return_value=mock.Mock(returncode=1)):
+                self.assertEqual(trial.wineboot_restart(wine, prefix), "EXIT_NONZERO")
+            with mock.patch.object(trial.subprocess, "run", side_effect=trial.subprocess.TimeoutExpired(["wineboot"], 1)):
+                self.assertEqual(trial.wineboot_restart(wine, prefix), "TIMED_OUT")
+
     def test_real_run_requires_manifest_digest(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
