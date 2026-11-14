@@ -113,7 +113,7 @@ jobs:
             --sha256-file build/netfx481.sha256 \
             --probe build/netfx481_runtime_probe.exe \
             --output build/netfx481-experiment.json \
-            --timeout 210 --agree-disposable-prefix --experiment-clear-false-release --experiment-clear-wow6432-release --experiment-remove-wine-mono
+            --timeout 210 --agree-disposable-prefix --experiment-clear-false-release --experiment-clear-wow6432-release --experiment-remove-wine-mono --experiment-reboot-after-possible-3010
       - name: Restore reported Windows 11 profile and retest managed CLR functionality
         if: always()
         shell: bash
@@ -162,6 +162,8 @@ jobs:
                   out.write("32-bit Wine Mono Release prior: **" + result["wow6432_release"]["before"] + "**\n\n")
                   out.write("32-bit Wine Mono Release correction: **" + result["wow6432_release"]["action"] + "**\n\n")
                   out.write("Registered Wine Mono MSI removal: **" + result["wine_mono_removal"]["action"] + "**\n\n")
+                  out.write("Possible Win32 3010 (Unix status 194): **" + result["wine_restart"]["reason"] + "**\n\n")
+                  out.write("Simulated disposable-prefix reboot: **" + result["wine_restart"]["action"] + "**\n\n")
                   out.write("32-bit Wine Mono Release afterward: **" + result["wow6432_release"]["after"] + "**\n\n")
                   out.write("Microsoft setup temporary reported OS: **" + result.get("install_os_profile", "NOT_VERIFIED") + "**\n\n")
                   out.write("Wine profile restored: **" + result.get("post_restore_os_profile", "NOT_VERIFIED") + "**\n\n")
@@ -195,6 +197,8 @@ jobs:
           assert data["scope"] == "MICROSOFT_NETFX481_WINE_DISPOSABLE_EXPERIMENT"
           assert data["media_sha256_verified"] is True
           assert data["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+          assert data["wine_restart"]["action"] in {"COMPLETED", "NOT_NEEDED", "WINEBOOT_MISSING", "TIMED_OUT", "START_FAILED", "EXIT_NONZERO"}
+          assert data["wine_restart"]["reason"] in {"UNIX_194_POSSIBLE_3010", "NO_3010_SIGNAL"}
           assert data["wine_mono_removal"]["action"] in {"REMOVED", "NOT_APPLICABLE", "MONO_NOT_REGISTERED", "INVENTORY_FAILED", "REMOVE_FAILED", "VERIFY_FAILED"}
           assert data["wow6432_release"]["action"] in {"CLEARED", "NOT_NEEDED", "NOT_APPLICABLE", "DELETE_FAILED", "QUERY_FAILED", "VERIFY_FAILED"}
           assert "after_native_first" in data and "after_native_only" in data

@@ -223,12 +223,44 @@ def run_installer(wine: Path, prefix: Path, installer: Path, timeout: int) -> tu
     return ("EXIT_ZERO" if rc == 0 else "EXIT_NONZERO", rc)
 
 
+# Unix status 194 may mean Windows MSI 3010 (restart required) truncated
+# to the low eight exit-status bits. It is NOT sufficient proof by itself.
+POSSIBLE_3010_UNIX_CODE = 194
+
+
+def wineboot_restart(wine: Path, prefix: Path, *, timeout: int = 100) -> str:
+    """Simulate a Windows restart, only in an explicitly marked Wine prefix."""
+    validate_prefix(prefix)
+    boot = wine.with_name("wineboot")
+    # Some macOS Wine bundles have a wineboot symlink instead of a
+    # standalone Unix executable. Treat a symlink as a reason to use Wine's
+    # built-in Windows wineboot.exe, not as a terminal setup failure.
+    command = ([str(boot), "--restart"]
+               if not boot.is_symlink() and boot.is_file() and os.access(boot, os.X_OK)
+               else [str(wine), "wineboot.exe", "--restart"])
+    env = os.environ.copy()
+    env.pop("WINEDLLOVERRIDES", None)
+    env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64", "WINEDEBUG": "-all"})
+    try:
+        result = subprocess.run(
+            command, cwd=prefix, env=env,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, timeout=timeout, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return "TIMED_OUT"
+    except OSError:
+        return "START_FAILED"
+    return "COMPLETED" if result.returncode == 0 else "EXIT_NONZERO"
+
+
 def combine(before: dict, after: dict, termination: str, code: int | None,
             *, native_first: dict | None = None,
             native_only: dict | None = None,
             registry_adjustment: str = "NOT_REQUESTED",
             wow6432_release: dict[str, str] | None = None,
-            wine_mono_removal: dict | None = None) -> dict:
+            wine_mono_removal: dict | None = None,
+            wine_restart: dict[str, str] | None = None) -> dict:
     if registry_adjustment not in {
         "NOT_REQUESTED", "NOT_APPLICABLE", "CLEARED", "DELETE_FAILED", "STILL_PRESENT_OR_UNVERIFIED"
     }:
@@ -256,6 +288,12 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
         "MONO_NOT_REGISTERED", "REMOVE_FAILED", "VERIFY_FAILED"
     }:
         raise ValueError("Unsupported Wine Mono removal state")
+    wine_restart = wine_restart or {"reason": "NOT_REQUESTED", "action": "NOT_REQUESTED"}
+    if wine_restart["reason"] not in {"NOT_REQUESTED", "NO_3010_SIGNAL", "UNIX_194_POSSIBLE_3010"} or wine_restart["action"] not in {
+        "NOT_REQUESTED", "NOT_NEEDED", "COMPLETED", "WINEBOOT_MISSING",
+        "TIMED_OUT", "START_FAILED", "EXIT_NONZERO"
+    }:
+        raise ValueError("Unsupported Wine restart result")
     return {
         "schema": 1,
         "scope": "MICROSOFT_NETFX481_WINE_DISPOSABLE_EXPERIMENT",
@@ -265,6 +303,7 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
         "registry_adjustment": registry_adjustment,
         "wow6432_release": wow6432_release,
         "wine_mono_removal": wine_mono_removal,
+        "wine_restart": wine_restart,
         "after": after,
         "after_native_first": native_first,
         "after_native_only": native_only,
@@ -277,7 +316,10 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
             runtime_ready(native_first) or runtime_ready(native_only)
         ),
         "new_framework_installation_confirmed": (
-            termination == "EXIT_ZERO" and not runtime_ready(before)
+            (termination == "EXIT_ZERO" or (
+                code == POSSIBLE_3010_UNIX_CODE and wine_restart["action"] == "COMPLETED"
+            ))
+            and not runtime_ready(before)
             and (runtime_ready(after) or runtime_ready(native_first) or runtime_ready(native_only))
         ),
         "registry_signal_only": after.get("registry") == "AT_LEAST_481" and not runtime_ready(after),
@@ -288,7 +330,8 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
 def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Path,
           timeout: int = 210, *, experiment_clear_false_release: bool = False,
           experiment_clear_wow6432_release: bool = False,
-          experiment_remove_wine_mono: bool = False) -> dict:
+          experiment_remove_wine_mono: bool = False,
+          experiment_reboot_after_possible_3010: bool = False) -> dict:
     if os.name == "nt":
         raise ValueError("Native Windows execution is not permitted")
     for path in (wine, prefix, installer, manifest, fixture):
@@ -311,6 +354,8 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
         experiment_clear_false_release and experiment_clear_wow6432_release
     ):
         raise ValueError("Wine Mono removal requires both controlled registry corrections")
+    if experiment_reboot_after_possible_3010 and not experiment_remove_wine_mono:
+        raise ValueError("Reboot experiment requires verified Wine Mono removal")
     before = probe(wine, prefix, fixture)
     if runtime_ready(before):
         return combine(before, before, "SKIPPED_ALREADY_READY", None)
@@ -337,6 +382,12 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
                            wow6432_release=wow6432,
                            wine_mono_removal=wine_mono_removal)
     termination, code = run_installer(wine, prefix, installer, timeout)
+    restart = None
+    if experiment_reboot_after_possible_3010:
+        restart = ({"reason": "UNIX_194_POSSIBLE_3010",
+                    "action": wineboot_restart(wine, prefix)}
+                   if termination == "EXIT_NONZERO" and code == POSSIBLE_3010_UNIX_CODE
+                   else {"reason": "NO_3010_SIGNAL", "action": "NOT_NEEDED"})
     after = probe(wine, prefix, fixture)
     # Try native Microsoft CLR DLL loading without installing or patching any
     # product binaries. This discriminates Wine Mono being selected by default
@@ -347,7 +398,8 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
                    native_first=native_first, native_only=native_only,
                    registry_adjustment=registry_adjustment,
                    wow6432_release=wow6432,
-                   wine_mono_removal=wine_mono_removal)
+                   wine_mono_removal=wine_mono_removal,
+                   wine_restart=restart)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -366,6 +418,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="Also correct Mono's false 32-bit Wow6432Node Release value; requires --experiment-clear-false-release")
     ap.add_argument("--experiment-remove-wine-mono", action="store_true",
                     help="Uninstall Wine Mono MSI in marked disposable prefix before Microsoft .NET; requires both registry flags")
+    ap.add_argument("--experiment-reboot-after-possible-3010", action="store_true",
+                    help="Reboot Wine only after Unix 194 possibly indicates Windows 3010; requires Mono removal")
     args = ap.parse_args(argv)
     if not 60 <= args.timeout <= 360:
         ap.error("Invalid bounded timeout")
@@ -377,7 +431,8 @@ def main(argv: list[str] | None = None) -> int:
         result = trial(args.wine, args.prefix, args.installer, args.sha256_file, args.probe, args.timeout,
                        experiment_clear_false_release=args.experiment_clear_false_release,
                        experiment_clear_wow6432_release=args.experiment_clear_wow6432_release,
-                       experiment_remove_wine_mono=args.experiment_remove_wine_mono)
+                       experiment_remove_wine_mono=args.experiment_remove_wine_mono,
+                       experiment_reboot_after_possible_3010=args.experiment_reboot_after_possible_3010)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     except (OSError, ValueError):
@@ -385,6 +440,8 @@ def main(argv: list[str] | None = None) -> int:
     print("False 4.8.1 registry release correction:", result["registry_adjustment"])
     print("32-bit false release correction:", result["wow6432_release"]["action"])
     print("Wine Mono MSI uninstall:", result["wine_mono_removal"]["action"])
+    print("Possible Windows 3010 reboot:", result["wine_restart"]["reason"])
+    print("Disposable Wine restart:", result["wine_restart"]["action"])
     print("Microsoft .NET 4.8.1 original setup:", result["install_execution"])
     print("Independent Microsoft CLR candidate after:", result["after"]["clr_family"])
     print("Registered .NET 4.8.1 after:", result["after"]["registry"])
