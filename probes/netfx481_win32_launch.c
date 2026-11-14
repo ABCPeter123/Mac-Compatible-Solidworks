@@ -18,7 +18,9 @@
 #define COMMAND_LIMIT 8192u
 #define MAX_CHILDREN 12
 #define PREFIX L"SWCOMPAT_WIN32_SETUP"
-#ifdef SWCOMPAT_NETFX48
+#if defined(SWCOMPAT_NETFX40)
+#define ORIGINAL_SETUP_FILENAME L"dotNetFx40_Full_x86_x64.exe"
+#elif defined(SWCOMPAT_NETFX48)
 #define LOG_FILE L"C:\\swcompat-netfx48-private\\framework-setup.txt"
 #define ORIGINAL_SETUP_FILENAME L"NDP48-x86-x64-AllOS-ENU.exe"
 #else
@@ -174,10 +176,20 @@ int wmain(int argc, wchar_t **argv) {
             return 1;
         }
     } else {
+#ifdef SWCOMPAT_NETFX40
+        /* Exact Winetricks-supported .NET 4.0 bootstrapper child invocation.
+         * 4.0 uses /c:install.exe rather than the newer /norestart /log.
+         * fusion=b must be scoped to the calling Wine process by Python.
+         */
+        if (wcscpy_s(app, COMMAND_LIMIT, argv[1]) != 0 ||
+            swprintf_s(command, COMMAND_LIMIT,
+                L"\"%ls\" /q /c:\"install.exe /q\"", app) < 0) {
+#else
         if (wcscpy_s(app, COMMAND_LIMIT, argv[1]) != 0 ||
             swprintf_s(command, COMMAND_LIMIT,
                 L"\"%ls\" /q /norestart /log \"%ls\"",
                 app, LOG_FILE) < 0) {
+#endif
             report("INVALID_ARGUMENT", 0xFFFFFFFFu, "UNKNOWN", "UNKNOWN", "NOT_VERIFIED");
             return 1;
         }
