@@ -232,13 +232,11 @@ def wineboot_restart(wine: Path, prefix: Path, *, timeout: int = 100) -> str:
     """Simulate a Windows restart, only in an explicitly marked Wine prefix."""
     validate_prefix(prefix)
     boot = wine.with_name("wineboot")
-    if boot.is_symlink():
-        return "WINEBOOT_MISSING"
-    # macOS Wine application bundles often expose wine but no separate Unix
-    # wineboot wrapper. Wine's built-in Windows program still supports the
-    # same restart command when invoked through wine itself.
+    # Some macOS Wine bundles have a wineboot symlink instead of a
+    # standalone Unix executable. Treat a symlink as a reason to use Wine's
+    # built-in Windows wineboot.exe, not as a terminal setup failure.
     command = ([str(boot), "--restart"]
-               if boot.is_file() and os.access(boot, os.X_OK)
+               if not boot.is_symlink() and boot.is_file() and os.access(boot, os.X_OK)
                else [str(wine), "wineboot.exe", "--restart"])
     env = os.environ.copy()
     env.pop("WINEDLLOVERRIDES", None)
