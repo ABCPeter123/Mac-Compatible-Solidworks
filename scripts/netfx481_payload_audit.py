@@ -96,6 +96,7 @@ def compare(before: dict, after: dict) -> dict:
         else:
             change = "UNVERIFIED"
         result["changes"][key] = change
+    result["status"] = "MEASURED"
     if not validate(result):
         raise ValueError("Unsafe CLR payload report")
     return result
