@@ -1,0 +1,157 @@
+name: Self-authored MSI install transaction on native Windows and Apple Silicon Wine
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/msi-transaction-ci.yml'
+      - 'probes/msi_transaction_probe.wxs'
+      - 'probes/msi_transaction_marker.txt'
+      - '.gitattributes'
+      - 'scripts/msi_transaction_trial.py'
+      - 'tests/test_msi_transaction_trial.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-build-and-install:
+    name: Build self-authored MSI and prove file install/uninstall on native Windows
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test strict self-authored MSI proof requirements
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests -p 'test_msi_transaction_trial.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Unsafe MSI transaction test gate" }
+      - name: Build x64 self-authored MSI from repository source with pinned WiX 5
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force build/wix | Out-Null
+          dotnet tool install wix --tool-path build/wix --version 5.0.1
+          if ($LASTEXITCODE -ne 0) { throw "Pinned WiX CLI installation failed" }
+          & build/wix/wix.exe build probes/msi_transaction_probe.wxs -arch x64 -o build/swcompat_msi_transaction.msi
+          if ($LASTEXITCODE -ne 0) { throw "Self-authored x64 MSI compilation failed" }
+          if (!(Test-Path -LiteralPath build/swcompat_msi_transaction.msi)) { throw "Self-authored MSI not generated" }
+          (Get-FileHash -LiteralPath build/swcompat_msi_transaction.msi -Algorithm SHA256).Hash.ToLowerInvariant() |
+            Set-Content -LiteralPath build/msi.sha256 -NoNewline -Encoding ascii
+      - name: Verify ordinary MSI install and cleanup on disposable native Windows CI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $msi = (Resolve-Path build/swcompat_msi_transaction.msi).Path
+          $marker = Join-Path $env:ProgramFiles "SWCompatMsiProbe\msi_transaction_marker.txt"
+          if (Test-Path -LiteralPath $marker) { throw "Preexisting marker means test is invalid" }
+          $installation = Start-Process -FilePath msiexec.exe -ArgumentList @('/i', ('"' + $msi + '"'), '/qn', '/norestart') -PassThru -Wait -NoNewWindow
+          if ($installation.ExitCode -ne 0) { throw "Native Windows self-authored MSI install failed" }
+          if (!(Test-Path -LiteralPath $marker)) { throw "MSI exit zero without installed file" }
+          $expectedBytes = [System.IO.File]::ReadAllBytes((Resolve-Path probes/msi_transaction_marker.txt).Path)
+          $actualBytes = [System.IO.File]::ReadAllBytes($marker)
+          if ([Convert]::ToBase64String($actualBytes) -cne [Convert]::ToBase64String($expectedBytes)) {
+            throw "Self-authored marker differs byte-for-byte from source"
+          }
+          $cleanup = Start-Process -FilePath msiexec.exe -ArgumentList @('/x', ('"' + $msi + '"'), '/qn', '/norestart') -PassThru -Wait -NoNewWindow
+          if ($cleanup.ExitCode -ne 0) { throw "Native Windows MSI uninstall failed" }
+          if (Test-Path -LiteralPath $marker) { throw "Windows MSI failed to uninstall marker" }
+          Write-Output "Native Windows confirmed self-authored MSI full install and uninstall transaction"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: self-authored-msi-private-ci-transfer
+          path: |
+            build/swcompat_msi_transaction.msi
+            build/msi.sha256
+          retention-days: 1
+
+  apple-silicon-msi:
+    name: Test real self-authored MSI transaction in disposable Apple Silicon Wine
+    runs-on: macos-15
+    needs: windows-build-and-install
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: self-authored-msi-private-ci-transfer
+          path: build
+      - name: Download identical hash-verified Wine 11.21
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-devel-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-devel-11.21-osx64.tar.xz"
+          echo "9909b486657e10ab66c7279371ae1f990345b596b3b1b3a0cf21f28af24fa0ce  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-build"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-build"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Initialize a brand-new explicitly marked Wine prefix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat --prefix "$RUNNER_TEMP/self-msi-prefix" --logs-dir "$RUNNER_TEMP/self-msi-logs" init
+          touch "$RUNNER_TEMP/self-msi-prefix/.swcompat-netfx481-disposable"
+      - name: Run original self-authored MSI transaction and verify file bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.msi_transaction_trial \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/self-msi-prefix" \
+            --msi build/swcompat_msi_transaction.msi \
+            --sha256 build/msi.sha256 \
+            --output build/self-authored-msi-result.json \
+            --timeout 150 --agree-disposable-prefix
+      - name: Summarize only fixed self-authored MSI outcomes
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.msi_transaction_trial import validate
+          path = Path("build/self-authored-msi-result.json")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("## Harmless MSI transaction under Apple Silicon Wine\n\n")
+              if not path.exists():
+                  f.write("Experiment incomplete, ordinary MSI functionality unverified.\n")
+              else:
+                  report = json.loads(path.read_text())
+                  if not validate(report):
+                      raise ValueError("Unsafe MSI transaction report")
+                  for key in ("status", "winver", "msi_process", "unix_exit",
+                              "marker_before", "marker_after", "transaction_candidate",
+                              "dotnet_compatibility", "solidworks_compatibility"):
+                      f.write(f"{key}: **{report[key]}**\n\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-wine-self-msi-sanitized
+          path: build/self-authored-msi-result.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Require actual bounded MSI attempt and prohibit false compatibility
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.msi_transaction_trial import validate
+          report = json.loads(Path("build/self-authored-msi-result.json").read_text())
+          assert validate(report)
+          assert report["status"] == "MEASURED"
+          assert report["msi_process"] in {"ZERO", "NONZERO"}
+          assert report["dotnet_compatibility"] is False
+          assert report["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+          PY
