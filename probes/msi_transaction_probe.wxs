@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="SWCompat MSI Transaction Probe"
+           Manufacturer="SWCompat Open Compatibility Research"
+           Version="1.0.0"
+           UpgradeCode="{6E7F8C20-91E6-4C29-A4DF-73C6D2E0BA11}"
+           Scope="perMachine">
+    <MediaTemplate EmbedCab="yes" />
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="SWCompatMsiProbeDir" Name="SWCompatMsiProbe">
+        <Component Id="ProbeFileComponent" Guid="{77ED3F8A-C4B5-47A3-AE1D-4AA81E1C07AB}">
+          <File Id="ProbeMarkerFile" Source="msi_transaction_marker.txt" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="ProbeFeature" Title="MSI Transaction Probe" Level="1">
+      <ComponentRef Id="ProbeFileComponent" />
+    </Feature>
+  </Package>
+</Wix>
