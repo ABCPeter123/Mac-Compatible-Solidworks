@@ -4,13 +4,13 @@ An open-source engineering testbed for running the **original, licensed Windows 
 
 **Status: independent Windows x64 execution, OpenGL 4.5 depth-buffered rendering, and official Microsoft WebView2 Runtime installation with a real controller are verified on hosted Apple Silicon Wine. SOLIDWORKS installation, activation and CAD functionality have NOT been demonstrated.**
 
-## First authentic installer launch (staged, not yet executed)
+## Authentic installer launch (verified process execution, installation unverified)
 
 For a legitimately licensed **SOLIDWORKS Student Edition** serial beginning with 9020, the official [Community Download](https://www.solidworks.com/support/community-download) offers the installer for the student's entitled release. Student licenses are version-specific; possession of a serial alone does not verify access to SOLIDWORKS 2026.
 
-The opt-in [first licensed installer trial](.github/workflows/solidworks-bootstrap-trial.yml) is staged to verify the original installer’s SHA-256 and Windows Authenticode publisher, then attempt its initial process launch in a disposable Apple Silicon Wine prefix. Installer media stays private and is never committed to this public repository. It requires a user-authorized time-limited private download URL and expected SHA-256 stored as GitHub Actions secrets. See [private setup instructions](docs/FIRST_AUTHENTIC_INSTALLER_TRIAL.md).
+The opt-in [licensed installer trial](.github/workflows/solidworks-bootstrap-trial.yml) verifies the original installer’s SHA-256 and Windows Authenticode publisher, then attempt its initial process launch in a disposable Apple Silicon Wine prefix. Installer media stays private and is never committed to this public repository. It requires a user-authorized time-limited private download URL and expected SHA-256 stored as GitHub Actions secrets. See [private setup instructions](docs/FIRST_AUTHENTIC_INSTALLER_TRIAL.md).
 
-**The authentic SOLIDWORKS installer has now been downloaded, digitally verified and executed under hosted Apple Silicon Wine** ([CI run 43494158179](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43494158179)). Its process started and remained running until the bounded 120-second timeout. Installation Manager visibility, completed installation, activation and working CAD remain **NOT VERIFIED**. The next instrumented trial samples probable installer processes and Win32 top-level window creation while the original executable runs, without collecting screenshots or licenses.
+**The authentic SOLIDWORKS installer has now been downloaded, digitally verified and executed under hosted Apple Silicon Wine** ([CI run 43494158179](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43494158179)). Its process started and remained running until the bounded 120-second timeout. Installation Manager visibility, completed installation, activation and working CAD remain **NOT VERIFIED**. Later diagnostic runs detected one visible, responsive installer-associated Win32 window, but client-area pixel readback failed. The current probe also checks visible child HWNDs, owned popup windows and composition styles on the next manually dispatched trial, without collecting screenshots or licenses.
 
 ## Why this exists
 
