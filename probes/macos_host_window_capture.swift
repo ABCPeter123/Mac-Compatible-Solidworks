@@ -69,6 +69,13 @@ private func capture(_ id: CGWindowID, target: (Int, Int, Int)) -> (String, Stri
     }
     return ("SUCCESS", equal ? "PASS" : "MISMATCH")
 }
+private final class CalibrationView: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor(calibratedRed: 40.0 / 255, green: 190.0 / 255,
+                blue: 80.0 / 255, alpha: 1).setFill()
+        NSBezierPath(rect: bounds).fill()
+    }
+}
 private func nativeControl() {
     let app = NSApplication.shared
     app.setActivationPolicy(.regular)
@@ -79,15 +86,19 @@ private func nativeControl() {
                           backing: .buffered, defer: false)
     window.title = controlTitle
     window.isReleasedWhenClosed = false
-    let content = NSView(frame: frame)
-    content.wantsLayer = true
-    content.layer?.backgroundColor = NSColor(
+    let referenceColor = NSColor(
         calibratedRed: 40.0 / 255, green: 190.0 / 255,
-        blue: 80.0 / 255, alpha: 1).cgColor
+        blue: 80.0 / 255, alpha: 1)
+    window.backgroundColor = referenceColor
+    window.isOpaque = true
+    let content = CalibrationView(frame: frame)
     window.contentView = content
     window.makeKeyAndOrderFront(nil)
     app.activate(ignoringOtherApps: true)
-    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.8))
+    content.needsDisplay = true
+    window.displayIfNeeded()
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 1.25))
+    window.displayIfNeeded()
     let id = CGWindowID(window.windowNumber)
     let result = capture(id, target: (40, 190, 80))
     output("NATIVE", "FOUND", result.0, result.1)
