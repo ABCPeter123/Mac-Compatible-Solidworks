@@ -112,6 +112,24 @@ After the actual simulated restart, the independent C# fixture still reported Wi
 
 The next investigation must collect and classify the failing **internal Microsoft installer or CBS/MSI phase** in a private disposable prefix, or test an upstream-supported Winetricks Framework staging chain with a properly isolated native Microsoft runtime. Avoid additional global registry fixes, removing authentic Windows components, or calling SOLIDWORKS compatible based on diagnostics.
 
+## Direct original Microsoft installer error-phase classification
+
+After the verified Wine Mono MSI removal, both 32-bit and 64-bit fake Release cleanup, and a completed Wine reboot, the genuine Microsoft 4.8.1 installer still returns a nonzero Unix status (194) and does not establish a usable Microsoft CLR. Registry, Mono and reboot experiments cannot identify which internal Windows installation phase failed.
+
+Microsoft officially documents the .NET Framework redistributable `/log file` option in its [deployment guide](https://learn.microsoft.com/en-us/dotnet/framework/deployment/deployment-guide-for-developers#command-line-options) and lists setup logs in its [administrator troubleshooting guide](https://learn.microsoft.com/en-us/dotnet/framework/deployment/guide-for-administrators#log-file-locations). The next Apple Silicon CI trial explicitly sends `/log C:\\swcompat-netfx481-private\\framework-setup.txt` with the original authenticated Microsoft installer. The log resides **only** under the marked, disposable Wine prefix on the GitHub runner.
+
+`scripts/netfx481_setup_evidence.py` scans at most 8 MiB from that exact file, recognizes only preapproved public Windows error categories and broad installation phases, emits **only** three fixed-schema fields (`status`, `phase`, `codes`), and discards the original log from the short-lived prefix. No raw text, paths, person names, Windows installer messages, system identifiers or complete Microsoft logs are printed or uploaded. Unknown lines and unknown error codes produce no details. A missing or invalid log is recorded as a negative diagnostic signal, never as installation success.
+
+Allowed phases are servicing, Windows Installer/MSI, extraction, prerequisites, reboot, and unknown. The classifier counts only lines explicitly reporting failures/errors/results. Broad keywords are hints, not proof of which specific Wine API failed. A category matching an error code does not establish root cause without a focused reproduction. The existing independent Microsoft CLR and managed-code readiness gates remain unchanged.
+
+This experimental `/log` option is opt-in, requires successful Wine Mono removal, and is not enabled for a user's existing long-lived Wine prefix. The CI artifact contains the sanitized report only, never the original installer transcript.
+
+## First original Microsoft `/log` result, November 14, 2026
+
+[Real Apple Silicon CI run 43612965379](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43612965379) validated that Microsoft's original signed .NET Framework installer did produce a private transcript at the explicit Windows `/log` destination. The classifier returned **CLASSIFIED**, but did **not** find an allowlisted error code or identifiable servicing/MSI/extraction/prerequisite stage; the fixed evidence fields were `phase=UNKNOWN` and `codes=[]`. The original setup still returned EXIT_NONZERO, and the independent Microsoft CLR / Windows 11 post-restore readiness checks remained FALSE.
+
+This is a successful diagnostic collection but NOT an identified installer root cause. It is possible the main transcript only covers the outer bootstrapper; Microsoft documents additional internal setup logs under Windows `%TEMP%`. A subsequent experiment should inspect those files only in a marked disposable Wine prefix and continue to upload exclusively fixed-schema, nonverbatim results.
+
 ## Technical boundaries
 
 The independent fixture does not test every SOLIDWORKS managed feature or COM interop, and running Microsoft's CLR under Wine would still not establish CAD readiness. WebView2 browser pixels, native graphics/window composition, installation manager UI, x86 helper processes and activation remain separate compatibility gates.
