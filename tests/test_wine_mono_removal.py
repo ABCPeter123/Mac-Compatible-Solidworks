@@ -25,10 +25,16 @@ class WineMonoRemovalTests(unittest.TestCase):
         self.wine.chmod(0o755)
 
     def test_only_recognized_mono_products_are_candidates(self):
-        data = (GUID1 + "|Wine Mono Windows Support\n" +
-                GUID2 + "|Wine Mono Runtime\n" +
-                "{BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB}|SOLIDWORKS\n").encode()
+        data = (GUID1 + "|||Wine Mono Windows Support\n" +
+                GUID2 + "|||Wine Mono Runtime\n" +
+                "{BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB}|||SOLIDWORKS\n").encode()
         self.assertEqual(removal.parse_uninstaller_list(data), tuple(sorted([GUID1, GUID2])))
+
+    def test_wine_native_uninstaller_uses_triple_pipe_not_single(self):
+        value = (GUID1 + "|||Wine Mono Windows Support\n").encode()
+        self.assertEqual(removal.parse_uninstaller_list(value), (GUID1,))
+        with self.assertRaises(ValueError):
+            removal.parse_uninstaller_list((GUID1 + "|Wine Mono Windows Support\n").encode())
 
     def test_reject_malformed_records_unsafe_product_name_and_raw_output(self):
         bad = [
@@ -48,7 +54,7 @@ class WineMonoRemovalTests(unittest.TestCase):
         def run(command, **kwargs):
             operations.append((command, kwargs))
             if command[2] == "--list":
-                payload = ((GUID1 + "|Wine Mono Windows Support\n") if len(operations) == 1
+                payload = ((GUID1 + "|||Wine Mono Windows Support\n") if len(operations) == 1
                            else "").encode()
                 kwargs["stdout"].write(payload)
             return mock.Mock(returncode=0)
