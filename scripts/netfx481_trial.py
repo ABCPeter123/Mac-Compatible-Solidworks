@@ -60,7 +60,7 @@ def verify_media(installer: Path, manifest: Path) -> bool:
 
 def parse_probe(raw: bytes, exit_code: int) -> dict[str, str]:
     empty = {key.lower(): "NOT_VERIFIED" for key in FIELDS if key != "SCHEMA"}
-    if exit_code not in (0, 1) or len(raw) > MAX_PROBE_OUTPUT:
+    if exit_code not in (0, 1) or len(raw) > MAX_PROBE_OUTPUT or b"\x00" in raw:
         return empty
     try:
         text = raw.decode("ascii")
@@ -70,6 +70,8 @@ def parse_probe(raw: bytes, exit_code: int) -> dict[str, str]:
     for line in text.splitlines():
         match = LINE.fullmatch(line.strip())
         if not match:
+            if line.startswith("SWCOMPAT_NETFX481_"):
+                return empty
             continue
         key, value = match.groups()
         if key not in FIELDS or value not in FIELDS[key] or key in values:
