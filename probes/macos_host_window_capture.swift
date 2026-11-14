@@ -52,11 +52,12 @@ private func capture(_ id: CGWindowID, target: (Int, Int, Int)) -> (String, Stri
     if process.terminationStatus != 0 {
         return ("UNAVAILABLE", "NOT_TESTED")
     }
-    guard let bitmap = NSBitmapImageRep(contentsOf: location),
+    guard let bytes = try? Data(contentsOf: location),
+          let bitmap = NSBitmapImageRep(data: bytes),
           bitmap.pixelsWide >= 50, bitmap.pixelsHigh >= 50,
           let sampled = bitmap.colorAt(x: bitmap.pixelsWide / 2,
                                       y: bitmap.pixelsHigh / 2)?
-              .usingColorSpace(.deviceRGB) else {
+              .usingColorSpace(NSColorSpace.deviceRGB) else {
         return ("UNAVAILABLE", "NOT_TESTED")
     }
     let observed = [Int((sampled.redComponent * 255).rounded()),
