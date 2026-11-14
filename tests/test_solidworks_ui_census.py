@@ -8,10 +8,11 @@ from subprocess import CompletedProcess, TimeoutExpired
 from scripts.solidworks_bootstrap_trial import parse_window_probe, sample_window_census
 
 
-def window_sample(processes=1, windows=1, visible=2, child=0, parent_layered=0, parent_no_redirection=0, child_layered=0, child_no_redirection=0):
+def window_sample(processes=1, windows=1, visible=2, child=0, parent_layered=0, parent_no_redirection=0, child_layered=0, child_no_redirection=0, owned=0):
     return (
         f"SWCOMPAT_SW_UI_CANDIDATE_PROCESSES={processes}\n"
         f"SWCOMPAT_SW_UI_CANDIDATE_WINDOWS={windows}\n"
+        f"SWCOMPAT_SW_UI_OWNED_WINDOWS={owned}\n"
         f"SWCOMPAT_SW_UI_VISIBLE_LARGE_WINDOWS={visible}\n"
         f"SWCOMPAT_SW_UI_RESPONSIVENESS={'RESPONSIVE' if windows else 'NO_CANDIDATE'}\n"
         f"SWCOMPAT_SW_UI_GDI_CLIENT={'NONUNIFORM' if windows else 'NO_CANDIDATE'}\n"
@@ -30,7 +31,7 @@ def window_sample(processes=1, windows=1, visible=2, child=0, parent_layered=0, 
 class Win32WindowCensusTests(unittest.TestCase):
     def test_candidate_window_is_a_heuristic_only(self):
         self.assertEqual(parse_window_probe(window_sample()), {
-            "candidate_processes": 1, "candidate_windows": 1,
+            "candidate_processes": 1, "candidate_windows": 1, "owned_windows": 0,
             "responsiveness": "RESPONSIVE", "gdi_client": "NONUNIFORM",
             "gdi_failure_stage": "NONE", "direct_getpixel": "NONUNIFORM",
             "parent_layered": 0, "parent_no_redirection": 0, "child_visible": 0,
@@ -38,7 +39,7 @@ class Win32WindowCensusTests(unittest.TestCase):
 
     def test_absence_does_not_prove_no_ui(self):
         self.assertEqual(parse_window_probe(window_sample(0, 0, 1)), {
-            "candidate_processes": 0, "candidate_windows": 0,
+            "candidate_processes": 0, "candidate_windows": 0, "owned_windows": 0,
             "responsiveness": "NO_CANDIDATE", "gdi_client": "NO_CANDIDATE",
             "gdi_failure_stage": "NO_CANDIDATE", "direct_getpixel": "NO_CANDIDATE",
             "parent_layered": 0, "parent_no_redirection": 0, "child_visible": 0,
@@ -145,6 +146,17 @@ class Win32WindowCensusTests(unittest.TestCase):
 
     def test_reject_more_candidate_than_visible(self):
         self.assertIsNone(parse_window_probe(window_sample(2, 3, 1)))
+
+    def test_owned_popup_is_counted_without_disclosing_window_identity(self):
+        result = parse_window_probe(window_sample(processes=2, windows=2, visible=3, owned=1))
+        self.assertIsNotNone(result)
+        self.assertEqual(result["candidate_windows"], 2)
+        self.assertEqual(result["owned_windows"], 1)
+        self.assertNotIn("window_title", result)
+
+    def test_reject_owned_popup_count_above_candidate_count(self):
+        self.assertIsNone(parse_window_probe(window_sample(owned=2)))
+        self.assertIsNone(parse_window_probe(window_sample(0, 0, 1, owned=1)))
 
     def test_reject_huge_output(self):
         self.assertIsNone(parse_window_probe(window_sample() + ("x" * 5000)))

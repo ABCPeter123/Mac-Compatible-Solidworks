@@ -1,6 +1,6 @@
 # First authentic SOLIDWORKS installer test on Apple Silicon Wine
 
-**Current state:** the workflow and launcher are prepared, but no actual SOLIDWORKS installer has been provided or executed. Passing synthetic CI checks does not establish software installation or UI visibility.
+**Current state:** the authentic signed SOLIDWORKS bootstrapper has been verified and executed on hosted Apple Silicon Wine, but its process timed out after 120 seconds. A responsive Win32 installer window was detected, while GDI pixel readback failed. Installation Manager visibility, full installation, activation and CAD operation remain unverified.
 
 ## Getting legitimate installation media
 
@@ -142,3 +142,7 @@ If you cannot host media privately, run the existing [offline media scanner](INS
 - This cannot demonstrate a fully installed SOLIDWORKS GUI on a physical Mac. No Windows VM is used.
 
 See [graphics blocker issue #26](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/issues/26).
+
+## Owned installer dialogs and popup windows
+
+Some Win32 installer dialogs are visible **owned top-level windows**, not child HWNDs. Previous probes excluded them through the `GW_OWNER` filter, potentially missing an installer dialog even when its process was running. The updated read-only probe includes visible installer-associated owned windows in the bounded HWND/GDI analysis and reports `installer_owned_windows_max`. It retains the same process allowlist and never exports window titles, owner handles, class names, contents, screenshots, paths, installer media or credentials. A nonzero popup count is only Win32 structural evidence. The actual macOS display and SOLIDWORKS installation remain unverified.
