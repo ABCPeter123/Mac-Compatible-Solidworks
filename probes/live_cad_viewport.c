@@ -222,7 +222,8 @@ int main(int argc, char **argv) {
                      "SWCOMPAT_LIVE_INDEPENDENT_REOPEN=FAIL");
         return valid ? 0 : 1;
     }
-    if (strcmp(argv[1], "run") != 0) return 2;
+    int capture_mode = strcmp(argv[1], "capture") == 0;
+    if (!capture_mode && strcmp(argv[1], "run") != 0) return 2;
     if (GetFileAttributesA(argv[2]) != INVALID_FILE_ATTRIBUTES) return 2;
     ui.zoom = 1;
     ui.width_mm = 10;
@@ -360,6 +361,19 @@ int main(int argc, char **argv) {
         goto done;
     }
     puts("SWCOMPAT_LIVE_SAVE_REOPEN=PASS");
+    if (capture_mode) {
+        /* A separate macOS process captures the actual host window while
+         * the rotated geometry is still displayed. Readiness is emitted
+         * only after real WGL pixel checks and the saved-model roundtrip.
+         * This bounded window requires no mouse, network or unlock access. */
+        puts("SWCOMPAT_LIVE_HOST_CAPTURE_READY=PASS");
+        fflush(stdout);
+        DWORD capture_started = GetTickCount();
+        while ((DWORD)(GetTickCount() - capture_started) < 25000) {
+            drain_messages();
+            Sleep(25);
+        }
+    }
 
     if (!PostMessageW(window, WM_CLOSE, 0, 0) || !pump_until(is_closed, 5000)) {
         failed = "WindowClose";
