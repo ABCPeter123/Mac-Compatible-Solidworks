@@ -3,18 +3,16 @@ name: Genuine Microsoft .NET Framework 4.8 Apple Silicon CLR baseline
 on:
   pull_request:
     paths:
-      - '.github/workflows/netfx40-baseline-ci.yml'
+      - '.github/workflows/netfx40-legacy-ci.yml'
       - 'scripts/netfx40_legacy.py'
-      - 'scripts/netfx40_legacy.py'
-      - 'probes/netfx401_win32_launch.c'
+      - 'probes/netfx481_win32_launch.c'
       - 'tests/test_netfx40_legacy.py'
-      - 'tests/test_netfx40_legacy.py'
-      - 'scripts/netfx401_trial.py'
+      - 'scripts/netfx481_trial.py'
       - 'scripts/wine_mono_removal.py'
-      - 'scripts/netfx401_clr_load.py'
-      - 'scripts/netfx401_payload_audit.py'
-      - 'probes/netfx401_runtime_probe.cs'
-      - 'probes/netfx401_clr_load.c'
+      - 'scripts/netfx481_clr_load.py'
+      - 'scripts/netfx481_payload_audit.py'
+      - 'probes/netfx481_runtime_probe.cs'
+      - 'probes/netfx481_clr_load.c'
   workflow_dispatch:
 
 permissions:
@@ -49,8 +47,7 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_netfx40_legacy.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Original Microsoft 4.8 safety tests failed" }
-          python -m unittest discover -s tests -p 'test_netfx40_legacy.py' -v
-          if ($LASTEXITCODE -ne 0) { throw "Original 4.8 Win32 exit parser safety tests failed" }
+
       - name: Compile independent native CLR and managed execution probes
         shell: pwsh
         run: |
@@ -62,11 +59,11 @@ jobs:
           if (!$vs) { throw "MSVC tools missing" }
           $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
           if (!(Test-Path $vcvars)) { throw "MSVC x64 environment missing" }
-          $cmdText = "@echo off`r`ncall `"$vcvars`"`r`ncl /nologo /W4 /O2 /Fe:build\netfx401_clr_load.exe probes\netfx401_clr_load.c`r`nexit /b %errorlevel%`r`n"
+          $cmdText = "@echo off`r`ncall `"$vcvars`"`r`ncl /nologo /W4 /O2 /Fe:build\netfx481_clr_load.exe probes\netfx481_clr_load.c`r`nexit /b %errorlevel%`r`n"
           Set-Content -LiteralPath build/compile-netfx40-loader.cmd -Value $cmdText -Encoding ascii
           & cmd.exe /d /c build\compile-netfx40-loader.cmd
           if ($LASTEXITCODE -ne 0) { throw "CLR loader compilation failed" }
-          $cmdText = "@echo off`r`ncall `"$vcvars`"`r`ncl /nologo /W4 /O2 /DSWCOMPAT_NETFX40 /Fe:build\netfx40_win32_launch.exe probes\netfx401_win32_launch.c`r`nexit /b %errorlevel%`r`n"
+          $cmdText = "@echo off`r`ncall `"$vcvars`"`r`ncl /nologo /W4 /O2 /DSWCOMPAT_NETFX40 /Fe:build\netfx40_win32_launch.exe probes\netfx481_win32_launch.c`r`nexit /b %errorlevel%`r`n"
           Set-Content -LiteralPath build/compile-netfx40-launcher.cmd -Value $cmdText -Encoding ascii
           & cmd.exe /d /c build\compile-netfx40-launcher.cmd
           if ($LASTEXITCODE -ne 0) { throw "Exact 4.8 Win32 launcher compilation failed" }
@@ -76,13 +73,13 @@ jobs:
           }
           $csc = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
           if (!(Test-Path $csc)) { throw "Microsoft C# compiler missing" }
-          & $csc /nologo /target:exe /reference:System.Core.dll /reference:System.Xml.dll /out:build\netfx401_runtime_probe.exe probes\netfx401_runtime_probe.cs
+          & $csc /nologo /target:exe /reference:System.Core.dll /reference:System.Xml.dll /out:build\netfx481_runtime_probe.exe probes\netfx481_runtime_probe.cs
           if ($LASTEXITCODE -ne 0) { throw "C# fixture compilation failed" }
-          $loader = & build\netfx401_clr_load.exe
+          $loader = & build\netfx481_clr_load.exe
           if ($LASTEXITCODE -ne 0 -or $loader -notcontains 'SWCOMPAT_CLR_LOAD_STATUS=LOADED') {
             throw "Windows native CLR baseline failed"
           }
-          & build\netfx401_runtime_probe.exe
+          & build\netfx481_runtime_probe.exe
           if ($LASTEXITCODE -ne 0) { throw "Windows managed baseline failed" }
       - name: Download official Microsoft .NET 4.0 offline installer and validate original Authenticode
         shell: pwsh
@@ -111,8 +108,8 @@ jobs:
           path: |
             build/dotNetFx40_Full_x86_x64.exe
             build/netfx40.sha256
-            build/netfx401_runtime_probe.exe
-            build/netfx401_clr_load.exe
+            build/netfx481_runtime_probe.exe
+            build/netfx481_clr_load.exe
             build/netfx40_win32_launch.exe
           compression-level: 0
           retention-days: 1
@@ -149,7 +146,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m swcompat --prefix "$RUNNER_TEMP/netfx40-prefix" --logs-dir "$RUNNER_TEMP/netfx40-logs" init
-          touch "$RUNNER_TEMP/netfx40-prefix/.swcompat-netfx401-disposable"
+          touch "$RUNNER_TEMP/netfx40-prefix/.swcompat-netfx481-disposable"
       - name: Install only original signed .NET 4.0 and independently check native CLR
         shell: bash
         run: |
@@ -157,8 +154,8 @@ jobs:
           python3 -m scripts.netfx40_legacy \
             --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx40-prefix" \
             --installer build/dotNetFx40_Full_x86_x64.exe \
-            --probe build/netfx401_runtime_probe.exe \
-            --clr-loader build/netfx401_clr_load.exe \
+            --probe build/netfx481_runtime_probe.exe \
+            --clr-loader build/netfx481_clr_load.exe \
             --launcher build/netfx40_win32_launch.exe \
             --output build/netfx40-baseline.json \
             --timeout 210 --agree-disposable-prefix
