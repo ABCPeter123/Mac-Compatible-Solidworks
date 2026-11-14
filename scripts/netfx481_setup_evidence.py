@@ -131,3 +131,148 @@ def discard_log(logfile: Path) -> None:
             logfile.parent.rmdir()
         except OSError:
             pass
+
+
+# Microsoft .NET deployment can write additional bootstrapper, setup utility,
+# CBS and framework logs to Windows %TEMP% and servicing directories. Inspect
+# *only* ephemeral Wine-owned paths, with a strict bounded search and NO raw
+# log content, filenames, error messages or paths in the result.
+SECONDARY_MAX_FILES = 24
+SECONDARY_MAX_DIRS = 120
+SECONDARY_MAX_PER_FILE = 2 * 1024 * 1024
+_SECONDARY_FILENAME = re.compile(
+    r"(?i)^(?:dd_[a-z0-9_.() -]{1,120}\.(?:txt|log)"
+    r"|NetFxSetupEvents\.txt"
+    r"|Microsoft \.NET Framework 4(?:\.8(?:\.1)?)? Setup_[a-z0-9_.() -]{1,100}\.(?:txt|html)"
+    r"|CBS\.log)$"
+)
+SECONDARY_SOURCE_NAMES = {
+    "BOOTSTRAPPER_TEMP", "FRAMEWORK_SETUP", "SETUP_EVENTS", "SERVICING_CBS"
+}
+SECONDARY_STATUSES = {"NOT_REQUESTED", "NOT_FOUND", "CLASSIFIED", "PARTIAL_SCAN", "INVALID_ROOT"}
+
+
+def _source_group(name: str) -> str:
+    lowered = name.lower()
+    if lowered == "cbs.log":
+        return "SERVICING_CBS"
+    if lowered.startswith("microsoft .net framework"):
+        return "FRAMEWORK_SETUP"
+    if lowered == "netfxsetupevents.txt":
+        return "SETUP_EVENTS"
+    return "BOOTSTRAPPER_TEMP"
+
+
+def scan_secondary_logs(prefix: Path) -> dict[str, object]:
+    """Bounded local classification of Microsoft logs in a disposable prefix.
+
+    Never returns any source filename or raw log content. Directory enumeration
+    is non-following and limited; unknown paths, symlinks and large files are
+    skipped or classified as incomplete rather than leaking context.
+    """
+    import os
+
+    from scripts.netfx481_trial import validate_prefix
+    validate_prefix(prefix)
+    drive_c = prefix / "drive_c"
+    roots = [
+        drive_c / "users",
+        drive_c / "windows" / "temp",
+        drive_c / "windows" / "Temp",
+        drive_c / "Temp",
+        drive_c / "windows" / "logs" / "CBS",
+    ]
+    seen_files: set[Path] = set()
+    totals = {name: 0 for name in sorted(SECONDARY_SOURCE_NAMES)}
+    errors: set[str] = set()
+    phases = {name: 0 for name in sorted(KNOWN_PHASES)}
+    scanned = 0
+    directories = 0
+    partial = False
+    invalid = False
+    for root in roots:
+        if not root.exists():
+            continue
+        if root.is_symlink() or not root.is_dir():
+            invalid = True
+            continue
+        for current, subdirs, filenames in os.walk(root, topdown=True, followlinks=False):
+            directories += 1
+            base = Path(current)
+            if directories > SECONDARY_MAX_DIRS:
+                partial = True
+                break
+            relative_parts = len(base.relative_to(root).parts)
+            if relative_parts >= 7:
+                subdirs.clear()
+            else:
+                subdirs[:] = sorted(x for x in subdirs if not (base / x).is_symlink())[:24]
+            for name in sorted(filenames):
+                if not _SECONDARY_FILENAME.fullmatch(name):
+                    continue
+                file = base / name
+                if file.is_symlink() or not file.is_file() or file in seen_files:
+                    continue
+                if scanned >= SECONDARY_MAX_FILES:
+                    partial = True
+                    break
+                seen_files.add(file)
+                scanned += 1
+                source = _source_group(name)
+                totals[source] += 1
+                try:
+                    with file.open("rb") as stream:
+                        raw = stream.read(SECONDARY_MAX_PER_FILE + 1)
+                except OSError:
+                    partial = True
+                    continue
+                if len(raw) > SECONDARY_MAX_PER_FILE:
+                    partial = True
+                    continue
+                result = classify_text(raw)
+                if result["status"] != "CLASSIFIED":
+                    partial = True
+                    continue
+                errors.update(result["codes"])
+                if result["phase"] != "UNKNOWN":
+                    phases[result["phase"]] += 1
+            if scanned >= SECONDARY_MAX_FILES:
+                partial = True
+                break
+    most_common = sorted(
+        ((count, phase) for phase, count in phases.items() if phase != "UNKNOWN" and count > 0),
+        key=lambda item: (-item[0], item[1]),
+    )
+    phase = most_common[0][1] if most_common else "UNKNOWN"
+    status = ("PARTIAL_SCAN" if partial else
+              "CLASSIFIED" if scanned > 0 else
+              "INVALID_ROOT" if invalid else "NOT_FOUND")
+    return {
+        "status": status,
+        "files_scanned": scanned,
+        "sources": totals,
+        "phase": phase,
+        "codes": sorted(errors),
+    }
+
+
+def validate_secondary_report(report: dict) -> bool:
+    if not isinstance(report, dict):
+        return False
+    sources = report.get("sources")
+    codes = report.get("codes")
+    return (
+        report.get("status") in SECONDARY_STATUSES
+        and report.get("phase") in KNOWN_PHASES
+        and isinstance(report.get("files_scanned"), int)
+        and not isinstance(report["files_scanned"], bool)
+        and 0 <= report["files_scanned"] <= SECONDARY_MAX_FILES
+        and isinstance(sources, dict)
+        and set(sources) == SECONDARY_SOURCE_NAMES
+        and all(type(v) is int and 0 <= v <= SECONDARY_MAX_FILES for v in sources.values())
+        and sum(sources.values()) == report["files_scanned"]
+        and isinstance(codes, list)
+        and len(codes) <= len(KNOWN_CODES)
+        and codes == sorted(set(codes))
+        and all(code in KNOWN_CODES.values() for code in codes)
+    )
