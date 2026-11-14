@@ -25,6 +25,7 @@ from scripts.netfx481_clr_load import run as clr_load, STATUSES as LOAD_STATES
 from scripts.netfx481_win32_exit import (
     parse as parse_win32, CATEGORIES, CHILD_VALUES, LIFECYCLE_VALUES, EXIT_VALUES,
 )
+from scripts.netfx40_msi_evidence import scan as scan_inner_msi, empty as empty_msi, validate as validate_msi
 from scripts.wine_mono_removal import inventory, remove_mono
 from swcompat.wine_paths import windows_media_path
 
@@ -135,6 +136,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
         "installer_child_seen": "NOT_VERIFIED",
         "installer_child_lifecycle": "NOT_VERIFIED",
         "installer_child_exit": "NOT_VERIFIED",
+        "inner_msi": empty_msi(),
         "reboot": "NOT_RUN",
         "clr64_before": disk_before["CLR64"][0],
         "clr64_after": disk_before["CLR64"][0],
@@ -191,6 +193,9 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
     report["installer_child_seen"] = installed.get("child_seen", "NOT_VERIFIED")
     report["installer_child_lifecycle"] = installed.get("child_lifecycle", "NOT_VERIFIED")
     report["installer_child_exit"] = installed.get("child_exit", "NOT_VERIFIED")
+    # Inspect the actual nested MSI failure before reboot can clear TEMP logs.
+    # Raw logs NEVER leave this marked disposable prefix.
+    report["inner_msi"] = scan_inner_msi(prefix)
     if installed["status"] == "EXIT_CAPTURED" and installed["category"] == "REBOOT_REQUIRED":
         report["reboot"] = wineboot_restart(wine, prefix)
     else:
@@ -226,7 +231,7 @@ def validate(r: dict) -> bool:
         and set(r) == {"schema", "scope", "status", "winver", "registry64", "registry32",
                        "mono", "selftest", "installer_status", "installer_exit",
                        "installer_exit_hex", "installer_child_seen",
-                       "installer_child_lifecycle", "installer_child_exit",
+                       "installer_child_lifecycle", "installer_child_exit", "inner_msi",
                        "reboot", "clr64_before", "clr64_after",
                        "clr32_before", "clr32_after", "mscorlib64_after",
                        "native_loader", "runtime_family", "managed_functionality",
@@ -241,6 +246,7 @@ def validate(r: dict) -> bool:
         and r["installer_child_seen"] in CHILD_VALUES
         and r["installer_child_lifecycle"] in LIFECYCLE_VALUES
         and r["installer_child_exit"] in EXIT_VALUES
+        and validate_msi(r["inner_msi"])
         and (r["installer_status"] != "EXIT_CAPTURED" or
              ((r["installer_child_seen"] == "OBSERVED" and
                r["installer_child_lifecycle"] in {"ALL_EXITED", "PARTIAL", "STILL_ACTIVE"})
@@ -298,6 +304,9 @@ def main(argv: list[str] | None = None) -> int:
                 "clr32_after", "mscorlib64_after", "native_loader",
                 "runtime_family", "managed_functionality", "candidate_native40"):
         print("Native .NET 4.0", key, report[key])
+    for key in ("status", "files_scanned", "msi_files", "primary_source",
+                "msi_result", "first_failed_action_class", "errors", "causality"):
+        print("Original .NET 4.0 nested MSI", key, report["inner_msi"][key])
     return 0
 
 
