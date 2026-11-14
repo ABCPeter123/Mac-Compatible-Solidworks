@@ -548,9 +548,9 @@ def main(argv: list[str] | None = None) -> int:
     if not 60 <= args.timeout <= 360:
         ap.error("Invalid bounded timeout")
     try:
-        if args.output.is_symlink() or args.output.resolve() in {
-            args.installer.resolve(), args.sha256_file.resolve(), args.probe.resolve()
-        }:
+        protected_paths = [args.installer, args.sha256_file, args.probe]
+        protected_paths.extend(path for path in (args.win32_launcher, args.clr_loader) if path is not None)
+        if args.output.is_symlink() or args.output.resolve() in {path.resolve() for path in protected_paths}:
             raise ValueError("Report would overwrite input or symlink")
         result = trial(args.wine, args.prefix, args.installer, args.sha256_file, args.probe, args.timeout,
                        experiment_clear_false_release=args.experiment_clear_false_release,
