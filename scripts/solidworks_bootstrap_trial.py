@@ -113,7 +113,7 @@ def parse_window_probe(text: str) -> dict | None:
                 return None
         else:
             return None
-    if len(values) != 4 + len(WINDOW_ENUMS) or any(values[k] > 8192 for k in WINDOW_LINES):
+    if len(values) != 1 + len(WINDOW_LINES) + len(WINDOW_ENUMS) or any(values[k] > 8192 for k in WINDOW_LINES):
         return None
     if values["SWCOMPAT_SW_UI_CANDIDATE_WINDOWS"] > values["SWCOMPAT_SW_UI_VISIBLE_LARGE_WINDOWS"]:
         return None
