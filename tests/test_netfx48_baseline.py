@@ -59,6 +59,8 @@ class NetFx48BaselineTests(TestCase):
             "registry32_adjustment": "NOT_NEEDED", "mono_removal": "REMOVED",
             "installer_execution": "EXIT_NONZERO",
             "unix_exit_category": "POSSIBLE_3010_UNIX_194",
+            "win32_selftest_before": "NOT_REQUESTED",
+            "win32_selftest_after": "NOT_REQUESTED",
             "win32_original_status": "NOT_REQUESTED",
             "win32_original_exit": "NOT_AVAILABLE",
             "setup_log_status": "NOT_REQUESTED",
