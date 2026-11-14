@@ -143,6 +143,18 @@ def inspect(wine: Path, prefix: Path, installer: Path, manifest: Path,
                  *([win32_launcher] if win32_launcher is not None else [])):
         if path.is_symlink():
             raise ValueError("Symlinked experiment input")
+    # Wine is executed with cwd set to the fixture/installer directory.
+    # Passing a relative "build/foo.exe" here makes Wine search
+    # "build/build/foo.exe" and returns a misleading Unix error (53).
+    # Normalize *before* any CWD change or external process launch.
+    wine = wine.resolve(strict=True)
+    prefix = prefix.resolve(strict=True)
+    installer = installer.resolve(strict=True)
+    manifest = manifest.resolve(strict=True)
+    fixture = fixture.resolve(strict=True)
+    loader = loader.resolve(strict=True)
+    if win32_launcher is not None:
+        win32_launcher = win32_launcher.resolve(strict=True)
     validate_prefix(prefix)
     if not wine.is_file() or not os.access(wine, os.X_OK):
         raise ValueError("Wine executable unavailable")

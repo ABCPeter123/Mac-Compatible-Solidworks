@@ -28,6 +28,8 @@ def launch(wine: Path, prefix: Path, installer: Path,
     if (installer.is_symlink() or not installer.is_file()
             or installer.name.casefold() != "ndp48-x86-x64-allos-enu.exe"):
         raise ValueError("Unexpected original Microsoft setup filename")
+    fixture = fixture.resolve(strict=True)
+    installer = installer.resolve(strict=True)
     path = windows_media_path(wine, prefix, installer)
     env = os.environ.copy()
     env.pop("WINEDLLOVERRIDES", None)
@@ -60,6 +62,9 @@ def selftest(wine: Path, prefix: Path, fixture: Path, timeout: int = 50) -> str:
     if (fixture.is_symlink() or not fixture.is_file()
             or fixture.name.casefold() != "netfx48_win32_launch.exe"):
         raise ValueError("Unexpected Win32 4.8 selftest fixture")
+    # Never run "build/foo.exe" with cwd="build": Wine would search
+    # for "build/build/foo.exe" instead of the actual fixture.
+    fixture = fixture.resolve(strict=True)
     env = os.environ.copy()
     env.pop("WINEDLLOVERRIDES", None)
     env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64", "WINEDEBUG": "-all"})

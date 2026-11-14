@@ -231,11 +231,19 @@ class NetFx48BaselineTests(TestCase):
                 mock.patch("scripts.netfx481_setup_evidence.discard_log"),
                 mock.patch.object(baseline, "load_clr", return_value="NOT_FOUND"),
             ):
+                # The CLI supplies relative "build/*" files in GitHub Actions,
+                # while Wine's subprocess CWD changes to the file directory.
+                # This used to try to launch build/build/*.exe and return Unix 53.
                 result = baseline.inspect(
-                    wine, prefix, installer, manifest, fixture, loader,
-                    win32_launcher=launcher)
+                    *(Path(os.path.relpath(path, Path.cwd()))
+                      for path in (wine, prefix, installer, manifest, fixture, loader)),
+                    win32_launcher=Path(os.path.relpath(launcher, Path.cwd())))
             self.assertTrue(baseline.validate(result))
             direct.assert_called_once()
+            self.assertEqual(direct.call_args.args[0], wine.resolve())
+            self.assertEqual(direct.call_args.args[1], prefix.resolve())
+            self.assertEqual(direct.call_args.args[2], installer.resolve())
+            self.assertEqual(direct.call_args.args[3], 210)
             self.assertEqual(result["status"], "MEASURED")
             self.assertEqual(result["execution_path"], "DIRECT_WINE_FALLBACK")
             self.assertEqual(result["direct_unix_exit_code"], 17)

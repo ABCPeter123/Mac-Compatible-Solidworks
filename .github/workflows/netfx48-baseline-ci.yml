@@ -21,6 +21,20 @@ permissions:
   contents: read
 
 jobs:
+  absolute-path-regressions:
+    name: Verify relative Wine paths on POSIX without vendor binaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run absolute media and fixture path regression tests
+        run: |
+          python -m unittest discover -s tests -p 'test_netfx48_baseline.py' -v
+          python -m unittest discover -s tests -p 'test_netfx48_win32_exit.py' -v
+
   authentic-netfx48-windows:
     name: Authenticate Microsoft 4.8 installer and compile independent Win32 probes
     runs-on: windows-2025
