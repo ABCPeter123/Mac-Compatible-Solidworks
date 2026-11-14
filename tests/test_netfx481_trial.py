@@ -48,6 +48,36 @@ class DotNet481Tests(unittest.TestCase):
         self.assertFalse(trial.runtime_ready(state(registry="BELOW_481")))
         self.assertTrue(trial.runtime_ready(state()))
 
+    def test_native_loading_can_explain_mono_default_but_never_overclaim(self):
+        result = trial.combine(
+            state(registry="NOT_FOUND"), state(runtime="MONO"),
+            "EXIT_ZERO", 0,
+            native_first=state(runtime="MONO"), native_only=state(),
+        )
+        self.assertFalse(result["framework_runtime_ready"])
+        self.assertFalse(result["native_first_runtime_ready"])
+        self.assertTrue(result["native_only_runtime_ready"])
+        self.assertTrue(result["runtime_ready_with_controlled_override"])
+        self.assertTrue(result["new_framework_installation_confirmed"])
+        self.assertEqual(result["after"]["clr_family"], "MONO")
+
+    def test_invalid_dll_override_rejected_before_execution(self):
+        with self.assertRaisesRegex(ValueError, "Unknown controlled"):
+            trial.probe(Path("wine"), Path("prefix"), Path("probe.exe"), override="UNSAFE")
+
+    def test_native_preference_does_not_change_process_wine_environment_globally(self):
+        before = dict(trial.os.environ)
+        payload = raw()
+        def fake_run(args, **kwargs):
+            self.assertEqual(kwargs["env"]["WINEDLLOVERRIDES"], "mscoree=n,b;clr=n,b")
+            kwargs["stdout"].write(payload)
+            return mock.Mock(returncode=0)
+        with mock.patch.object(trial.subprocess, "run", side_effect=fake_run):
+            result = trial.probe(Path("wine"), Path("prefix"), Path("fixture.exe"),
+                                 override="native_first")
+        self.assertEqual(result["managed"], "PASS")
+        self.assertEqual(dict(trial.os.environ), before)
+
     def test_exit_zero_is_not_runtime_success(self):
         result = trial.combine(state(runtime="MONO"), state(runtime="MONO"), "EXIT_ZERO", 0)
         self.assertFalse(result["framework_runtime_ready"])
