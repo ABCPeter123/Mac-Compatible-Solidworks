@@ -176,6 +176,7 @@ jobs:
             --probe build/netfx481_runtime_probe.exe \
             --win32-launcher build/netfx481_win32_launch.exe \
             --clr-loader build/netfx481_clr_load.exe \
+            --experiment-fusion-builtin \
             --output build/netfx481-experiment.json \
             --timeout 210 --agree-disposable-prefix --experiment-clear-false-release --experiment-clear-wow6432-release --experiment-remove-wine-mono --experiment-reboot-after-possible-3010 --experiment-setup-log
       - name: Restore reported Windows 11 profile and retest managed CLR functionality
@@ -240,6 +241,7 @@ jobs:
                   out.write("Direct bootstrapper child observed: **" + win32["child_seen"] + "**\n\n")
                   payload = result["payload_audit"]
                   out.write("CLR file inventory measurement: **" + payload["status"] + "**\n\n")
+                  out.write("Microsoft setup scoped Fusion policy: **" + result["fusion_setup_override"] + "**\n\n")
                   out.write("Framework64 native CLR before: **" + payload["before"]["CLR64"] + "**\n\n")
                   out.write("Framework64 native CLR after: **" + payload["after"]["CLR64"] + "**\n\n")
                   out.write("Framework64 native CLR file change: **" + payload["changes"]["CLR64"] + "**\n\n")
@@ -289,6 +291,7 @@ jobs:
           from scripts.netfx481_clr_load import STATUSES as CLR_LOAD_STATES
           assert validate_payload(data["payload_audit"])
           assert data["payload_audit"]["status"] == "MEASURED"
+          assert data["fusion_setup_override"] == "BUILTIN_ONLY"
           assert data["clr_dll_load"] in CLR_LOAD_STATES
           assert data["clr_dll_load"] != "NOT_REQUESTED"
           from scripts.netfx481_win32_exit import validate as validate_win32

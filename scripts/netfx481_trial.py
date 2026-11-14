@@ -275,7 +275,8 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
             secondary_evidence: dict | None = None,
             win32_launch: dict | None = None,
             payload_audit: dict | None = None,
-            clr_dll_load: str = "NOT_REQUESTED") -> dict:
+            clr_dll_load: str = "NOT_REQUESTED",
+            fusion_setup_override: str = "NOT_REQUESTED") -> dict:
     if registry_adjustment not in {
         "NOT_REQUESTED", "NOT_APPLICABLE", "CLEARED", "DELETE_FAILED", "STILL_PRESENT_OR_UNVERIFIED"
     }:
@@ -339,6 +340,8 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
     payload_audit = payload_audit or blank_payload()
     if not validate_payload(payload_audit) or clr_dll_load not in CLR_LOAD_STATES:
         raise ValueError("Unsafe native CLR file or loader result")
+    if fusion_setup_override not in {"NOT_REQUESTED", "BUILTIN_ONLY"}:
+        raise ValueError("Invalid scoped Microsoft setup Fusion override")
     return {
         "schema": 1,
         "scope": "MICROSOFT_NETFX481_WINE_DISPOSABLE_EXPERIMENT",
@@ -354,6 +357,7 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
         "win32_launch": win32_launch,
         "payload_audit": payload_audit,
         "clr_dll_load": clr_dll_load,
+        "fusion_setup_override": fusion_setup_override,
         "after": after,
         "after_native_first": native_first,
         "after_native_only": native_only,
@@ -388,7 +392,8 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
           experiment_reboot_after_possible_3010: bool = False,
           experiment_setup_log: bool = False,
           win32_launcher: Path | None = None,
-          clr_loader: Path | None = None) -> dict:
+          clr_loader: Path | None = None,
+          experiment_fusion_builtin: bool = False) -> dict:
     if os.name == "nt":
         raise ValueError("Native Windows execution is not permitted")
     for path in (wine, prefix, installer, manifest, fixture,
@@ -425,6 +430,8 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
         raise ValueError("Win32 launch experiment requires Mono removal and private setup transcript")
     if clr_loader is not None and not (experiment_remove_wine_mono and win32_launcher is not None):
         raise ValueError("CLR payload audit requires verified Mono removal and Windows process monitor")
+    if experiment_fusion_builtin and not (experiment_remove_wine_mono and win32_launcher is not None and clr_loader is not None):
+        raise ValueError("Fusion experiment requires disposable signed setup, Mono removal, CLR file and loader audit")
     before = probe(wine, prefix, fixture)
     if runtime_ready(before):
         return combine(before, before, "SKIPPED_ALREADY_READY", None)
@@ -464,6 +471,7 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
             win32_evidence = win32_launch_process(
                 wine, prefix, installer, win32_launcher,
                 timeout=min(timeout + 30, 390),
+                fusion_builtin=experiment_fusion_builtin,
             )
             termination, code = win32_termination(win32_evidence)
         else:
@@ -517,7 +525,8 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
                    secondary_evidence=secondary_evidence,
                    win32_launch=win32_evidence,
                    payload_audit=payload_audit,
-                   clr_dll_load=clr_dll_load)
+                   clr_dll_load=clr_dll_load,
+                   fusion_setup_override=("BUILTIN_ONLY" if experiment_fusion_builtin else "NOT_REQUESTED"))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -544,6 +553,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="Run original verified setup via self-authored Windows CreateProcess fixture, capture real 32-bit exit")
     ap.add_argument("--clr-loader", type=Path,
                     help="Audit actual native .NET CLR PE files and test Win32 LoadLibraryW in disposable Wine prefix")
+    ap.add_argument("--experiment-fusion-builtin", action="store_true",
+                    help="Bottles dotnet481 compatibility trial: set fusion=b ONLY during original Microsoft installation")
     args = ap.parse_args(argv)
     if not 60 <= args.timeout <= 360:
         ap.error("Invalid bounded timeout")
@@ -559,7 +570,8 @@ def main(argv: list[str] | None = None) -> int:
                        experiment_reboot_after_possible_3010=args.experiment_reboot_after_possible_3010,
                        experiment_setup_log=args.experiment_setup_log,
                        win32_launcher=args.win32_launcher,
-                       clr_loader=args.clr_loader)
+                       clr_loader=args.clr_loader,
+                       experiment_fusion_builtin=args.experiment_fusion_builtin)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     except (OSError, ValueError):
@@ -581,6 +593,7 @@ def main(argv: list[str] | None = None) -> int:
     print("Original Win32 bootstrapper child:", result["win32_launch"]["child_seen"])
     print("Direct child lifecycle after parent exits:", result["win32_launch"]["child_lifecycle"])
     print("Direct child exit aggregate:", result["win32_launch"]["child_exit"])
+    print("Original Microsoft installer scoped Wine Fusion policy:", result["fusion_setup_override"])
     print("Original .NET CLR x64 on disk before:", result["payload_audit"]["before"]["CLR64"])
     print("Original .NET CLR x64 on disk after:", result["payload_audit"]["after"]["CLR64"])
     print("CLR x64 file change:", result["payload_audit"]["changes"]["CLR64"])

@@ -141,7 +141,7 @@ def validate(report: dict) -> bool:
 
 
 def launch(wine: Path, prefix: Path, setup: Path, fixture: Path,
-           *, timeout: int = 245) -> dict:
+           *, timeout: int = 245, fusion_builtin: bool = False) -> dict:
     from scripts.netfx481_trial import validate_prefix
     from swcompat.wine_paths import windows_media_path
 
@@ -155,6 +155,10 @@ def launch(wine: Path, prefix: Path, setup: Path, fixture: Path,
     env = os.environ.copy()
     env.pop("WINEDLLOVERRIDES", None)
     env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64", "WINEDEBUG": "-all"})
+    # Bottles' dotnet481 recipe scopes fusion=b to installation only.
+    # Never persist this override to the Wine prefix or other processes.
+    if fusion_builtin:
+        env["WINEDLLOVERRIDES"] = "fusion=b"
     with tempfile.TemporaryFile() as stdout:
         try:
             run = subprocess.run(

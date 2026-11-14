@@ -202,6 +202,22 @@ This is stronger evidence than previous registry and loader preference tests: th
 
 **No compatibility claim:** a Windows installer returning 3010 and an observed child reporting restart required do not establish that CLR files were copied or registered. Native Framework and SOLIDWORKS remain unverified. The experiment reports no original executable files, hashes, identities, paths or unredacted installer logs.
 
+## Next controlled installation change: Bottles' Fusion builtin-only override
+
+The real Apple Silicon [run 43623730956](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43623730956) established that signed Microsoft's Framework 4.8.1 setup did not install the standard x64 `clr.dll` at all. The before/after PE audit reported `ABSENT` to `ABSENT`, and independent Windows `LoadLibraryW` reported `NOT_FOUND` after a confirmed Win32 3010 and successful Wine reboot. Windows reference tests proved our native CLR loader successfully loads Microsoft's installed Framework DLL on real Windows.
+
+The upstream [Bottles .NET 4.8.1 dependency recipe](https://github.com/bottlesdevs/dependencies/blob/main/Essentials/dotnet481.yml) uses the **same official Microsoft installer and /q /norestart** but additionally sets `WINEDLLOVERRIDES=fusion=b` in the **installation process environment** and later selects native mscoree loading. The experimental workflow previously removed Wine Mono and corrected false registry indicators, but did not set this Fusion override. The new `--experiment-fusion-builtin` flag applies the exact supported Bottles setting *only to the self-authored Win32 process monitor launching the signed original setup*. It is inherited by Microsoft's child installer, but is not persisted in the Wine registry, user environment, unrelated probes, or native loader test.
+
+The monitored process and original media remain bounded and signature/hash-verified. The workflow repeats the native `clr.dll`/`mscorlib.dll` before/after PE audit, independent `LoadLibraryW`, full Win32 exit/child classification, and functional CLR/managed tests. This is a narrowly scoped compatibility hypothesis; `fusion=b` alone does **not** establish actual Microsoft .NET or SOLIDWORKS readiness. Tests verify that the override is absent for all non-installation subprocesses and that no positive result can be inferred from the setting.
+
+## Apple Silicon result with Bottles Fusion builtin-only override, November 14, 2026
+
+[Real signed Microsoft 4.8.1 CI run 43624232628](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43624232628) applied Bottles' documented `WINEDLLOVERRIDES=fusion=b` **only while launching the original Microsoft setup**. The sanitized trial verified the scope as `fusion_setup_override=BUILTIN_ONLY`. Wine Mono MSI removal and earlier registry fixes remained in place.
+
+The genuine installer still returned full Windows `3010` (reboot required) and the observed child had completed. The native `Framework64/v4.0.30319/clr.dll` was **ABSENT before** and **ABSENT after** the setup and Wine restart. The independent Windows `LoadLibraryW` probe returned **NOT_FOUND**. The native CLR readiness check and the post-Windows-11-restoration managed runtime check both remained **FALSE**.
+
+The Bottles `fusion=b` dependency recipe therefore **did not fix** the missing CLR payload in this pinned Apple Silicon Wine environment, even though the original installer command and Mono removal matched Bottles' recipe. This result does not invalidate Bottles' recipe on other Wine versions or prefixes; it rules out this single override as a sufficient change under our tested conditions. Further work should isolate the original Microsoft payload extraction/servicing transaction or test a version-staged official Framework installation in an isolated disposable prefix, rather than changing DLL load order again.
+
 ## Technical boundaries
 
 The independent fixture does not test every SOLIDWORKS managed feature or COM interop, and running Microsoft's CLR under Wine would still not establish CAD readiness. WebView2 browser pixels, native graphics/window composition, installation manager UI, x86 helper processes and activation remain separate compatibility gates.
