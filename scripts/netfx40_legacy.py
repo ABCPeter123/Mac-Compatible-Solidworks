@@ -22,7 +22,9 @@ from scripts.netfx481_trial import (
 from scripts.netfx48_baseline import clear_unbacked_release
 from scripts.netfx481_payload_audit import snapshot, STATES
 from scripts.netfx481_clr_load import run as clr_load, STATUSES as LOAD_STATES
-from scripts.netfx481_win32_exit import parse as parse_win32, CATEGORIES
+from scripts.netfx481_win32_exit import (
+    parse as parse_win32, CATEGORIES, CHILD_VALUES, LIFECYCLE_VALUES, EXIT_VALUES,
+)
 from scripts.wine_mono_removal import inventory, remove_mono
 from swcompat.wine_paths import windows_media_path
 
@@ -100,9 +102,10 @@ def _run(wine: Path, prefix: Path, fixture: Path, arguments: list[str],
         output.seek(0)
         raw = output.read(4097)
     if failed:
-        return {"status": failed, "category": "NOT_AVAILABLE", "exit_hex": "NOT_VERIFIED"}
-    parsed = parse_win32(raw, code)
-    return {k: parsed[k] for k in ("status", "category", "exit_hex")}
+        return {"status": failed, "category": "NOT_AVAILABLE",
+                "exit_hex": "NOT_VERIFIED", "child_seen": "NOT_VERIFIED",
+                "child_lifecycle": "NOT_VERIFIED", "child_exit": "NOT_VERIFIED"}
+    return parse_win32(raw, code)
 
 
 def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
@@ -128,7 +131,11 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
         "registry64": "NOT_RUN", "registry32": "NOT_RUN",
         "mono": "NOT_RUN", "selftest": "NOT_RUN",
         "installer_status": "NOT_RUN", "installer_exit": "NOT_AVAILABLE",
-        "installer_exit_hex": "NOT_VERIFIED", "reboot": "NOT_RUN",
+        "installer_exit_hex": "NOT_VERIFIED",
+        "installer_child_seen": "NOT_VERIFIED",
+        "installer_child_lifecycle": "NOT_VERIFIED",
+        "installer_child_exit": "NOT_VERIFIED",
+        "reboot": "NOT_RUN",
         "clr64_before": disk_before["CLR64"][0],
         "clr64_after": disk_before["CLR64"][0],
         "clr32_before": disk_before["CLR32"][0],
@@ -181,6 +188,9 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
     report["installer_status"] = installed["status"]
     report["installer_exit"] = installed["category"]
     report["installer_exit_hex"] = installed["exit_hex"]
+    report["installer_child_seen"] = installed.get("child_seen", "NOT_VERIFIED")
+    report["installer_child_lifecycle"] = installed.get("child_lifecycle", "NOT_VERIFIED")
+    report["installer_child_exit"] = installed.get("child_exit", "NOT_VERIFIED")
     if installed["status"] == "EXIT_CAPTURED" and installed["category"] == "REBOOT_REQUIRED":
         report["reboot"] = wineboot_restart(wine, prefix)
     else:
@@ -215,7 +225,9 @@ def validate(r: dict) -> bool:
         type(r) is dict
         and set(r) == {"schema", "scope", "status", "winver", "registry64", "registry32",
                        "mono", "selftest", "installer_status", "installer_exit",
-                       "installer_exit_hex", "reboot", "clr64_before", "clr64_after",
+                       "installer_exit_hex", "installer_child_seen",
+                       "installer_child_lifecycle", "installer_child_exit",
+                       "reboot", "clr64_before", "clr64_after",
                        "clr32_before", "clr32_after", "mscorlib64_after",
                        "native_loader", "runtime_family", "managed_functionality",
                        "candidate_native40", "netfx481_ready", "solidworks_compatibility"}
@@ -226,6 +238,20 @@ def validate(r: dict) -> bool:
         and r["mono"] in MONO_STATES and r["selftest"] in SELF_STATES
         and r["installer_status"] in STATES_START
         and r["installer_exit"] in (CATEGORIES | {"NOT_AVAILABLE"})
+        and r["installer_child_seen"] in CHILD_VALUES
+        and r["installer_child_lifecycle"] in LIFECYCLE_VALUES
+        and r["installer_child_exit"] in EXIT_VALUES
+        and (r["installer_status"] != "EXIT_CAPTURED" or
+             ((r["installer_child_seen"] == "OBSERVED" and
+               r["installer_child_lifecycle"] in {"ALL_EXITED", "PARTIAL", "STILL_ACTIVE"})
+              or (r["installer_child_seen"] == "NOT_OBSERVED" and
+                  r["installer_child_lifecycle"] == "NOT_OBSERVED")
+              or (r["installer_child_seen"] == "UNKNOWN" and
+                  r["installer_child_lifecycle"] == "UNKNOWN")))
+        and (r["installer_child_lifecycle"] != "ALL_EXITED" or
+             r["installer_child_exit"] in {"ALL_ZERO", "NONZERO", "REBOOT_REQUIRED"})
+        and (r["installer_child_lifecycle"] == "ALL_EXITED" or
+             r["installer_child_exit"] == "NOT_VERIFIED")
         and type(r["installer_exit_hex"]) is str
         and (r["installer_exit_hex"] == "NOT_VERIFIED" or
              (len(r["installer_exit_hex"]) == 8 and all(c in "0123456789ABCDEF"
@@ -266,7 +292,9 @@ def main(argv: list[str] | None = None) -> int:
     except (ValueError, OSError):
         p.error("Original signed Microsoft .NET 4.0 disposable-prefix experiment refused")
     for key in ("status", "winver", "mono", "selftest", "installer_status",
-                "installer_exit", "reboot", "clr64_before", "clr64_after",
+                "installer_exit", "installer_child_seen",
+                "installer_child_lifecycle", "installer_child_exit",
+                "reboot", "clr64_before", "clr64_after",
                 "clr32_after", "mscorlib64_after", "native_loader",
                 "runtime_family", "managed_functionality", "candidate_native40"):
         print("Native .NET 4.0", key, report[key])
