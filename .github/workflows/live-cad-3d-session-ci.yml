@@ -132,7 +132,7 @@ jobs:
           python -m scripts.stage_zink --source build/mesa-payload \
             --prefix "$RUNNER_TEMP/live-cad-linux" --manifest build/mesa-stage-linux.json
           xvfb-run -a python -m scripts.live_cad_session_trial \
-            --wine "$(command -v wine)" \
+            --wine "$(realpath "$(command -v wine)")" \
             --prefix "$RUNNER_TEMP/live-cad-linux" \
             --fixture build/live_cad_viewport.exe \
             --output build/live-cad-linux.json \
