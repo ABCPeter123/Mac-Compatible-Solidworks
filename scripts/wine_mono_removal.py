@@ -29,9 +29,10 @@ def parse_uninstaller_list(raw: bytes) -> tuple[str, ...]:
     for line in source.splitlines():
         if "Wine Mono" not in line:
             continue
-        if "|" not in line:
+        # Wine programs/uninstaller/main.c formats --list as GUID|||name.
+        if line.count("|||") != 1:
             raise ValueError("Unrecognized Wine Mono uninstaller record")
-        raw_guid, description = line.split("|", 1)
+        raw_guid, description = line.split("|||", 1)
         guid = raw_guid.strip()
         name = description.strip()
         if not any(name == known or name.startswith(known + " |")
