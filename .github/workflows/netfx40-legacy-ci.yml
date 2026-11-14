@@ -154,8 +154,8 @@ jobs:
           python3 -m scripts.netfx40_legacy \
             --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx40-prefix" \
             --installer build/dotNetFx40_Full_x86_x64.exe \
-            --probe build/netfx481_runtime_probe.exe \
-            --clr-loader build/netfx481_clr_load.exe \
+            --managed build/netfx481_runtime_probe.exe \
+            --loader build/netfx481_clr_load.exe \
             --launcher build/netfx40_win32_launch.exe \
             --output build/netfx40-baseline.json \
             --timeout 210 --agree-disposable-prefix
