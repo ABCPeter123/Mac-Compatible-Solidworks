@@ -94,7 +94,10 @@ jobs:
           set -euo pipefail
           python3 -m swcompat --prefix "$RUNNER_TEMP/netfx481-prefix" --logs-dir "$RUNNER_TEMP/netfx481-logs" init
           touch "$RUNNER_TEMP/netfx481-prefix/.swcompat-netfx481-disposable"
-          python3 -m swcompat --prefix "$RUNNER_TEMP/netfx481-prefix" --logs-dir "$RUNNER_TEMP/netfx481-logs" set-winver win11
+          # .NET 4.8.1 is an in-place framework offered for Windows 10 too.
+          # Wine's Windows 11 profile can imply 4.8.1 is already included.
+          # Temporarily use Windows 10 for Microsoft Framework setup ONLY.
+          python3 -m swcompat --prefix "$RUNNER_TEMP/netfx481-prefix" --logs-dir "$RUNNER_TEMP/netfx481-logs" set-winver win10
       - name: Install original Microsoft .NET 4.8.1 and validate runtime identity and managed execution
         shell: bash
         run: |
@@ -106,6 +109,36 @@ jobs:
             --probe build/netfx481_runtime_probe.exe \
             --output build/netfx481-experiment.json \
             --timeout 210 --agree-disposable-prefix --experiment-clear-false-release
+      - name: Restore reported Windows 11 profile and retest managed CLR functionality
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          PREFIX="$RUNNER_TEMP/netfx481-prefix"
+          if [ -f "$PREFIX/.swcompat-netfx481-disposable" ]; then
+            python3 -m swcompat --prefix "$PREFIX" \
+              --logs-dir "$RUNNER_TEMP/netfx481-logs" set-winver win11
+            if [ -f build/netfx481-experiment.json ]; then
+              python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx481_trial import probe, runtime_ready
+          prefix = Path(os.environ["RUNNER_TEMP"]) / "netfx481-prefix"
+          wine = Path(os.environ["SWCOMPAT_WINE"])
+          fixture = Path("build/netfx481_runtime_probe.exe").resolve()
+          status = probe(wine, prefix, fixture)
+          report = Path("build/netfx481-experiment.json")
+          data = json.loads(report.read_text(encoding="utf-8"))
+          data["install_os_profile"] = "WIN10_REPORTED"
+          data["post_restore_os_profile"] = "WIN11_REPORTED"
+          data["post_restore_wine11"] = status
+          data["post_restore_framework_ready"] = runtime_ready(status)
+          report.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+          print("Returned Wine profile to Windows 11; runtime ready:",
+                data["post_restore_framework_ready"])
+          PY
+            fi
+          fi
       - name: Report exact outcome, never turn Wine Mono or registry spoof into Microsoft Framework
         if: always()
         shell: bash
@@ -121,6 +154,9 @@ jobs:
               else:
                   result = json.loads(report.read_text(encoding="utf-8"))
                   out.write("False preexisting .NET registry adjustment: **" + result["registry_adjustment"] + "**\n\n")
+                  out.write("Microsoft setup temporary reported OS: **" + result.get("install_os_profile", "NOT_VERIFIED") + "**\n\n")
+                  out.write("Wine profile restored: **" + result.get("post_restore_os_profile", "NOT_VERIFIED") + "**\n\n")
+                  out.write("Framework readiness after restoring Windows 11: **" + str(result.get("post_restore_framework_ready", False)) + "**\n\n")
                   out.write("Original signed Microsoft offline setup: **" + result["install_execution"] + "**\n\n")
                   out.write("Framework registry signal: **" + result["after"]["registry"] + "**\n\n")
                   out.write("Independent CLR identity: **" + result["after"]["clr_family"] + "**\n\n")
@@ -152,4 +188,7 @@ jobs:
           assert data["solidworks_compatibility"] == "NOT_DEMONSTRATED"
           assert "after_native_first" in data and "after_native_only" in data
           assert type(data["runtime_ready_with_controlled_override"]) is bool
+          assert data["install_os_profile"] == "WIN10_REPORTED"
+          assert data["post_restore_os_profile"] == "WIN11_REPORTED"
+          assert type(data["post_restore_framework_ready"]) is bool
           PY
