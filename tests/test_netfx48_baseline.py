@@ -179,12 +179,12 @@ class NetFx48BaselineTests(TestCase):
                 outcome = baseline.direct_signed_setup(
                     Path("/fake/wine"), Path("/fake/disposable"),
                     Path("/fake/NDP48-x86-x64-AllOS-ENU.exe"), 120,
-                    r"C:\\swcompat-netfx48-private\\framework-setup.txt")
+                    r"C:\swcompat-netfx48-private\framework-setup.txt")
         self.assertEqual(outcome, ("EXIT_NONZERO", 17))
         command = popen.call_args.args[0]
         self.assertEqual(Path(command[1]).name.casefold(), baseline.INSTALLER_NAME)
         self.assertEqual(command[-2], "/log")
-        self.assertEqual(command[-1], r"C:\\swcompat-netfx48-private\\framework-setup.txt")
+        self.assertEqual(command[-1], r"C:\swcompat-netfx48-private\framework-setup.txt")
         self.assertTrue(popen.call_args.kwargs["start_new_session"])
         with mock.patch.object(baseline, "validate_prefix"):
             with self.assertRaises(ValueError):
