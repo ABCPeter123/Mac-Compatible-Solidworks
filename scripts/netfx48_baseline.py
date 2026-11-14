@@ -11,6 +11,8 @@ import argparse
 import hashlib
 import json
 import os
+import signal
+import subprocess
 from pathlib import Path
 
 from scripts.netfx481_trial import (
@@ -72,6 +74,50 @@ def clear_unbacked_release(wine: Path, prefix: Path, key: str) -> str:
             else "VERIFY_FAILED")
 
 
+def direct_signed_setup(wine: Path, prefix: Path, installer: Path,
+                        timeout: int, windows_log_path: str) -> tuple[str, int | None]:
+    """Fallback for a Windows launcher that fails its independent Wine selftest.
+
+    Run only the signed and SHA256-checked 4.8 installer within the disposable
+    prefix, save Microsoft's original setup log in the local ephemeral prefix,
+    and never stream or upload raw installer output. This does not preserve a
+    full Windows DWORD exit code, hence the separate explicitly Unix status.
+    """
+    validate_prefix(prefix)
+    if installer.name.casefold() != INSTALLER_NAME or windows_log_path != (
+            r"C:\swcompat-netfx48-private\framework-setup.txt"):
+        raise ValueError("Unexpected original .NET 4.8 installer or log path")
+    env = os.environ.copy()
+    env.pop("WINEDLLOVERRIDES", None)
+    env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64", "WINEDEBUG": "-all"})
+    try:
+        child = subprocess.Popen(
+            [str(wine), str(installer), "/q", "/norestart", "/log", windows_log_path],
+            cwd=installer.parent, env=env, stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError:
+        return "START_FAILED", None
+    try:
+        code = child.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(child.pid, signal.SIGTERM)
+        except (OSError, AttributeError):
+            child.kill()
+        try:
+            child.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except OSError:
+                child.kill()
+            child.wait(timeout=5)
+        return "TIMEOUT", None
+    return ("EXIT_ZERO" if code == 0 else "EXIT_NONZERO"), code
+
+
 def native_48_candidate(before: dict, after: dict, first: str, last: str,
                         loader: str, outcome: str, reboot: str) -> bool:
     """A candidate requires all independent CLR signals, not just a registry key."""
@@ -121,6 +167,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, manifest: Path,
         "unix_exit_category": "NOT_RUN",
         "win32_selftest_before": "NOT_REQUESTED",
         "win32_selftest_after": "NOT_REQUESTED",
+        "execution_path": "NOT_RUN",
+        "direct_unix_exit_code": None,
         "win32_original_status": "NOT_REQUESTED",
         "win32_original_exit": "NOT_AVAILABLE",
         "setup_log_status": "NOT_REQUESTED",
@@ -181,33 +229,50 @@ def inspect(wine: Path, prefix: Path, installer: Path, manifest: Path,
         from scripts.netfx48_win32_exit import (
             launch as launch_native, selftest as launcher_selftest,
         )
-        report["win32_selftest_after"] = launcher_selftest(wine, prefix, win32_launcher)
-        if report["win32_selftest_after"] != "PASS":
-            report["status"] = "BLOCKED_LAUNCHER"
-            return report
         from scripts.netfx481_win32_exit import termination as native_termination
         from scripts.netfx481_setup_evidence import classify_log, discard_log
+
+        report["win32_selftest_after"] = launcher_selftest(wine, prefix, win32_launcher)
         private_dir = prefix / "drive_c" / "swcompat-netfx48-private"
         private_log = private_dir / "framework-setup.txt"
         if private_dir.is_symlink() or private_log.is_symlink() or private_log.exists():
             raise ValueError("Private .NET 4.8 setup log path already occupied")
         private_dir.mkdir(mode=0o700, exist_ok=True)
         try:
-            original = launch_native(wine, prefix, installer, win32_launcher,
-                                     timeout=min(timeout + 30, 390))
-            status, code = native_termination(original)
+            if report["win32_selftest_after"] == "PASS":
+                report["execution_path"] = "WIN32_MONITOR"
+                original = launch_native(wine, prefix, installer, win32_launcher,
+                                         timeout=min(timeout + 30, 390))
+                report["win32_original_status"] = original["status"]
+                report["win32_original_exit"] = original["category"]
+                status, code = native_termination(original)
+                # Never reinterpret a full Win32 result as a truncated Unix code.
+                outcome = ("ZERO" if code == 0 and status == "EXIT_ZERO" else
+                           "CONFIRMED_3010" if code == 3010 else "OTHER")
+            else:
+                # Real Apple Silicon Wine reported NO_OUTPUT for this monitor
+                # before and after Mono removal. Do not skip the genuine
+                # Microsoft setup when only our diagnostic harness fails.
+                report["execution_path"] = "DIRECT_WINE_FALLBACK"
+                status, code = direct_signed_setup(
+                    wine, prefix, installer, timeout,
+                    r"C:\swcompat-netfx48-private\framework-setup.txt")
+                report["direct_unix_exit_code"] = (
+                    code if type(code) is int and -255 <= code <= 255 else None)
+                outcome = ("ZERO" if status == "EXIT_ZERO" else
+                           "POSSIBLE_3010_UNIX_194" if status == "EXIT_NONZERO" and code == 194
+                           else "OTHER")
             setup_log = classify_log(private_log)
         finally:
             discard_log(private_log)
-        report["win32_original_status"] = original["status"]
-        report["win32_original_exit"] = original["category"]
         report["setup_log_status"] = setup_log["status"]
         report["setup_log_phase"] = setup_log["phase"]
         report["setup_error_categories"] = setup_log["codes"]
-        outcome = ("ZERO" if code == 0 and status == "EXIT_ZERO" else
-                   "CONFIRMED_3010" if code == 3010 else "OTHER")
     else:
+        report["execution_path"] = "DIRECT_WINE"
         status, code = run_installer(wine, prefix, installer, timeout)
+        report["direct_unix_exit_code"] = (
+            code if type(code) is int and -255 <= code <= 255 else None)
         outcome = ("ZERO" if status == "EXIT_ZERO" else
                    "POSSIBLE_3010_UNIX_194" if status == "EXIT_NONZERO" and code == 194
                    else "OTHER")
@@ -247,6 +312,7 @@ def validate(report: dict) -> bool:
             "registry64_adjustment", "registry32_adjustment", "mono_removal",
             "installer_execution", "unix_exit_category",
             "win32_selftest_before", "win32_selftest_after",
+            "execution_path", "direct_unix_exit_code",
             "win32_original_status", "win32_original_exit",
             "setup_log_status", "setup_log_phase", "setup_error_categories",
             "wine_restart",
@@ -265,6 +331,10 @@ def validate(report: dict) -> bool:
         and report["unix_exit_category"] in UNIX_OUTCOMES
         and report["win32_selftest_before"] in (SELFTEST_STATES | {"NOT_REQUESTED"})
         and report["win32_selftest_after"] in (SELFTEST_STATES | {"NOT_REQUESTED"})
+        and report["execution_path"] in {"NOT_RUN", "WIN32_MONITOR", "DIRECT_WINE", "DIRECT_WINE_FALLBACK"}
+        and (report["direct_unix_exit_code"] is None or
+             (type(report["direct_unix_exit_code"]) is int
+              and -255 <= report["direct_unix_exit_code"] <= 255))
         and report["win32_original_status"] in WIN32_STATUSES
         and report["win32_original_exit"] in WIN32_CATEGORIES
         and report["setup_log_status"] in KNOWN_RESULTS
@@ -313,6 +383,8 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("Verified .NET 4.8 disposable-prefix experiment refused")
     print("Original Microsoft .NET 4.8 outcome:", report["installer_execution"])
     print("Original setup process exit category:", report["unix_exit_category"])
+    print("Original installer execution path:", report["execution_path"])
+    print("Original installer Unix return code:", report["direct_unix_exit_code"])
     print("Original Win32 monitor selftest before cleanup:", report["win32_selftest_before"])
     print("Original Win32 monitor selftest after cleanup:", report["win32_selftest_after"])
     print("Exact Windows installer status:", report["win32_original_status"])
