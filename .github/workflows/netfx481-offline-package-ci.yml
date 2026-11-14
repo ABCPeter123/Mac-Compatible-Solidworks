@@ -6,6 +6,8 @@ on:
       - '.github/workflows/netfx481-offline-package-ci.yml'
       - 'scripts/netfx481_archive_evidence.py'
       - 'tests/test_netfx481_archive_evidence.py'
+      - 'scripts/netfx481_nested_cab_evidence.py'
+      - 'tests/test_netfx481_nested_cab_evidence.py'
       - 'docs/NETFX481_REAL_RUNTIME.md'
   workflow_dispatch:
 
@@ -27,6 +29,8 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_netfx481_archive_evidence.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Microsoft package classification safety failed" }
+          python -m unittest discover -s tests -p 'test_netfx481_nested_cab_evidence.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Embedded Microsoft package classification safety failed" }
       - name: Acquire Microsoft original offline installer and authenticate Authenticode signature
         shell: pwsh
         run: |
@@ -58,6 +62,24 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Private package inventory classification failed" }
           Remove-Item -LiteralPath $transcript -Force
           if (!(Test-Path build/netfx481-package-categories.json)) { throw "Missing sanitized results" }
+      - name: Extract only signed original Microsoft CAB containers privately and classify their members
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $seven = Join-Path $env:ProgramFiles "7-Zip\7z.exe"
+          $installer = Join-Path (Resolve-Path build) "NDP481-x86-x64-AllOS-ENU.exe"
+          $cache = Join-Path $env:RUNNER_TEMP "swcompat-original-microsoft-cabs-private"
+          New-Item -ItemType Directory -Force $cache | Out-Null
+          try {
+            & $seven e -y $installer '-ir!*.cab' "-o$cache" > $null 2>$null
+            $extractCode = $LASTEXITCODE
+            if ($extractCode -ne 0) { throw "Could not access original Microsoft embedded CAB containers" }
+            python -m scripts.netfx481_nested_cab_evidence --cab-directory $cache --sevenzip $seven --output build/netfx481-embedded-cab-categories.json
+            if ($LASTEXITCODE -ne 0) { throw "Private nested Microsoft CAB classifier failed" }
+          }
+          finally {
+            Remove-Item -LiteralPath $cache -Force -Recurse -ErrorAction SilentlyContinue
+          }
       - name: Emit only allowlisted categories
         shell: pwsh
         run: |
@@ -75,10 +97,23 @@ jobs:
             $flag = $evidence.features.$name
             Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ("{0}: **{1}**" -f $name, $flag)
           }
+          $nested = Get-Content -Raw -LiteralPath build/netfx481-embedded-cab-categories.json | ConvertFrom-Json
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "## Embedded original Microsoft CAB containers"
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "CAB scan: **$($nested.status)**"
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "CAB containers classified: **$($nested.cabs_listed)**"
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "Embedded archive members: **$($nested.entries)**"
+          foreach ($name in @('DLL','MUM','CAT','MANIFEST','MSI','EXE','OTHER')) {
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ("Embedded {0} count: **{1}**" -f $name, $nested.types.$name)
+          }
+          foreach ($name in @('CLR_MEMBER','MSCORLIB_MEMBER','SERVICING_MANIFEST')) {
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ("Embedded {0}: **{1}**" -f $name, $nested.features.$name)
+          }
           Remove-Item -LiteralPath build/NDP481-x86-x64-AllOS-ENU.exe -Force
       - uses: actions/upload-artifact@v4
         with:
           name: netfx481-original-microsoft-package-categories-only
-          path: build/netfx481-package-categories.json
+          path: |
+            build/netfx481-package-categories.json
+            build/netfx481-embedded-cab-categories.json
           if-no-files-found: error
           retention-days: 7
