@@ -273,7 +273,9 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
             wine_restart: dict[str, str] | None = None,
             setup_evidence: dict | None = None,
             secondary_evidence: dict | None = None,
-            win32_launch: dict | None = None) -> dict:
+            win32_launch: dict | None = None,
+            payload_audit: dict | None = None,
+            clr_dll_load: str = "NOT_REQUESTED") -> dict:
     if registry_adjustment not in {
         "NOT_REQUESTED", "NOT_APPLICABLE", "CLEARED", "DELETE_FAILED", "STILL_PRESENT_OR_UNVERIFIED"
     }:
@@ -332,6 +334,11 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
     win32_launch = win32_launch or blank_win32()
     if not validate_win32(win32_launch):
         raise ValueError("Unsafe Win32 launcher evidence")
+    from scripts.netfx481_payload_audit import blank as blank_payload, validate as validate_payload
+    from scripts.netfx481_clr_load import STATUSES as CLR_LOAD_STATES
+    payload_audit = payload_audit or blank_payload()
+    if not validate_payload(payload_audit) or clr_dll_load not in CLR_LOAD_STATES:
+        raise ValueError("Unsafe native CLR file or loader result")
     return {
         "schema": 1,
         "scope": "MICROSOFT_NETFX481_WINE_DISPOSABLE_EXPERIMENT",
@@ -345,6 +352,8 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
         "setup_evidence": setup_evidence,
         "secondary_evidence": secondary_evidence,
         "win32_launch": win32_launch,
+        "payload_audit": payload_audit,
+        "clr_dll_load": clr_dll_load,
         "after": after,
         "after_native_first": native_first,
         "after_native_only": native_only,
@@ -378,10 +387,13 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
           experiment_remove_wine_mono: bool = False,
           experiment_reboot_after_possible_3010: bool = False,
           experiment_setup_log: bool = False,
-          win32_launcher: Path | None = None) -> dict:
+          win32_launcher: Path | None = None,
+          clr_loader: Path | None = None) -> dict:
     if os.name == "nt":
         raise ValueError("Native Windows execution is not permitted")
-    for path in (wine, prefix, installer, manifest, fixture, *([win32_launcher] if win32_launcher is not None else [])):
+    for path in (wine, prefix, installer, manifest, fixture,
+                 *([win32_launcher] if win32_launcher is not None else []),
+                 *([clr_loader] if clr_loader is not None else [])):
         if path.is_symlink():
             raise ValueError("Symbolic link inputs are not permitted")
     wine = wine.resolve(strict=True)
@@ -391,6 +403,8 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
     fixture = fixture.resolve(strict=True)
     if win32_launcher is not None:
         win32_launcher = win32_launcher.resolve(strict=True)
+    if clr_loader is not None:
+        clr_loader = clr_loader.resolve(strict=True)
     validate_prefix(prefix)
     if not wine.is_file() or not os.access(wine, os.X_OK):
         raise ValueError("Wine executable is missing")
@@ -409,6 +423,8 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
         raise ValueError("Microsoft setup diagnostics require verified Wine Mono removal")
     if win32_launcher is not None and not (experiment_remove_wine_mono and experiment_setup_log):
         raise ValueError("Win32 launch experiment requires Mono removal and private setup transcript")
+    if clr_loader is not None and not (experiment_remove_wine_mono and win32_launcher is not None):
+        raise ValueError("CLR payload audit requires verified Mono removal and Windows process monitor")
     before = probe(wine, prefix, fixture)
     if runtime_ready(before):
         return combine(before, before, "SKIPPED_ALREADY_READY", None)
@@ -434,6 +450,8 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
                            registry_adjustment=registry_adjustment,
                            wow6432_release=wow6432,
                            wine_mono_removal=wine_mono_removal)
+    from scripts.netfx481_payload_audit import snapshot as payload_snapshot, compare as payload_compare
+    payload_before = payload_snapshot(prefix) if clr_loader is not None else None
     log_output = None
     setup_evidence = None
     if experiment_setup_log:
@@ -473,6 +491,12 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
                        "action": wineboot_restart(wine, prefix)}
         else:
             restart = {"reason": "NO_3010_SIGNAL", "action": "NOT_NEEDED"}
+    payload_audit = None
+    clr_dll_load = "NOT_REQUESTED"
+    if clr_loader is not None:
+        from scripts.netfx481_clr_load import run as run_clr_load
+        payload_audit = payload_compare(payload_before, payload_snapshot(prefix))
+        clr_dll_load = run_clr_load(wine, prefix, clr_loader)
     after = probe(wine, prefix, fixture)
     # Try native Microsoft CLR DLL loading without installing or patching any
     # product binaries. This discriminates Wine Mono being selected by default
@@ -491,7 +515,9 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
                    wine_restart=restart,
                    setup_evidence=setup_evidence,
                    secondary_evidence=secondary_evidence,
-                   win32_launch=win32_evidence)
+                   win32_launch=win32_evidence,
+                   payload_audit=payload_audit,
+                   clr_dll_load=clr_dll_load)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -516,6 +542,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="Classify private original Microsoft setup /log without uploading or printing raw transcript")
     ap.add_argument("--win32-launcher", type=Path,
                     help="Run original verified setup via self-authored Windows CreateProcess fixture, capture real 32-bit exit")
+    ap.add_argument("--clr-loader", type=Path,
+                    help="Audit actual native .NET CLR PE files and test Win32 LoadLibraryW in disposable Wine prefix")
     args = ap.parse_args(argv)
     if not 60 <= args.timeout <= 360:
         ap.error("Invalid bounded timeout")
@@ -530,7 +558,8 @@ def main(argv: list[str] | None = None) -> int:
                        experiment_remove_wine_mono=args.experiment_remove_wine_mono,
                        experiment_reboot_after_possible_3010=args.experiment_reboot_after_possible_3010,
                        experiment_setup_log=args.experiment_setup_log,
-                       win32_launcher=args.win32_launcher)
+                       win32_launcher=args.win32_launcher,
+                       clr_loader=args.clr_loader)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     except (OSError, ValueError):
@@ -552,6 +581,10 @@ def main(argv: list[str] | None = None) -> int:
     print("Original Win32 bootstrapper child:", result["win32_launch"]["child_seen"])
     print("Direct child lifecycle after parent exits:", result["win32_launch"]["child_lifecycle"])
     print("Direct child exit aggregate:", result["win32_launch"]["child_exit"])
+    print("Original .NET CLR x64 on disk before:", result["payload_audit"]["before"]["CLR64"])
+    print("Original .NET CLR x64 on disk after:", result["payload_audit"]["after"]["CLR64"])
+    print("CLR x64 file change:", result["payload_audit"]["changes"]["CLR64"])
+    print("Original .NET CLR Win32 LoadLibraryW:", result["clr_dll_load"])
     print("Microsoft .NET 4.8.1 original setup:", result["install_execution"])
     print("Independent Microsoft CLR candidate after:", result["after"]["clr_family"])
     print("Registered .NET 4.8.1 after:", result["after"]["registry"])
