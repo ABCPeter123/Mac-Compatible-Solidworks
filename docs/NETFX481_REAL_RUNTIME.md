@@ -192,6 +192,16 @@ A separate independently authored Windows x64 C fixture invokes `LoadLibraryW` o
 
 **Critical limitations:** An executable with a valid PE header could be produced by Wine or another component and does not prove it is a genuine Microsoft-signed DLL. `LoadLibraryW=LOADED` only demonstrates that Windows-style loading succeeded, not that the DLL implements all CLR functionality or that it belongs to Microsoft. Actual CLR identity, .NET Framework 4.8.1 registry state and managed execution remain separate mandatory gates. No DLLs are copied out of Windows or shipped to the user, and none of this proves SOLIDWORKS graphical CAD operation.
 
+## Observed Apple Silicon native CLR payload result, November 14, 2026
+
+The full [real Microsoft .NET 4.8.1 test 43623730956](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43623730956) completed successfully as a diagnostic (not an installed Framework). The independently MSVC-compiled Win32 `LoadLibraryW` reference first passed on genuine Windows, and the signed original Microsoft offline installer was verified as before.
+
+The real temporary Apple Silicon Wine prefix reported **Framework64 `clr.dll` = ABSENT** immediately before Microsoft's setup and **Framework64 `clr.dll` = ABSENT** after the original signed setup completed, its observed child had exited with Windows code 3010, and Wine's simulated restart completed. The observed file change was **UNCHANGED** (still absent). The original self-authored `LoadLibraryW` x64 CLR probe returned **NOT_FOUND**. The managed fixture still ran under **Wine Mono**, the .NET 4.8.1 Release registry indicator remained missing, and functional native Microsoft Framework readiness after restoring Windows 11 was **FALSE**.
+
+This is stronger evidence than previous registry and loader preference tests: the expected `Framework64/v4.0.30319/clr.dll` was **not present at its standard installed location**, and the Windows loader independently confirmed that path unavailable. A missing file does not prove why Microsoft's bootstrapper or child installer chose not to stage or commit the binary; the actual internal payload extraction and servicing/MSI transaction is the next target.
+
+**No compatibility claim:** a Windows installer returning 3010 and an observed child reporting restart required do not establish that CLR files were copied or registered. Native Framework and SOLIDWORKS remain unverified. The experiment reports no original executable files, hashes, identities, paths or unredacted installer logs.
+
 ## Technical boundaries
 
 The independent fixture does not test every SOLIDWORKS managed feature or COM interop, and running Microsoft's CLR under Wine would still not establish CAD readiness. WebView2 browser pixels, native graphics/window composition, installation manager UI, x86 helper processes and activation remain separate compatibility gates.
