@@ -134,6 +134,9 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    if args.command == "native-install" and args.prefix.expanduser().is_symlink():
+        print("Local installation blocked: symbolic-link Wine prefix is not allowed.", file=sys.stderr)
+        return 2
     prefix, logs = args.prefix.expanduser().resolve(), args.logs_dir.expanduser().resolve()
     if args.command == "analyze":
         log = args.log.expanduser()
