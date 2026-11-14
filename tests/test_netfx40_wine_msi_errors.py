@@ -32,6 +32,52 @@ class WineMsiErrorTests(unittest.TestCase):
         self.assertEqual(r["classes"], ["CABINET_EXTRACT_FAILED"])
         self.assertEqual(r["msi_error_lines"], 2)
 
+    def test_actual_netfx_custom_action_pipe_failure_is_not_classed_as_msi_service(self):
+        raw = (
+            b'0374:err:msi:custom_client_thread failed to write to custom action client pipe: 232\n'
+            b'015c:err:msi:custom_get_thread_return invalid Return Code 232\n'
+            b'015c:err:msi:execute_script Execution of script 0 halted; action L"[C:\\users\\private\\file<=>S-1-5-21-0]CA_Regtlb_Microsoft_amd64" returned 1603\n'
+            b'015c:err:msi:ITERATE_Actions Execution halted, action L"InstallFinalize" returned 1603\n'
+            b'015c:fixme:msi:ACTION_CustomAction msidbCustomActionTypeTSAware not handled\n'
+        )
+        result = w.parse(raw)
+        self.assertTrue(w.validate(result))
+        self.assertEqual(result["msi_error_lines"], 4)
+        self.assertEqual(result["classes"], [
+            "CUSTOM_ACTION_PIPE_FAILURE", "CUSTOM_ACTION_RETURN_FAILURE",
+            "MSI_ACTION_CUSTOM", "MSI_ACTION_FINALIZE",
+            "MSI_TSAWARE_UNIMPLEMENTED",
+        ])
+        self.assertNotIn("private", str(result))
+        self.assertNotIn("Regtlb", str(result))
+
+    def test_specific_installfiles_or_registry_service_failure_precedes_finalization(self):
+        raw = (
+            b'0120:err:msi:ACTION_InstallFiles compressed file wasn\\x27t installed (L"PRIVATE")\n'
+            b'0120:err:msi:execute_script Execution of script 0 halted; action L"InstallFiles" returned 1603\n'
+            b'0120:err:msi:execute_script Execution of script 0 halted; action L"StartServices" returned 1603\n'
+            b'0120:err:msi:execute_script Execution of script 0 halted; action L"WriteRegistryValues" returned 1603\n'
+            b'0120:err:msi:ITERATE_Actions Execution halted, action L"InstallFinalize" returned 1603\n'
+        )
+        result = w.parse(raw)
+        self.assertTrue(w.validate(result))
+        self.assertIn("MSI_COMPRESSED_FILE_MISSING", result["classes"])
+        self.assertIn("MSI_ACTION_SERVICE", result["classes"])
+        self.assertIn("MSI_ACTION_REGISTRY", result["classes"])
+        self.assertIn("MSI_ACTION_FINALIZE", result["classes"])
+
+    def test_targeted_wine_fixme_is_a_warning_not_a_fatal_error(self):
+        result = w.parse(
+            b'0100:fixme:msi:ACTION_CustomAction msidbCustomActionTypeTSAware not handled\n'
+        )
+        self.assertEqual(result["msi_error_lines"], 0)
+        self.assertEqual(result["classes"], ["MSI_TSAWARE_UNIMPLEMENTED"])
+        self.assertTrue(w.validate(result))
+        other = w.parse(b'0100:fixme:msi:internal_ui_handler not implemented\n')
+        self.assertEqual(other["msi_error_lines"], 0)
+        self.assertEqual(other["classes"], [])
+        self.assertTrue(w.validate(other))
+
     def test_does_not_trigger_on_text_without_actual_wine_err_msi(self):
         data = (
             b'xxx:fixme:msi:ready_media cabinet not found: L"C:\\netfx_core.mzz"\n'
