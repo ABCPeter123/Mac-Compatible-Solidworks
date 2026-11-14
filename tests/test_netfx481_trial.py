@@ -281,6 +281,42 @@ class DotNet481Tests(unittest.TestCase):
             self.assertEqual(result["install_execution"], "SKIPPED_REGISTRY_NOT_CORRECTED")
             installer_runner.assert_not_called()
 
+    def test_mono_removal_is_required_before_native_framework_setup(self):
+        if trial.os.name == "nt":
+            self.skipTest("Native Windows cannot run the isolated Wine installer")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            prefix = root / "prefix"
+            (prefix / "drive_c").mkdir(parents=True)
+            (prefix / "system.reg").write_text("")
+            (prefix / trial.SENTINEL).write_text("")
+            wine = root / "wine"
+            wine.write_bytes(b"synthetic")
+            wine.chmod(0o755)
+            installer = root / "NDP481-x86-x64-AllOS-ENU.exe"
+            installer.write_bytes(b"synthetic")
+            manifest = root / "sha.txt"
+            manifest.write_text("0" * 64)
+            fixture = root / "netfx481_runtime_probe.exe"
+            fixture.write_bytes(b"synthetic")
+            wow = {"before": "ABSENT", "action": "NOT_NEEDED", "after": "ABSENT"}
+            mono = {"before": 1, "after": None, "action": "REMOVE_FAILED"}
+            with mock.patch.object(trial, "verify_media", return_value=True), \
+                 mock.patch.object(trial, "probe", return_value=state(runtime="MONO")), \
+                 mock.patch.object(trial, "clear_false_release", return_value="CLEARED"), \
+                 mock.patch.object(trial, "clear_false_wow6432_release", return_value=wow), \
+                 mock.patch("scripts.wine_mono_removal.remove_mono", return_value=mono), \
+                 mock.patch.object(trial, "run_installer") as installer_runner:
+                result = trial.trial(
+                    wine, prefix, installer, manifest, fixture,
+                    experiment_clear_false_release=True,
+                    experiment_clear_wow6432_release=True,
+                    experiment_remove_wine_mono=True,
+                )
+            self.assertEqual(result["wine_mono_removal"]["action"], "REMOVE_FAILED")
+            self.assertEqual(result["install_execution"], "SKIPPED_MONO_NOT_REMOVED")
+            installer_runner.assert_not_called()
+
     def test_real_run_requires_manifest_digest(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
