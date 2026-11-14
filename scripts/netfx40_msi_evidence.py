@@ -80,7 +80,7 @@ def classify_action(name: str) -> str:
     if any(x in action for x in ("registry", "regasm", "regsvr", "typelib",
                                   "registerclass", "registercom", "publishcomponent")):
         return "REGISTRY_COM"
-    if any(x in action for x in ("assembly", "gac", "fusion", "ngen")):
+    if any(x in action for x in ("assembl", "gac", "fusion", "ngen")):
         return "ASSEMBLY_GAC"
     if any(x in action for x in ("installfile", "copyfile", "movefile",
                                   "createfolder", "costfinalize")):
