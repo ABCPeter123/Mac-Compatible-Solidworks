@@ -6,6 +6,7 @@ on:
       - '.github/workflows/msi-transaction-ci.yml'
       - 'probes/msi_transaction_probe.wxs'
       - 'probes/msi_transaction_marker.txt'
+      - '.gitattributes'
       - 'scripts/msi_transaction_trial.py'
       - 'tests/test_msi_transaction_trial.py'
   workflow_dispatch:
@@ -50,9 +51,11 @@ jobs:
           $installation = Start-Process -FilePath msiexec.exe -ArgumentList @('/i', ('"' + $msi + '"'), '/qn', '/norestart') -PassThru -Wait -NoNewWindow
           if ($installation.ExitCode -ne 0) { throw "Native Windows self-authored MSI install failed" }
           if (!(Test-Path -LiteralPath $marker)) { throw "MSI exit zero without installed file" }
-          $expected = (Get-Content -LiteralPath probes/msi_transaction_marker.txt -Raw).Trim()
-          $actual = (Get-Content -LiteralPath $marker -Raw).Trim()
-          if ($actual -cne $expected) { throw "Self-authored installed marker does not match source" }
+          $expectedBytes = [System.IO.File]::ReadAllBytes((Resolve-Path probes/msi_transaction_marker.txt).Path)
+          $actualBytes = [System.IO.File]::ReadAllBytes($marker)
+          if ([Convert]::ToBase64String($actualBytes) -cne [Convert]::ToBase64String($expectedBytes)) {
+            throw "Self-authored marker differs byte-for-byte from source"
+          }
           $cleanup = Start-Process -FilePath msiexec.exe -ArgumentList @('/x', ('"' + $msi + '"'), '/qn', '/norestart') -PassThru -Wait -NoNewWindow
           if ($cleanup.ExitCode -ne 0) { throw "Native Windows MSI uninstall failed" }
           if (Test-Path -LiteralPath $marker) { throw "Windows MSI failed to uninstall marker" }
