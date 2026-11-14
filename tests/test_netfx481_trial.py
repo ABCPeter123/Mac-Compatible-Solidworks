@@ -375,6 +375,26 @@ class DotNet481Tests(unittest.TestCase):
                 self.assertEqual(runner.call_args.kwargs["env"]["WINEPREFIX"], str(prefix))
                 self.assertNotIn("shell", runner.call_args.kwargs)
 
+    def test_wineboot_symlink_uses_builtin_program_instead_of_failing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            prefix = root / "prefix"
+            (prefix / "drive_c").mkdir(parents=True)
+            (prefix / "system.reg").write_text("")
+            (prefix / trial.SENTINEL).write_text("")
+            wine = root / "wine"
+            wine.write_text("synthetic")
+            wine.chmod(0o755)
+            boot = root / "wineboot"
+            try:
+                boot.symlink_to(wine)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlinks unavailable")
+            with mock.patch.object(trial.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
+                self.assertEqual(trial.wineboot_restart(wine, prefix), "COMPLETED")
+                self.assertEqual(run.call_args.args[0],
+                                 [str(wine), "wineboot.exe", "--restart"])
+
     def test_wineboot_exit_failure_not_treated_as_reboot(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
