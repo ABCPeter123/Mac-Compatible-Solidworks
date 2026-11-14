@@ -26,7 +26,15 @@ No proprietary data, raw Windows installer logs, user file paths, registry conte
 
 ## First genuine Apple Silicon result, November 14, 2026
 
-[GitHub Actions run 43561243779](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43561243779) downloaded the publisher-verified Microsoft installer and executed it inside disposable Apple Silicon Wine 11.21. The installer returned EXIT_ZERO, the registry reported .NET 4.8.1 or higher, and independent managed tasks/XML/SHA-256 completed. But the managed fixture reported **MONO** as the runtime actually executing the code. Therefore **framework_runtime_ready was FALSE**. This is concrete evidence that installer status and registry state can be misleading under Wine. The Microsoft CLR has not yet been proven to run.
+[GitHub Actions run 43561243779](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43561243779) downloaded the publisher-verified Microsoft installer and executed it inside disposable Apple Silicon Wine 11.21. The installer returned EXIT_ZERO, the registry reported .NET 4.8.1 or higher, and independent managed tasks/XML/SHA-256 completed. The sanitized artifact also shows that **before the Microsoft installer ran**, the disposable Wine prefix already reported .NET 4.8.1 in the registry while executing the managed fixture under Mono. **After setup**, both indicators remained unchanged. But the managed fixture reported **MONO** as the runtime actually executing the code. Therefore **framework_runtime_ready was FALSE**. This is concrete evidence that installer status and registry state can be misleading under Wine. The Microsoft CLR has not yet been proven to run.
+
+## Controlled correction for a false pre-existing 4.8.1 indicator
+
+The first genuine run exposed a probable short-circuit: the original Microsoft setup returned EXIT_ZERO but Wine's initial registry had already claimed .NET 4.8.1 and it still used Wine Mono afterward. This can cause setup to skip the actual framework payload.
+
+The revised trial explicitly requests --experiment-clear-false-release, which is allowed **only** inside a prefix containing the .swcompat-netfx481-disposable sentinel. The script removes **only** the Release value below HKLM\Software\Microsoft\NET Framework Setup\NDP\v4\Full, and only when the initial independent fixture observed both AT_LEAST_481 and MONO. It then runs a second registry query and proceeds with the original Microsoft installer only if that specific value is absent. If deletion fails or the value remains present, setup is skipped and the exact fixed failure classification is reported.
+
+Nothing about SOLIDWORKS licensing, system activation, native host macOS registry state, unrelated Wine keys, Windows code signing, or original executable bytes is modified. Do **not** use this experimental key correction in a long-lived user's Wine prefix. Clearing the indicator is a diagnostic method, not a compatibility guarantee; it might disrupt Wine Mono's existing registration.
 
 ## Native CLR loading A/B experiment
 
