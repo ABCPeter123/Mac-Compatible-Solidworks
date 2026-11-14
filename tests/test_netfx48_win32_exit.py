@@ -68,3 +68,35 @@ class NetFx48Win32Tests(TestCase):
         self.assertEqual(result["status"], "START_FAILED")
         self.assertTrue(validate(result))
         self.assertEqual(monitor.termination(result), ("START_FAILED", None))
+
+
+    def test_relative_fixture_not_resolved_against_changed_wine_cwd(self):
+        # GitHub Actions supplies build/foo.exe paths, not absolute paths.
+        # When the subprocess changes cwd to build/, those inputs must first
+        # be canonicalized to avoid attempting build/build/foo.exe.
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp:
+            root = Path(temp)
+            fixture = root / "netfx48_win32_launch.exe"
+            original = root / "NDP48-x86-x64-AllOS-ENU.exe"
+            fixture.write_bytes(b"synthetic x64 fixture")
+            original.write_bytes(b"synthetic installer")
+            relative_fixture = fixture.relative_to(Path.cwd())
+            relative_original = original.relative_to(Path.cwd())
+            class Silent:
+                returncode = 1
+            with mock.patch("scripts.netfx481_trial.validate_prefix"):
+                with mock.patch.object(monitor.subprocess, "run", return_value=Silent()) as run:
+                    self.assertEqual(monitor.selftest(root / "wine", root, relative_fixture),
+                                     "NO_OUTPUT")
+                    self.assertEqual(Path(run.call_args.args[0][1]), fixture)
+                    self.assertEqual(Path(run.call_args.kwargs["cwd"]), root)
+                with mock.patch("swcompat.wine_paths.windows_media_path",
+                                return_value=r"Z:\installer\NDP48-x86-x64-AllOS-ENU.exe") as winepath:
+                    with mock.patch.object(monitor.subprocess, "run",
+                                           return_value=Silent()) as run:
+                        self.assertEqual(monitor.launch(root / "wine", root,
+                                                        relative_original,
+                                                        relative_fixture)["status"], "BAD_REPORT")
+                        self.assertEqual(Path(run.call_args.args[0][1]), fixture)
+                        self.assertEqual(Path(run.call_args.kwargs["cwd"]), root)
+                        self.assertEqual(winepath.call_args.args[2], original)
