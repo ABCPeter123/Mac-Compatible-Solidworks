@@ -67,8 +67,8 @@ class NativeWebView2Tests(unittest.TestCase):
         self.assertEqual(report["installer_authenticode"], "NOT_VERIFIED_LOCALLY")
         runner.assert_called_once()
         self.assertEqual(runner.call_args.args[3], 240)
-        self.assertEqual(runner.call_args.args[2]["WINEPREFIX"], str(self.prefix))
-        self.assertEqual(probe.call_args.args[2]["WINEPREFIX"], str(self.prefix))
+        self.assertEqual(runner.call_args.args[2]["WINEPREFIX"], str(self.prefix.resolve()))
+        self.assertEqual(probe.call_args.args[2]["WINEPREFIX"], str(self.prefix.resolve()))
         saved = list(self.logs.glob("native-webview2-*.json"))
         self.assertEqual(len(saved), 1)
         text = saved[0].read_text()
@@ -78,6 +78,23 @@ class NativeWebView2Tests(unittest.TestCase):
         self.assertEqual(json.loads(text)["result"], "READY")
         if os.name != "nt":
             self.assertEqual(saved[0].stat().st_mode & 0o077, 0)
+
+    def test_relative_media_paths_are_normalized_before_subprocess_chdir(self):
+        # This reproduces GitHub's real command: --installer build/runtime.exe
+        # while the Wine runtime subprocess uses cwd=build.
+        runner = mock.Mock(return_value=("EXIT_ZERO", 0))
+        probe = mock.Mock(side_effect=[status(False), status(True)])
+        relative = lambda p: Path(os.path.relpath(p, Path.cwd()))
+        with mock.patch.object(webview2, "verify_microsoft_installer", return_value="0" * 64):
+            result = webview2.prepare_webview2(
+                relative(self.wine), relative(self.prefix), relative(self.logs),
+                relative(self.installer), relative(self.sha), relative(self.probe),
+                run_probe=probe, installer_runner=runner, pause=lambda _: None,
+            )
+        self.assertEqual(result["result"], "READY")
+        self.assertEqual(runner.call_args.args[1], self.installer.resolve())
+        self.assertEqual(probe.call_args.args[1], self.probe.resolve())
+        self.assertEqual(runner.call_args.args[2]["WINEPREFIX"], str(self.prefix.resolve()))
 
     def test_exit_zero_without_controller_is_not_accepted(self):
         report, runner, _ = self.prep(statuses=[status(False), status(False)])
