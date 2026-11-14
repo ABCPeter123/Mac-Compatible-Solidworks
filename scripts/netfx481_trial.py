@@ -271,7 +271,8 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
             wow6432_release: dict[str, str] | None = None,
             wine_mono_removal: dict | None = None,
             wine_restart: dict[str, str] | None = None,
-            setup_evidence: dict | None = None) -> dict:
+            setup_evidence: dict | None = None,
+            secondary_evidence: dict | None = None) -> dict:
     if registry_adjustment not in {
         "NOT_REQUESTED", "NOT_APPLICABLE", "CLEARED", "DELETE_FAILED", "STILL_PRESENT_OR_UNVERIFIED"
     }:
@@ -315,6 +316,16 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
             or len(setup_evidence["codes"]) > len(KNOWN_CODES)
             or any(x not in KNOWN_CODES.values() for x in setup_evidence["codes"])):
         raise ValueError("Unsafe or unexpected setup transcript evidence")
+    from scripts.netfx481_setup_evidence import (
+        validate_secondary_report, SECONDARY_SOURCE_NAMES
+    )
+    secondary_evidence = secondary_evidence or {
+        "status": "NOT_REQUESTED", "files_scanned": 0,
+        "sources": {key: 0 for key in sorted(SECONDARY_SOURCE_NAMES)},
+        "phase": "UNKNOWN", "codes": [],
+    }
+    if not validate_secondary_report(secondary_evidence):
+        raise ValueError("Unsafe or unexpected secondary log report")
     return {
         "schema": 1,
         "scope": "MICROSOFT_NETFX481_WINE_DISPOSABLE_EXPERIMENT",
@@ -326,6 +337,7 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
         "wine_mono_removal": wine_mono_removal,
         "wine_restart": wine_restart,
         "setup_evidence": setup_evidence,
+        "secondary_evidence": secondary_evidence,
         "after": after,
         "after_native_first": native_first,
         "after_native_only": native_only,
@@ -434,13 +446,18 @@ def trial(wine: Path, prefix: Path, installer: Path, manifest: Path, fixture: Pa
     # from a functioning native CLR that Wine's loader could actually invoke.
     native_first = probe(wine, prefix, fixture, override="native_first")
     native_only = probe(wine, prefix, fixture, override="native_only")
+    secondary_evidence = None
+    if experiment_setup_log:
+        from scripts.netfx481_setup_evidence import scan_secondary_logs
+        secondary_evidence = scan_secondary_logs(prefix)
     return combine(before, after, termination, code,
                    native_first=native_first, native_only=native_only,
                    registry_adjustment=registry_adjustment,
                    wow6432_release=wow6432,
                    wine_mono_removal=wine_mono_removal,
                    wine_restart=restart,
-                   setup_evidence=setup_evidence)
+                   setup_evidence=setup_evidence,
+                   secondary_evidence=secondary_evidence)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -489,6 +506,10 @@ def main(argv: list[str] | None = None) -> int:
     print("Microsoft setup diagnostic availability:", result["setup_evidence"]["status"])
     print("Microsoft setup failure phase:", result["setup_evidence"]["phase"])
     print("Microsoft setup recognized error categories:", ",".join(result["setup_evidence"]["codes"]) or "NONE")
+    print("Secondary Microsoft setup logs:", result["secondary_evidence"]["status"])
+    print("Secondary Microsoft setup files inspected:", result["secondary_evidence"]["files_scanned"])
+    print("Secondary Microsoft setup phase:", result["secondary_evidence"]["phase"])
+    print("Secondary Microsoft setup error categories:", ",".join(result["secondary_evidence"]["codes"]) or "NONE")
     print("Microsoft .NET 4.8.1 original setup:", result["install_execution"])
     print("Independent Microsoft CLR candidate after:", result["after"]["clr_family"])
     print("Registered .NET 4.8.1 after:", result["after"]["registry"])
