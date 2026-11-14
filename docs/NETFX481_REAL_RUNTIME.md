@@ -46,6 +46,22 @@ The follow-up run now launches the same self-authored managed executable after i
 
 The report exposes `after_native_first` and `after_native_only` plus separate readiness booleans. These scoped environment settings are a hypothesis to investigate, not a compatibility fix until the managed fixture actually executes with a Microsoft CLR candidate. An apparent success still needs stronger Microsoft DLL identity verification and SOLIDWORKS-specific managed COM tests.
 
+## Follow-up: Windows 10 reported-version profile for Framework setup
+
+The initial run found Wine 11.21 reporting .NET 4.8.1 before any genuine Microsoft installation. Removing that one fake Release indicator in a disposable prefix allowed setup to run, but its original executable still returned EXIT_ZERO without providing a native CLR: the registry remained NOT_FOUND and Mono handled managed execution.
+
+The next experiment changes **only the disposable Wine prefix's reported Windows version** from Windows 11 to Windows 10 during genuine Microsoft .NET Framework 4.8.1 setup. Windows 10 is a target platform for the framework installer, unlike the Windows 11 profile which may cause setup to assume the framework is built into Windows already. The same scoped false-release correction runs before setup. After the experiment, the workflow **restores Windows 11** using Wine configuration and reruns the original managed CLR probe.
+
+The sanitized evidence separately reports install_os_profile=WIN10_REPORTED, post_restore_os_profile=WIN11_REPORTED and post_restore_framework_ready. A failure to restore the Win11 profile or capture both results fails the workflow, rather than leaving an apparently ready but unsupported setup. This is an original Microsoft installer experiment only, with no SOLIDWORKS proprietary code, activation or serial.
+
+## Windows 10 installation-profile results, November 14, 2026
+
+[GitHub Actions run 43562117555](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43562117555) confirmed that the temporary Windows 10 profile was applied for the original Microsoft installer, and the disposable prefix was restored to Windows 11 afterward. The misleading Release indicator was successfully removed before setup.
+
+However, the genuine Microsoft .NET Framework 4.8.1 installer still returned EXIT_ZERO without providing the native CLR. The independent probe afterward reported registry NOT_FOUND, CLR family MONO and managed test PASS; native-first loading remained MONO, native-only loading was NOT_VERIFIED, and the post-restore Windows 11 readiness result was FALSE.
+
+The Windows 10 reported-version hypothesis did not fix the dependency. Further work must identify why Microsoft's installer short-circuits without deploying a usable CLR. Changes to a normal long-lived Mac user prefix are not justified by this result.
+
 ## Technical boundaries
 
 The independent fixture does not test every SOLIDWORKS managed feature or COM interop, and running Microsoft's CLR under Wine would still not establish CAD readiness. WebView2 browser pixels, native graphics/window composition, installation manager UI, x86 helper processes and activation remain separate compatibility gates.
