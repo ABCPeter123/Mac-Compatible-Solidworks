@@ -104,6 +104,14 @@ All statuses are fixed-schema enums with no raw installer logs, executable names
 
 The next run falls back to the standard built-in Windows command `wine wineboot.exe --restart` when the Unix wineboot executable is missing. The fallback has the same strict disposable-prefix marker, bounded runtime, no raw logs and post-restart independent CLR verification. This is still not an assertion that 194 came from true Windows return 3010.
 
+## Final simulated reboot result, November 14, 2026
+
+[GitHub Actions run 43564239857](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43564239857) validated the updated macOS Wine restart command. The exact sequence was: both registry Release indicators CLEARED, Wine Mono MSI REMOVED, original signed Microsoft 4.8.1 installer returned raw Unix status 194, and Wine's built-in `wineboot.exe --restart` reported **COMPLETED**.
+
+After the actual simulated restart, the independent C# fixture still reported Wine Mono, registry Release NOT_FOUND, and Microsoft CLR readiness FALSE. After restoring the Windows 11 reported version, readiness was still FALSE. Therefore a missing Wine restart **does not explain** why the genuine Microsoft 4.8.1 installer fails to establish the native CLR in this environment. Unix status 194 remains ambiguous; it cannot be promoted into a Windows 3010 success claim.
+
+The next investigation must collect and classify the failing **internal Microsoft installer or CBS/MSI phase** in a private disposable prefix, or test an upstream-supported Winetricks Framework staging chain with a properly isolated native Microsoft runtime. Avoid additional global registry fixes, removing authentic Windows components, or calling SOLIDWORKS compatible based on diagnostics.
+
 ## Technical boundaries
 
 The independent fixture does not test every SOLIDWORKS managed feature or COM interop, and running Microsoft's CLR under Wine would still not establish CAD readiness. WebView2 browser pixels, native graphics/window composition, installation manager UI, x86 helper processes and activation remain separate compatibility gates.
