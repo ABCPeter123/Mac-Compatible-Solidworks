@@ -63,7 +63,9 @@ class CBSProbeTests(unittest.TestCase):
             (prefix / SENTINEL).write_text("")
             with mock.patch.object(cbs.subprocess, "run") as process:
                 def execute(command, **kwargs):
-                    self.assertEqual(command, [str(wine), str(exe)])
+                    # Windows Path.resolve() expands 8.3 path aliases, so
+                    # compare with the canonical executable, not the temp alias.
+                    self.assertEqual(command, [str(wine), str(exe.resolve())])
                     self.assertEqual(kwargs["env"]["WINEPREFIX"], str(prefix))
                     self.assertNotIn("WINEDLLOVERRIDES", kwargs["env"])
                     kwargs["stdout"].write(valid(registry="ABSENT"))
