@@ -138,6 +138,14 @@ The new experiment scans **only** an isolated disposable prefix's `C:\\users`, `
 
 Only four fixed source categories, a bounded file count, broad failure phase and preapproved Windows error categories are stored. Original filenames, user paths, event text, registry values, executable data, serials, raw installer logs and unidentified error codes are **never uploaded**. This is classification, not a root-cause finding until a concrete phase or recognized code emerges. Microsoft CLR readiness remains a separate independent execution check.
 
+## Actual Apple Silicon secondary-log result, November 14, 2026
+
+[GitHub Actions run 43613463661](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43613463661) completed the authenticated Microsoft installer experiment and bounded secondary log scan on real hosted Apple Silicon Wine. The primary `/log` transcript existed but reported UNKNOWN phase and no recognized Windows error code. The scanner found exactly **one bootstrapper temporary log** and no observed Framework Setup, Setup Events, or CBS logs among the scanned allowlisted paths. That single secondary file also returned UNKNOWN phase and no recognized error categories.
+
+Wine Mono MSI removal succeeded (1 installed, 0 remaining), the original Microsoft installer returned Unix status 194, and the simulated Wine reboot completed, but the independent fixture still ran under Mono with Framework registry NOT_FOUND. Microsoft CLR readiness after restoring Wine's reported Windows 11 version remained FALSE. CI success means the diagnostic and privacy-safe evidence collection worked, **not** that the Microsoft Framework or SOLIDWORKS is installed.
+
+This evidence does **not** show which internal Microsoft package fails, and absence of a scanned log is not proof that a subsystem did not execute. The next target should distinguish the original Windows process's full 32-bit exit status from Wine's Unix status and establish whether the bootstrapper actually launches its child installation payload.
+
 ## Technical boundaries
 
 The independent fixture does not test every SOLIDWORKS managed feature or COM interop, and running Microsoft's CLR under Wine would still not establish CAD readiness. WebView2 browser pixels, native graphics/window composition, installation manager UI, x86 helper processes and activation remain separate compatibility gates.
