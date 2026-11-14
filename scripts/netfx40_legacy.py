@@ -27,6 +27,7 @@ from scripts.netfx481_win32_exit import (
 )
 from scripts.netfx40_msi_evidence import scan as scan_inner_msi, empty as empty_msi, validate as validate_msi
 from scripts.netfx40_wine_msi_errors import parse as parse_wine_msi, empty as empty_wine_msi, validate as validate_wine_msi, MAX_BYTES as WINE_MSI_MAX
+from scripts.netfx40_msi_logging_policy import apply as enable_msi_logging, restore as restore_msi_logging, blank as blank_logging, validate as validate_logging
 from scripts.wine_mono_removal import inventory, remove_mono
 from swcompat.wine_paths import windows_media_path
 
@@ -36,7 +37,7 @@ LAUNCHER_NAME = "netfx40_win32_launch.exe"
 # by Winetricks. Also checked for valid Microsoft Authenticode on Windows.
 OFFICIAL_SHA256 = "65e064258f2e418816b304f646ff9e87af101e4c9552ab064bb74d281c38659f"
 STAGES = {"MEASURED", "ALREADY_NATIVE", "BLOCKED_WINVER", "BLOCKED_REGISTRY",
-          "BLOCKED_MONO_REMOVAL", "BLOCKED_WIN32_SELFTEST", "BLOCKED_MEDIA"}
+          "BLOCKED_MONO_REMOVAL", "BLOCKED_WIN32_SELFTEST", "BLOCKED_MEDIA", "BLOCKED_MSI_LOGGING"}
 STATES_START = {"NOT_RUN", "EXIT_CAPTURED", "START_FAILED", "TIMEOUT", "BAD_REPORT",
                 "INVALID_ARGUMENT", "WAIT_FAILED", "PROCESS_FAILED"}
 MONO_STATES = {"NOT_RUN", "REMOVED", "MONO_NOT_REGISTERED", "INVENTORY_FAILED",
@@ -120,7 +121,8 @@ def _run(wine: Path, prefix: Path, fixture: Path, arguments: list[str],
 
 
 def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
-            loader: Path, managed: Path, timeout: int = 210) -> dict:
+            loader: Path, managed: Path, timeout: int = 210, *,
+            enable_verbose_msi: bool = False) -> dict:
     if os.name == "nt":
         raise ValueError("Wine experiment cannot modify native Windows")
     if any(p.is_symlink() for p in (wine, prefix, installer, launcher, loader, managed)):
@@ -148,6 +150,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
         "installer_child_exit": "NOT_VERIFIED",
         "inner_msi": empty_msi(),
         "wine_msi_errors": empty_wine_msi(),
+        "msi_logging_policy": blank_logging(),
         "reboot": "NOT_RUN",
         "clr64_before": disk_before["CLR64"][0],
         "clr64_after": disk_before["CLR64"][0],
@@ -196,8 +199,21 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
         report["status"] = "BLOCKED_WIN32_SELFTEST"
         return report
     windows_path = windows_media_path(wine, prefix, installer)
-    installed = _run(wine, prefix, launcher, [windows_path],
-                     setup=True, timeout=min(timeout + 40, 390))
+    if enable_verbose_msi:
+        action = enable_msi_logging(wine, prefix)
+        report["msi_logging_policy"]["activation"] = action
+        if action != "APPLIED":
+            report["msi_logging_policy"]["restoration"] = restore_msi_logging(wine, prefix, action)
+            report["status"] = "BLOCKED_MSI_LOGGING"
+            return report
+        try:
+            installed = _run(wine, prefix, launcher, [windows_path],
+                             setup=True, timeout=min(timeout + 40, 390))
+        finally:
+            report["msi_logging_policy"]["restoration"] = restore_msi_logging(wine, prefix, action)
+    else:
+        installed = _run(wine, prefix, launcher, [windows_path],
+                         setup=True, timeout=min(timeout + 40, 390))
     report["installer_status"] = installed["status"]
     report["installer_exit"] = installed["category"]
     report["installer_exit_hex"] = installed["exit_hex"]
@@ -244,7 +260,7 @@ def validate(r: dict) -> bool:
                        "mono", "selftest", "installer_status", "installer_exit",
                        "installer_exit_hex", "installer_child_seen",
                        "installer_child_lifecycle", "installer_child_exit", "inner_msi",
-                       "wine_msi_errors",
+                       "wine_msi_errors", "msi_logging_policy",
                        "reboot", "clr64_before", "clr64_after",
                        "clr32_before", "clr32_after", "mscorlib64_after",
                        "native_loader", "runtime_family", "managed_functionality",
@@ -261,6 +277,7 @@ def validate(r: dict) -> bool:
         and r["installer_child_exit"] in EXIT_VALUES
         and validate_msi(r["inner_msi"])
         and validate_wine_msi(r["wine_msi_errors"])
+        and validate_logging(r["msi_logging_policy"])
         and (r["installer_status"] != "EXIT_CAPTURED" or
              ((r["installer_child_seen"] == "OBSERVED" and
                r["installer_child_lifecycle"] in {"ALL_EXITED", "PARTIAL", "STILL_ACTIVE"})
@@ -294,6 +311,7 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--" + key, required=True, type=Path)
     p.add_argument("--timeout", type=int, default=210)
     p.add_argument("--agree-disposable-prefix", action="store_true", required=True)
+    p.add_argument("--experiment-enable-verbose-msi", action="store_true")
     args = p.parse_args(argv)
     if not 60 <= args.timeout <= 360:
         p.error("Invalid bounded runtime")
@@ -323,6 +341,8 @@ def main(argv: list[str] | None = None) -> int:
         print("Original .NET 4.0 nested MSI", key, report["inner_msi"][key])
     for key in ("status", "classes", "msi_error_lines"):
         print("Wine MSI narrow error channel", key, report["wine_msi_errors"][key])
+    for key in ("activation", "restoration"):
+        print("Microsoft MSI verbose logging policy", key, report["msi_logging_policy"][key])
     return 0
 
 
