@@ -322,7 +322,8 @@ def main(argv: list[str] | None = None) -> int:
         }:
             raise ValueError("Output cannot overwrite experiment")
         report = inspect(args.wine, args.prefix, args.installer, args.launcher,
-                         args.loader, args.managed, args.timeout)
+                         args.loader, args.managed, args.timeout,
+                         enable_verbose_msi=args.experiment_enable_verbose_msi)
         if not validate(report):
             raise ValueError("Privacy-safe report invalid")
         args.output.parent.mkdir(parents=True, exist_ok=True)
