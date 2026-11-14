@@ -70,6 +70,24 @@ The new opt-in experiment also inspects `HKLM\\Software\\Wow6432Node\\Microsoft\
 
 The report contains only the enums `before`, `action`, and `after`; it includes no raw registry contents, user paths or Microsoft binaries. This is a targeted reproducible test, not a promise that .NET 4.8.1 now installs. Do not run it on your normal persistent SOLIDWORKS Wine prefix.
 
+## Remove Wine Mono itself before attempting native Microsoft .NET
+
+The [upstream Wine Mono README](https://github.com/wine-mono/wine-mono) explicitly states Wine Mono must be removed before installing .NET Framework 4.8.1 and earlier. Wine Mono installs misleading Framework registry entries and Windows Support files intentionally, to prevent Framework installers from replacing its implementation. Our earlier attempts removed registry values but **never uninstalled Wine Mono's actual MSI package**. This was an incomplete prerequisite procedure.
+
+The new controlled experiment enumerates Wine's registered programs using its own `uninstaller --list` interface and requires a structurally valid MSI product GUID with one of exactly three known descriptions: Wine Mono Windows Support, Wine Mono Runtime, Wine Mono. It invokes `wine uninstaller --remove <GUID>` on those products only, then re-enumerates and requires that no registered Wine Mono MSI remains. The original Microsoft 4.8.1 setup is skipped if enumeration fails, an unknown entry is observed, uninstallation fails, or any Wine Mono product remains.
+
+This is a destructive runtime replacement and is therefore permitted only in a newly initialized, marked, **disposable** Wine prefix used exclusively by GitHub CI. It is not offered as a modification to a real user's existing SOLIDWORKS installation. The original Microsoft-signed package remains unmodified and checksum-verified, and post-install verification still requires actual Microsoft CLR candidate execution rather than exit code zero.
+
+No raw uninstaller output, Microsoft installer logs, paths, MSI GUIDs, hashes or product serials are uploaded in the JSON result. Only action enums and counts are reported.
+
+## Verified Wine Mono MSI removal and the possible reboot result
+
+The complete [Apple Silicon original-Microsoft setup run 43563308094](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43563308094) verified both fake Release values were cleared, successfully uninstalled **one registered Wine Mono MSI**, and confirmed there were **zero** remaining registered Wine Mono packages. Unlike prior runs, it reached actual Microsoft Framework setup with Mono's support package removed.
+
+The original Microsoft installer returned raw Unix-side subprocess status **194**, which the existing trial reported as EXIT_NONZERO. The true Windows code **3010** (success, restart required) reduces to 194 when truncated to the lower eight Unix exit-status bits, but raw 194 alone is **not proof** the Windows code was 3010. Microsoft documents 3010 as successful installation requiring a restart. The existing trial did not simulate that restart before its managed verification.
+
+After setup, the managed fixture still executed with Mono, the Framework registry Release was NOT_FOUND and Microsoft CLR readiness was FALSE. The next test should perform an isolated Wine reboot using the supported `wineboot --restart` command when raw status 194 is observed, then retest native CLR identity and real managed operations. A reboot is not considered success unless the independent CLR readiness gate passes.
+
 ## Technical boundaries
 
 The independent fixture does not test every SOLIDWORKS managed feature or COM interop, and running Microsoft's CLR under Wine would still not establish CAD readiness. WebView2 browser pixels, native graphics/window composition, installation manager UI, x86 helper processes and activation remain separate compatibility gates.
