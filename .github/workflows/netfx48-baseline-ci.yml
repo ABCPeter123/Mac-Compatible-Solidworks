@@ -167,6 +167,8 @@ jobs:
                   for label, field in (
                       ("Status", "status"), ("Wine Mono removal", "mono_removal"),
                       ("Original installer", "installer_execution"),
+                      ("Installer execution path", "execution_path"),
+                      ("Direct Unix exit code", "direct_unix_exit_code"),
                       ("Windows exit category", "unix_exit_category"),
                       ("Win32 launcher selftest before Mono cleanup", "win32_selftest_before"),
                       ("Win32 launcher selftest after Mono cleanup", "win32_selftest_after"),
@@ -200,10 +202,18 @@ jobs:
           from scripts.netfx48_baseline import validate
           report = json.loads(Path("build/netfx48-baseline.json").read_text())
           assert validate(report)
-          assert report["win32_selftest_before"] == "PASS"
-          assert report["win32_selftest_after"] == "PASS"
-          assert report["win32_original_status"] == "EXIT_CAPTURED"
-          assert report["win32_original_exit"] in {"SUCCESS", "REBOOT_REQUIRED", "MSI_FATAL_ERROR", "INSTALL_ALREADY_PRESENT", "OTHER"}
+          assert report["status"] == "MEASURED"
+          assert report["installer_execution"] in {"EXIT_ZERO", "EXIT_NONZERO"}
+          assert report["execution_path"] in {"WIN32_MONITOR", "DIRECT_WINE_FALLBACK"}
+          if report["execution_path"] == "WIN32_MONITOR":
+              assert report["win32_selftest_after"] == "PASS"
+              assert report["win32_original_status"] == "EXIT_CAPTURED"
+              assert report["direct_unix_exit_code"] is None
+          else:
+              assert report["win32_selftest_after"] != "PASS"
+              assert report["win32_original_status"] == "NOT_REQUESTED"
+              assert type(report["direct_unix_exit_code"]) is int
+          assert report["clr64_after"] in {"ABSENT", "PE_AMD64", "PE_I386", "PE_OTHER", "NOT_PE", "LINKED", "IO_ERROR", "INVALID_SIZE"}
           assert report["netfx481_ready"] is False
           assert report["solidworks_compatibility"] == "NOT_DEMONSTRATED"
           PY
