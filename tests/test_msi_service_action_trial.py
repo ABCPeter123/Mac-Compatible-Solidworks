@@ -22,10 +22,17 @@ class MSIServiceActionTests(unittest.TestCase):
             b"SWCOMPAT_SERVICE_ERROR=0\n"
             b"SWCOMPAT_SERVICE_STATE=4\n"
             b"SWCOMPAT_SERVICE_PID=640\n"
+            b"SWCOMPAT_SERVICE_WIN32_EXIT=0\n"
             b"SWCOMPAT_SERVICE_CHECK=PASS\n"
         )
         self.assertEqual(service.service_result(absent, 0, "absent"), "ABSENT")
         self.assertEqual(service.service_result(running, 0, "status"), "RUNNING")
+        # The real C controller includes digits in WIN32_EXIT. The parser
+        # must accept this extra diagnostic without weakening four required fields.
+        self.assertEqual(service.service_result(running.replace(b"STATE=4", b"STATE=1"), 0, "status"),
+                         "STOPPED")
+        self.assertEqual(service.service_result(running + b"SWCOMPAT_SERVICE_OTHER=invalid value\\n", 0, "status"),
+                         "UNKNOWN")
         self.assertEqual(service.service_result(running, 0, "absent"), "UNKNOWN")
         self.assertEqual(service.service_result(running + b"SWCOMPAT_SERVICE_STATE=4\n", 0, "status"),
                          "UNKNOWN")
