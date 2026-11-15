@@ -1,5 +1,6 @@
 """Self-authored MSI custom DLL action control, strict no-false-compatibility gates."""
 import hashlib
+import os
 import io
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -11,6 +12,7 @@ from scripts.netfx40_msi_custom_type import validate as validate_type
 
 
 class MsiControlTests(unittest.TestCase):
+    @unittest.skipIf(os.name == 'nt', 'Wine subprocess control runs only on POSIX')
     def test_self_authored_control_matches_original_wine_action_type(self):
         original = (
             b'0100:trace:msi:ACTION_CustomAction Handling custom action '
@@ -51,18 +53,9 @@ class MsiControlTests(unittest.TestCase):
                 open_process.call_args.kwargs["stderr"], control.subprocess.PIPE)
 
     def test_rejects_incorrect_msi_hash_and_forged_readiness(self):
-        with TemporaryDirectory() as td:
-            root = Path(td)
-            wine = root / "wine"
-            wine.write_bytes(b"wine")
-            wine.chmod(0o700)
-            msi = root / "swcompat_custom_action_type_control.msi"
-            msi.write_bytes(b"control bytes")
-            sha = root / "msi-custom-control.sha256"
-            sha.write_text("a" * 64)
-            with mock.patch.object(control, "validate_prefix"):
-                with self.assertRaises(ValueError):
-                    control.inspect(wine, root, msi, sha)
+        if os.name != "nt":
+            self.check_wrong_hash()
+
         report = {
             "status": "MEASURED",
             "msi_process": "NONZERO",
@@ -76,6 +69,20 @@ class MsiControlTests(unittest.TestCase):
         self.assertFalse(control.validate(dict(report, private_path="/secrets")))
         self.assertFalse(control.validate(dict(report, msi_process="WORKING_CAD")))
         self.assertFalse(control.validate(dict(report, solidworks_compatibility="READY")))
+
+    def check_wrong_hash(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            wine = root / "wine"
+            wine.write_bytes(b"wine")
+            wine.chmod(0o700)
+            msi = root / "swcompat_custom_action_type_control.msi"
+            msi.write_bytes(b"control bytes")
+            sha = root / "msi-custom-control.sha256"
+            sha.write_text("a" * 64)
+            with mock.patch.object(control, "validate_prefix"):
+                with self.assertRaises(ValueError):
+                    control.inspect(wine, root, msi, sha)
 
 
 if __name__ == "__main__":
