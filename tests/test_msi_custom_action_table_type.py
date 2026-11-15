@@ -60,6 +60,34 @@ class OriginalMsiActionTableTests(unittest.TestCase):
         self.assertFalse(table.validate(dict(r, family="WORKING_NETFX")))
         self.assertFalse(table.validate(dict(r, raw_action="PRIVATE")))
 
+    def test_decodes_full_original_type_flags_without_changing_control_schema(self):
+        original = (b"SWCOMPAT_CA_TABLE_STATUS=ACTION_FOUND\n"
+                    b"SWCOMPAT_CA_TABLE_TYPE=19457\n")
+        basic = table.parse(original, 0)
+        self.assertEqual(basic, {
+            "status": "ACTION_FOUND", "base_type": 1,
+            "family": "DLL_BINARY", "stage": "NOT_OBSERVED",
+        })
+        detailed = {**basic, **table._flags(original, basic)}
+        self.assertTrue(table.validate_detailed(detailed))
+        self.assertEqual(detailed["execution"], "DEFERRED")
+        self.assertEqual(detailed["impersonation"], "NO_IMPERSONATE")
+        self.assertEqual(detailed["asynchronous"], "SYNCHRONOUS")
+        self.assertTrue(detailed["ts_aware"])
+        self.assertFalse(table.validate(detailed))
+        self.assertFalse(table.validate_detailed(dict(detailed, ts_aware=1)))
+        control = (b"SWCOMPAT_CA_TABLE_STATUS=ACTION_FOUND\n"
+                   b"SWCOMPAT_CA_TABLE_TYPE=3073\n")
+        flags = table._flags(control, table.parse(control, 0))
+        self.assertEqual(flags["execution"], "DEFERRED")
+        self.assertFalse(flags["ts_aware"])
+        absent = (b"SWCOMPAT_CA_TABLE_STATUS=ACTION_ABSENT\n"
+                  b"SWCOMPAT_CA_TABLE_TYPE=0\n")
+        unknown = {**table.parse(absent, 0),
+                   **table._flags(absent, table.parse(absent, 0))}
+        self.assertTrue(table.validate_detailed(unknown))
+        self.assertEqual(unknown["execution"], "NOT_VERIFIED")
+
     @unittest.skipIf(os.name == "nt", "Wine-only temporary status file")
     def test_fixed_marker_file_overrides_missing_wine_console(self):
         with TemporaryDirectory() as td:

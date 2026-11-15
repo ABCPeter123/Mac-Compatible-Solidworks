@@ -310,7 +310,8 @@ jobs:
                       table = json.loads(original_table.read_text())
                       if not validate_table(table):
                           raise ValueError("Unsafe original MSI Type result")
-                      for field in ("status", "msis_queried", "action_matches", "family", "base_type"):
+                      for field in ("status", "msis_queried", "action_matches", "family", "base_type",
+                                    "execution", "impersonation", "asynchronous", "ts_aware"):
                           f.write(f"original_msi_table_{field}: **{table[field]}**\n\n")
                   original_extract = Path("build/netfx40-original-extract.json")
                   if original_extract.is_file():
