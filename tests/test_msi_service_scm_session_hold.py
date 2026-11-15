@@ -1,6 +1,7 @@
 """Finite, independent SCM connection lifetime experiment tests."""
 import json
 import os
+import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -53,13 +54,17 @@ class SCMHolderTests(unittest.TestCase):
             with (
                 mock.patch.object(trial, "binary_state", return_value="PRESENT_MATCH"),
                 mock.patch.object(trial, "service_registry", return_value="PRESENT"),
-                mock.patch.object(trial, "query_service", side_effect=["ABSENT", "ABSENT"]),
-                mock.patch.object(trial, "during_holder", return_value=("SERVICE_OPEN", "STOPPED")) as held,
+                mock.patch.object(trial, "query_with_diagnostic",
+                                  side_effect=[("ABSENT", "PARSED"), ("ABSENT", "PARSED")]),
+                mock.patch.object(trial, "during_holder",
+                                  return_value=("SERVICE_OPEN", "STOPPED", "PARSED")) as held,
             ):
                 result = trial.inspect(wine, root, exe, prior)
                 held.assert_called_once()
             self.assertTrue(trial.validate(result))
             self.assertEqual(result["outcome"], "VISIBLE_ONLY_WITH_HOLDER")
+            self.assertEqual(result["diagnostic_while_held"], "PARSED")
+            self.assertFalse(trial.validate(dict(result, diagnostic_while_held="NO_PROTOCOL")))
             self.assertFalse(result["native_microsoft_clr"])
             self.assertNotIn(str(root), str(result))
             self.assertFalse(trial.validate(dict(result, native_microsoft_clr=True)))
@@ -80,12 +85,46 @@ class SCMHolderTests(unittest.TestCase):
                     trial.inspect(wine, root, exe, prior)
                 spawn.assert_not_called()
 
+    def test_distinguishes_unknown_process_exit_from_missing_protocol(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            wine = root / "wine"; wine.write_bytes(b"x")
+            exe = root / "service_smoke.exe"; exe.write_bytes(b"x")
+            class Completed:
+                def __init__(self, code):
+                    self.returncode = code
+            def mock_run(*args, **kwargs):
+                kwargs["stdout"].write(
+                    b"SWCOMPAT_SERVICE_PHASE=status\n"
+                    b"SWCOMPAT_SERVICE_ERROR=1060\n"
+                    b"SWCOMPAT_SERVICE_STATE=0\n"
+                    b"SWCOMPAT_SERVICE_CHECK=FAIL\n"
+                )
+                return Completed(1)
+            with mock.patch.object(trial.subprocess, "run", side_effect=mock_run):
+                self.assertEqual(trial.query_with_diagnostic(wine, root, exe),
+                                 ("ABSENT", "PARSED"))
+            with mock.patch.object(trial.subprocess, "run", return_value=Completed(7)):
+                self.assertEqual(trial.query_with_diagnostic(wine, root, exe),
+                                 ("UNKNOWN", "BAD_EXIT"))
+            with mock.patch.object(trial.subprocess, "run", return_value=Completed(0)):
+                self.assertEqual(trial.query_with_diagnostic(wine, root, exe),
+                                 ("UNKNOWN", "NO_PROTOCOL"))
+            with mock.patch.object(trial.subprocess, "run", side_effect=subprocess.TimeoutExpired("wine", 25)):
+                self.assertEqual(trial.query_with_diagnostic(wine, root, exe),
+                                 ("UNKNOWN", "TIMED_OUT"))
+            with mock.patch.object(trial.subprocess, "run", side_effect=OSError):
+                self.assertEqual(trial.query_with_diagnostic(wine, root, exe),
+                                 ("UNKNOWN", "LAUNCH_FAILED"))
+
     def test_false_success_for_not_applicable_fails_closed(self):
         r = {
             "schema": 1, "scope": trial.SCOPE, "trial": "NOT_APPLICABLE",
             "binary": "NOT_RUN", "registry": "UNAVAILABLE",
             "scm_before": "UNKNOWN", "holder": "NOT_RUN",
             "scm_while_held": "UNKNOWN", "scm_after": "UNKNOWN",
+            "diagnostic_before": "NOT_RUN", "diagnostic_while_held": "NOT_RUN",
+            "diagnostic_after": "NOT_RUN",
             "outcome": "NOT_APPLICABLE", "native_microsoft_clr": False,
             "solidworks_compatibility": "NOT_DEMONSTRATED",
         }
