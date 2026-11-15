@@ -98,11 +98,11 @@ def during_holder(wine: Path, prefix: Path, exe: Path) -> tuple[str, str, str]:
             # The original harmless Win32 executable is run via Wine again
             # with the same prefix, while this process retains SCM handles.
             if proc.poll() is not None:
-                return "NO_MARKER", "UNKNOWN"
+                return "NO_MARKER", "UNKNOWN", "NOT_EXECUTED"
             visible, diagnostic = query_with_diagnostic(wine, prefix, exe)
             if proc.poll() is not None:
                 # Holder could have exited before the independent query ended.
-                return "NO_MARKER", "UNKNOWN"
+                return "NO_MARKER", "UNKNOWN", "NOT_EXECUTED"
             return ready, visible, diagnostic
         finally:
             if proc.poll() is None:
