@@ -23,6 +23,7 @@ def preflight(raw: bytes) -> dict:
     result = {
         "status": "INVALID",
         "target_arch": "UNDETERMINED",
+        "root_identity_arch": "UNDETERMINED",
         "updates": 0,
         "parents": 0,
         "dependencies": 0,
@@ -44,6 +45,11 @@ def preflight(raw: bytes) -> dict:
         return result
 
     arch = set()
+    root_identity = next((node for node in root if _local(node.tag) == "assemblyIdentity"), None)
+    if root_identity is not None:
+        root_arch = root_identity.attrib.get("processorArchitecture", "").casefold()
+        if root_arch in ALLOWED_ARCH:
+            result["root_identity_arch"] = root_arch
     nodes = 0
     for node in root.iter():
         nodes += 1
@@ -82,6 +88,8 @@ def summarize_many(payloads: list[bytes]) -> dict:
         raise ValueError("Too many MUM documents")
     output = {"documents": len(payloads), "parsed": 0, "invalid": 0,
               "amd64_only": 0, "mixed_arch": 0, "other_arch": 0,
+              "root_amd64": 0, "root_x86": 0, "root_arm64": 0,
+              "root_neutral": 0, "root_unknown": 0,
               "updates": 0, "parents": 0, "dependencies": 0,
               "files": 0, "registry_values": 0,
               "unsupported_operations": 0, "safe_to_apply": False}
@@ -91,6 +99,8 @@ def summarize_many(payloads: list[bytes]) -> dict:
             output["invalid"] += 1
             continue
         output["parsed"] += 1
+        root_arch = r["root_identity_arch"]
+        output["root_" + root_arch if root_arch in ALLOWED_ARCH else "root_unknown"] += 1
         if r["target_arch"] == "amd64":
             output["amd64_only"] += 1
         elif r["target_arch"] == "MIXED":
