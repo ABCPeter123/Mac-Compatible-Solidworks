@@ -6,6 +6,8 @@ on:
       - '.github/workflows/netfx481-wine-ci.yml'
       - 'probes/netfx481_runtime_probe.cs'
       - 'scripts/netfx481_trial.py'
+      - 'scripts/netfx481_winetricks48_bridge.py'
+      - 'tests/test_netfx481_winetricks48_bridge.py'
       - 'scripts/netfx40_msxml3_prerequisite.py'
       - 'tests/test_netfx40_msxml3_prerequisite.py'
       - 'tests/test_netfx481_trial.py'
@@ -44,6 +46,11 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_prerequisite.py' -v
           if ($LASTEXITCODE -ne 0) { throw "msxml3 compatibility preinstall tests failed" }
+      - name: Test native dotnet48 bridge cannot spoof .NET 4.8.1 success
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests -p 'test_netfx481_winetricks48_bridge.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Native dotnet48 to dotnet481 safety tests failed" }
       - name: Validate verified Wine Mono MSI uninstall safety tests
         shell: pwsh
         run: python -m unittest discover -s tests -p 'test_wine_mono_removal.py' -v
@@ -581,4 +588,149 @@ jobs:
               assert type(r["post_restore_framework_ready"]) is bool
               if r["post_restore_framework_ready"]:
                   assert r["post_restore_wine11"]["managed"] == "PASS"
+          PY
+
+  apple-silicon-winetricks48-bridge:
+    name: Install original .NET 4.8.1 after upstream Winetricks dotnet48 sequence
+    needs: verify-microsoft
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: signed-netfx481-original-microsoft-runtime
+          path: build
+      - name: Install real Winetricks 20260125 prerequisite recipes
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install winetricks
+          command -v cabextract >/dev/null
+          winetricks --version | grep -F '20260125'
+          echo "SWCOMPAT_WINETRICKS=$(realpath "$(command -v winetricks)")" >> "$GITHUB_ENV"
+      - name: Install hash-pinned Wine Development 11.21 compatible with Apple Silicon
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-devel-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-devel-11.21-osx64.tar.xz"
+          echo "9909b486657e10ab66c7279371ae1f990345b596b3b1b3a0cf21f28af24fa0ce  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-48bridge"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-48bridge"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-48bridge" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Create marked disposable 64-bit prefix for upstream dependency sequence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat --prefix "$RUNNER_TEMP/netfx481-48bridge-prefix" \
+            --logs-dir "$RUNNER_TEMP/netfx481-48bridge-logs" init
+          touch "$RUNNER_TEMP/netfx481-48bridge-prefix/.swcompat-netfx481-disposable"
+      - name: Install msxml3 prerequisite before Winetricks genuine dotnet48 recipe
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx40_msxml3_prerequisite \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx481-48bridge-prefix" \
+            --winetricks "$SWCOMPAT_WINETRICKS" \
+            --output build/netfx481-48bridge-msxml3.json \
+            --timeout 300 --agree-disposable-prefix
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx40_msxml3_prerequisite import validate
+          result = json.loads(Path("build/netfx481-48bridge-msxml3.json").read_text())
+          assert validate(result)
+          if result["status"] == "VERB_SUCCEEDED":
+              with open(os.environ["GITHUB_ENV"], "a") as f:
+                  f.write("SWCOMPAT_48BRIDGE_MSXML3_READY=yes\n")
+          PY
+      - name: Attempt genuine dotnet48 recipe followed by original signed Microsoft 4.8.1
+        if: env.SWCOMPAT_48BRIDGE_MSXML3_READY == 'yes'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx481_winetricks48_bridge \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx481-48bridge-prefix" \
+            --winetricks "$SWCOMPAT_WINETRICKS" \
+            --installer481 build/NDP481-x86-x64-AllOS-ENU.exe \
+            --sha481 build/netfx481.sha256 \
+            --launcher481 build/netfx481_win32_launch.exe \
+            --loader build/netfx481_clr_load.exe \
+            --managed build/netfx481_runtime_probe.exe \
+            --output build/netfx481-48bridge.json \
+            --timeout 600 --agree-disposable-prefix
+      - name: Report strictly verified native .NET 4.8 and 4.8.1 categories
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx40_msxml3_prerequisite import validate as valid_msxml
+          from scripts.netfx481_winetricks48_bridge import validate as valid_bridge
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("## Genuine Winetricks dotnet48 to signed .NET 4.8.1 bridge\n\n")
+              pre = Path("build/netfx481-48bridge-msxml3.json")
+              if pre.is_file():
+                  value = json.loads(pre.read_text())
+                  assert valid_msxml(value)
+                  f.write(f"msxml3_prerequisite: **{value['status']}**\n\n")
+              report = Path("build/netfx481-48bridge.json")
+              if not report.is_file():
+                  f.write("Authentic .NET bridge result: **NOT_RUN**\n\n")
+              else:
+                  r = json.loads(report.read_text())
+                  assert valid_bridge(r)
+                  for k in ("status", "winetricks48_exit", "native48_candidate",
+                            "clr64_before481", "clr64_after481", "clr64_change",
+                            "native_loader", "native_only_managed", "runtime_family",
+                            "framework481_registry", "restart", "native481_confirmed",
+                            "solidworks"):
+                      f.write(f"{k}: **{r[k]}**\n\n")
+                  for k in ("status", "category", "child_lifecycle"):
+                      f.write(f"original481_setup_{k}: **{r['setup'][k]}**\n\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: original-481-after-upstream-dotnet48-private-safe
+          path: |
+            build/netfx481-48bridge-msxml3.json
+            build/netfx481-48bridge.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Prevent CI green from claiming an uninstalled Microsoft CLR
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.netfx40_msxml3_prerequisite import validate as valid_msxml
+          from scripts.netfx481_winetricks48_bridge import validate as valid_bridge
+          p = Path("build/netfx481-48bridge-msxml3.json")
+          assert p.is_file(), "Required msxml3 proof missing"
+          pre = json.loads(p.read_text())
+          assert valid_msxml(pre)
+          if pre["status"] == "VERB_SUCCEEDED":
+              report = Path("build/netfx481-48bridge.json")
+              assert report.is_file(), "Winetricks dotnet48 trial not attempted"
+              r = json.loads(report.read_text())
+              assert valid_bridge(r)
+              assert r["solidworks"] == "NOT_DEMONSTRATED"
+              if r["native481_confirmed"]:
+                  assert r["native48_candidate"]
+                  assert r["clr64_change"] == "CHANGED"
+                  assert r["native_loader"] == "LOADED"
+                  assert r["native_only_managed"] == "PASS"
+                  assert r["framework481_registry"] == "AT_LEAST_481"
           PY
