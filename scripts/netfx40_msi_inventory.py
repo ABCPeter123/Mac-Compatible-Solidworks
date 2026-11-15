@@ -15,11 +15,13 @@ MAX_DIRS = 144
 MAX_DEPTH = 7
 MAX_FILES = 600
 MAX_MATCHES = 24
+MAX_ROOT_HASH_DIRS = 12
 MAX_FILE_SIZE = 200 * 1024 * 1024
 STATE = {"NOT_REQUESTED", "ABSENT", "CANDIDATE_PRESENT",
          "PARTIAL_SCAN", "INVALID_ROOT"}
 FAMILY = {"NETFX_NAMED", "OTHER_MSI"}
 SAFE_FILENAME = re.compile(r"(?i)^[a-z0-9_. -]{1,110}\.msi\Z")
+ROOT_HASH_FOLDER = re.compile(r"(?i)^[a-f0-9]{10,40}\Z")
 
 
 def empty() -> dict:
@@ -55,17 +57,35 @@ def validate(result: dict) -> bool:
 
 def scan(prefix: Path) -> dict:
     validate_prefix(prefix)
+    drive_c = prefix / "drive_c"
     roots = [
-        prefix / "drive_c" / "users",
-        prefix / "drive_c" / "windows" / "temp",
-        prefix / "drive_c" / "windows" / "Temp",
-        prefix / "drive_c" / "Temp",
-        prefix / "drive_c" / "temp",
+        drive_c / "windows" / "temp",
+        drive_c / "windows" / "Temp",
+        drive_c / "Temp",
+        drive_c / "temp",
+        drive_c / "users",
     ]
     result = {**empty(), "status": "ABSENT"}
     visited: set[Path] = set()
     partial = False
     invalid = False
+    # Actual Microsoft .NET 4.0 offline installers may extract MSIs into
+    # C:\\<random-hex> rather than %TEMP%. Include only strict immediate
+    # hash-named directories inside this marked prefix, never drive roots
+    # mounted elsewhere or arbitrary user-selected media directories.
+    if drive_c.is_symlink() or not drive_c.is_dir():
+        return {**result, "status": "INVALID_ROOT"}
+    try:
+        hash_dirs = [
+            item for item in drive_c.iterdir()
+            if ROOT_HASH_FOLDER.fullmatch(item.name)
+            and not item.is_symlink() and item.is_dir()
+        ]
+        if len(hash_dirs) > MAX_ROOT_HASH_DIRS:
+            partial = True
+        roots = sorted(hash_dirs, key=lambda x: x.name)[:MAX_ROOT_HASH_DIRS] + roots
+    except OSError:
+        partial = True
     for root in roots:
         if not root.exists():
             continue
