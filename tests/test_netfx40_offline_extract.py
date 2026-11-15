@@ -59,6 +59,33 @@ class MicrosoftOfflineExtractTests(unittest.TestCase):
             self.assertFalse(ex.validate(dict(r, msi_entries=999)))
             self.assertFalse(ex.validate(dict(r, core_x64_ole_candidate=1)))
 
+    def test_truncated_directory_fanout_never_claims_absence(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            for i in range(18):
+                (root / f"folder_{i:02d}").mkdir()
+            (root / "folder_17" / "netfx_Core_x64.msi").write_bytes(
+                ex.OLE_SIGNATURE + b"!" * 7000
+            )
+            r = ex.scan(root)
+            self.assertEqual(r["status"], "PARTIAL_SCAN")
+            self.assertEqual(r["ole_msi_candidates"], 0)
+            self.assertTrue(ex.validate(r))
+
+    def test_truncated_depth_never_claims_absence(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            deep = root
+            for i in range(ex.MAX_DEPTH + 1):
+                deep = deep / f"sub_{i}"
+                deep.mkdir()
+            (deep / "netfx_Core_x64.msi").write_bytes(
+                ex.OLE_SIGNATURE + b"!" * 7000
+            )
+            r = ex.scan(root)
+            self.assertEqual(r["status"], "PARTIAL_SCAN")
+            self.assertTrue(ex.validate(r))
+
     @unittest.skipIf(os.name == "nt", "Source-authored Wine invocation is POSIX only")
     def test_original_signed_installer_scoped_x_argument_without_install(self):
         with TemporaryDirectory() as td:
