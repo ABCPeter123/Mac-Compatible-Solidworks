@@ -65,13 +65,13 @@ class OriginalMumTests(TestCase):
     def test_distinct_x86_and_x64_cabs_are_aggregated(self):
         x86 = sem.blank("PARSED")
         x86["mums_seen"] = x86["mums_parsed"] = 1
-        x86["operation_preflight"].update(documents=1, parsed=1, other_arch=1)
+        x86["operation_preflight"].update(documents=1, parsed=1, other_arch=1, root_x86=1)
         x86["mum_with_update"] = 1
         x86["tags"]["assemblyIdentity"] = 2
         x86["architectures"]["x86"] = 2
         amd64 = sem.blank("PARSED")
         amd64["mums_seen"] = amd64["mums_parsed"] = 1
-        amd64["operation_preflight"].update(documents=1, parsed=1, amd64_only=1)
+        amd64["operation_preflight"].update(documents=1, parsed=1, amd64_only=1, root_amd64=1)
         amd64["mum_with_update"] = 1
         amd64["tags"]["assemblyIdentity"] = 3
         amd64["architectures"]["amd64"] = 3
