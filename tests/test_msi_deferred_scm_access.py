@@ -28,6 +28,7 @@ class DeferredScmTests(unittest.TestCase):
             def run(*args, **kwargs):
                 (folder / p.STATUS_FILE).write_bytes(b"PASS")
                 (folder / p.CREATE_STATUS_FILE).write_bytes(b"PASS")
+                (folder / p.REGISTRY_STATUS_FILE).write_bytes(b"PASS")
                 (marker / "msi_deferred_scm_marker.txt").write_bytes(p.MARKER)
                 return subprocess.CompletedProcess(args, 0)
             with mock.patch.object(p, "validate_prefix"), \
@@ -37,15 +38,17 @@ class DeferredScmTests(unittest.TestCase):
             self.assertTrue(p.valid(result))
             self.assertTrue(result["self_authored_transaction"])
             self.assertEqual(result["deferred_create"], "PASS")
+            self.assertEqual(result["deferred_registry"], "PASS")
             self.assertFalse(result["native_microsoft_clr"])
 
     def test_no_success_on_missing_status_or_forged_clr(self):
-        r = dict(process="ZERO", deferred_scm="NO_REPORT", deferred_create="NO_REPORT", installed_file="PRESENT_MATCH",
+        r = dict(process="ZERO", deferred_scm="NO_REPORT", deferred_create="NO_REPORT", deferred_registry="NO_REPORT", installed_file="PRESENT_MATCH",
                  self_authored_transaction=False, native_microsoft_clr=False,
                  solidworks_compatibility="NOT_DEMONSTRATED")
         self.assertTrue(p.valid(r))
         self.assertFalse(p.valid(dict(r, self_authored_transaction=True)))
         self.assertFalse(p.valid(dict(r, native_microsoft_clr=True)))
+        self.assertFalse(p.valid(dict(r, deferred_registry="REGISTRY_FAKE_CLR_RELEASE")))
         self.assertFalse(p.valid(dict(r, extra_private_path="SECRETS")))
         self.assertFalse(p.valid(dict(r, deferred_scm="SERVICE_FOUND_OUTSIDE_FIXTURE")))
 
@@ -59,6 +62,7 @@ class DeferredScmTests(unittest.TestCase):
             f.write_bytes(b"PASS")
             self.assertEqual(p._status(root), "PASS")
             self.assertEqual(p._status(root, p.CREATE_STATUS_FILE), "NO_REPORT")
+            self.assertEqual(p._status(root, p.REGISTRY_STATUS_FILE), "NO_REPORT")
             f.write_bytes(b"X" * 256)
             self.assertEqual(p._status(root), "INVALID_REPORT")
             with self.assertRaises(ValueError):

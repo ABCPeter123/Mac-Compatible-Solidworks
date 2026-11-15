@@ -24,9 +24,14 @@
                   BinaryRef="SelfAuthoredScmDll"
                   DllEntry="SWCompatTransientServiceRegistration"
                   Execute="deferred" Return="check" Impersonate="no"/>
+    <CustomAction Id="ServiceScmDeferredRegistryTransaction"
+                  BinaryRef="SelfAuthoredScmDll"
+                  DllEntry="SWCompatTransientRegistryTransaction"
+                  Execute="deferred" Return="check" Impersonate="no"/>
     <InstallExecuteSequence>
       <Custom Action="ServiceScmReadOnlyProbe" After="InstallFiles" Condition="NOT Installed"/>
       <Custom Action="ServiceScmTransientRegistration" After="ServiceScmReadOnlyProbe" Condition="NOT Installed"/>
+      <Custom Action="ServiceScmDeferredRegistryTransaction" After="ServiceScmTransientRegistration" Condition="NOT Installed"/>
     </InstallExecuteSequence>
   </Package>
 </Wix>
