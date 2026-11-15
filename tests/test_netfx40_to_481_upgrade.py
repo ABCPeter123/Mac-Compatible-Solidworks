@@ -118,6 +118,47 @@ class NativeUpgradeTests(unittest.TestCase):
             self.assertTrue(upgrade.validate(result))
             reboot.assert_not_called()
 
+    def test_privately_classifies_setup_without_exposing_original_log(self):
+        with TemporaryDirectory() as td:
+            args = self._fixture(Path(td))
+            evidence = {"status": "CLASSIFIED", "phase": "PREREQUISITE",
+                        "codes": []}
+            original = {**self._setup(), "category": "OTHER",
+                        "exit_hex": "000013EC", "child_exit": "NONZERO"}
+            with (mock.patch.object(upgrade, "_wine_host", return_value=True),
+                  mock.patch.object(upgrade, "validate_prefix"),
+                  mock.patch.object(upgrade, "verify_media"),
+                  mock.patch.object(upgrade, "validate_native40", return_value=True),
+                  mock.patch.object(upgrade, "snapshot",
+                                    side_effect=[self._disk("same"), self._disk("same")]),
+                  mock.patch.object(upgrade, "probe", return_value={
+                      "clr_family": "MICROSOFT_CLR_CANDIDATE",
+                      "managed": "PASS", "registry": "NOT_FOUND"}),
+                  mock.patch.object(upgrade, "load_clr", return_value="LOADED"),
+                  mock.patch.object(upgrade, "launch", return_value=original),
+                  mock.patch.object(upgrade, "private_log_path",
+                                    return_value=Path(td) / "private-report") as private,
+                  mock.patch.object(upgrade, "classify_log", return_value=evidence),
+                  mock.patch.object(upgrade, "discard_log") as discard,
+                  mock.patch.object(upgrade, "scan_secondary_logs", return_value=None)):
+                result = upgrade.inspect(*args, {"persistent_native_managed": True},
+                                         capture_setup_evidence=True)
+            self.assertTrue(upgrade.validate(result))
+            self.assertFalse(result["framework481_confirmed"])
+            self.assertEqual(result["setup"]["exit_hex"], "000013EC")
+            self.assertEqual(result["setup_evidence"]["phase"], "PREREQUISITE")
+            self.assertEqual(result["clr64_change"], "UNCHANGED")
+            private.assert_called_once()
+            discard.assert_called_once()
+            self.assertNotIn(td, str(result))
+
+    def test_rejects_unapproved_private_setup_log_fields(self):
+        forged = upgrade.blank()
+        forged["setup_evidence"] = {
+            "status": "CLASSIFIED", "phase": "PREREQUISITE",
+            "codes": [], "private_text": "SECRET"}
+        self.assertFalse(upgrade.validate(forged))
+
     def test_refuses_windows_and_proprietary_or_forged_result_keys(self):
         with TemporaryDirectory() as td:
             args = self._fixture(Path(td))
