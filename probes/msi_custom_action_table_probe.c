@@ -78,6 +78,13 @@ int wmain(int argc, wchar_t **argv)
         diagnostic_file = CreateFileW(argv[2], GENERIC_WRITE,
                 FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     stage("ENTRY");
+    /* Self-test proves the same x64 PE/CRT/stdio/Win32 status transport
+       works before any Windows Installer API or MSI file is accessed. */
+    if (argc == 3 && wcscmp(argv[1], L"--selftest") == 0)
+    {
+        stage("SELFTEST");
+        return result("SELFTEST_OK", 0);
+    }
     if ((argc != 2 && argc != 3) || !argv[1] || !argv[1][0])
         return result("INVALID_ARGUMENT", 0);
     if (!ReadFile(GetStdHandle(STD_INPUT_HANDLE), utf8,
