@@ -76,7 +76,7 @@ int wmain(int argc, wchar_t **argv)
     P_CLOSE_VIEW close_view;
     P_CLOSE_HANDLE close_handle;
 
-    if (argc == 3 && argv[2] && argv[2][0])
+    if ((argc == 3 || argc == 4) && argv[2] && argv[2][0])
         diagnostic_file = CreateFileW(argv[2], GENERIC_WRITE,
                 FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     stage("ENTRY");
