@@ -7,7 +7,12 @@ name: Original Microsoft .NET 4.0 CLR on Wine Staging A/B
 # One scoped PR test for the first native 4.0 -> 4.8 -> 4.8.1 path.
 # Restore manual-only triggering after the result is recorded.
 # Signed Microsoft installation experiments remain explicit manual actions.
+# Single scoped original 4.8.1 StopBlock provenance test, then restore manual-only.
+# No optional .NET 4.8 intermediate or duplicate OS-profile retries on PRs.
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/netfx40-legacy-ci.yml'
   workflow_dispatch:
     inputs:
       try_48_intermediate:
