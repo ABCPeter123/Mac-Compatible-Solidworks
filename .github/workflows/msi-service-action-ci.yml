@@ -92,7 +92,7 @@ jobs:
           python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
-          name: self-authored-msi-private-ci-transfer
+          name: self-authored-msi-service-private-transfer
           path: build
       - name: Download identical hash-verified Wine 11.21
         shell: bash
