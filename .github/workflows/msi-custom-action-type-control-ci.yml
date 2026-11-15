@@ -92,6 +92,20 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $metadata -notcontains 'SWCOMPAT_CA_TABLE_STATUS=ACTION_FOUND' -or $metadata -notcontains 'SWCOMPAT_CA_TABLE_TYPE=3073') {
             throw 'Windows read-only MSI CustomAction Type metadata mismatch'
           }
+          # Validate fixed private-file input against the *same* native
+          # Windows reference before accepting its use under Wine.
+          $privateInput = Join-Path $env:windir 'Temp\swcompat_ca_action_private.input'
+          $privateStatus = Join-Path $env:windir 'Temp\swcompat_ca_table_probe.status'
+          if (Test-Path $privateInput) { throw 'Unexpected private MSI action input already exists' }
+          try {
+            Set-Content -LiteralPath $privateInput -Value 'ServiceTypeControlSentinel' -NoNewline -Encoding ascii
+            $metadataViaFile = & build/msi_custom_action_table_probe.exe $msi $privateStatus --private-file
+            if ($LASTEXITCODE -ne 0 -or $metadataViaFile -notcontains 'SWCOMPAT_CA_TABLE_STATUS=ACTION_FOUND' -or $metadataViaFile -notcontains 'SWCOMPAT_CA_TABLE_TYPE=3073') {
+              throw 'Native Windows private-file MSI query transport failed'
+            }
+          } finally {
+            Remove-Item -LiteralPath $privateInput, $privateStatus -Force -ErrorAction SilentlyContinue
+          }
           $p = Start-Process msiexec.exe -ArgumentList @('/i', ('"' + $msi + '"'), '/qn', '/norestart') -PassThru -Wait -NoNewWindow
           if ($p.ExitCode -ne 1603) { throw "Expected native Windows MSI 1603 from deliberate custom action, got $($p.ExitCode)" }
           if (Test-Path $marker) { throw 'Expected MSI rollback failed to remove marker' }
