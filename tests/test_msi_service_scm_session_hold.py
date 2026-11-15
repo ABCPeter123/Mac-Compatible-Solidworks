@@ -55,15 +55,17 @@ class SCMHolderTests(unittest.TestCase):
                 mock.patch.object(trial, "binary_state", return_value="PRESENT_MATCH"),
                 mock.patch.object(trial, "service_registry", return_value="PRESENT"),
                 mock.patch.object(trial, "query_with_diagnostic",
-                                  side_effect=[("ABSENT", "PARSED"), ("ABSENT", "PARSED")]),
+                                  side_effect=[("ABSENT", "PARSED", "VALID"), ("ABSENT", "PARSED", "VALID")]),
                 mock.patch.object(trial, "during_holder",
-                                  return_value=("SERVICE_OPEN", "STOPPED", "PARSED")) as held,
+                                  return_value=("SERVICE_OPEN", "STOPPED", "PARSED", "VALID")) as held,
             ):
                 result = trial.inspect(wine, root, exe, prior)
                 held.assert_called_once()
             self.assertTrue(trial.validate(result))
             self.assertEqual(result["outcome"], "VISIBLE_ONLY_WITH_HOLDER")
             self.assertEqual(result["diagnostic_while_held"], "PARSED")
+            self.assertEqual(result["detail_while_held"], "VALID")
+            self.assertFalse(trial.validate(dict(result, detail_while_held="MISSING_MARKER")))
             self.assertFalse(trial.validate(dict(result, diagnostic_while_held="NO_PROTOCOL")))
             self.assertFalse(result["native_microsoft_clr"])
             self.assertNotIn(str(root), str(result))
@@ -103,19 +105,40 @@ class SCMHolderTests(unittest.TestCase):
                 return Completed(1)
             with mock.patch.object(trial.subprocess, "run", side_effect=mock_run):
                 self.assertEqual(trial.query_with_diagnostic(wine, root, exe),
-                                 ("ABSENT", "PARSED"))
+                                 ("ABSENT", "PARSED", "VALID"))
             with mock.patch.object(trial.subprocess, "run", return_value=Completed(7)):
                 self.assertEqual(trial.query_with_diagnostic(wine, root, exe),
-                                 ("UNKNOWN", "BAD_EXIT"))
+                                 ("UNKNOWN", "BAD_EXIT", "BAD_EXIT"))
             with mock.patch.object(trial.subprocess, "run", return_value=Completed(0)):
                 self.assertEqual(trial.query_with_diagnostic(wine, root, exe),
-                                 ("UNKNOWN", "NO_PROTOCOL"))
+                                 ("UNKNOWN", "NO_PROTOCOL", "NO_HEADER"))
             with mock.patch.object(trial.subprocess, "run", side_effect=subprocess.TimeoutExpired("wine", 25)):
                 self.assertEqual(trial.query_with_diagnostic(wine, root, exe),
-                                 ("UNKNOWN", "TIMED_OUT"))
+                                 ("UNKNOWN", "TIMED_OUT", "TIMEOUT"))
             with mock.patch.object(trial.subprocess, "run", side_effect=OSError):
                 self.assertEqual(trial.query_with_diagnostic(wine, root, exe),
-                                 ("UNKNOWN", "LAUNCH_FAILED"))
+                                 ("UNKNOWN", "LAUNCH_FAILED", "LAUNCH_ERROR"))
+
+    def test_protocol_failures_are_diagnostic_only(self):
+        base = (
+            b"SWCOMPAT_SERVICE_PHASE=status\\n"
+            b"SWCOMPAT_SERVICE_ERROR=1060\\n"
+            b"SWCOMPAT_SERVICE_STATE=0\\n"
+            b"SWCOMPAT_SERVICE_CHECK=FAIL\\n"
+        )
+        self.assertEqual(trial.protocol_detail(base, 1, "status"), "VALID")
+        self.assertEqual(trial.protocol_detail(base + b"SWCOMPAT_SERVICE_CHECK=FAIL\\n", 1, "status"),
+                         "DUPLICATE_MARKER")
+        self.assertEqual(trial.protocol_detail(base.replace(b"SWCOMPAT_SERVICE_STATE=0\\n", b""), 1, "status"),
+                         "MISSING_MARKER")
+        self.assertEqual(trial.protocol_detail(base.replace(b"PHASE=status", b"PHASE=install"), 1, "status"),
+                         "WRONG_PHASE")
+        self.assertEqual(trial.protocol_detail(base + b"SWCOMPAT_SERVICE_BAD=with spaces\\n", 1, "status"),
+                         "INVALID_MARKER")
+        self.assertEqual(trial.protocol_detail(base + bytes([0]), 1, "status"), "NUL_BYTE")
+        self.assertEqual(trial.protocol_detail(base, 7, "status"), "BAD_EXIT")
+        self.assertEqual(trial.protocol_detail(b"noise", 1, "status"), "NO_HEADER")
+        self.assertEqual(trial.protocol_detail(base + b"x" * 2500, 1, "status"), "OVERSIZED")
 
     def test_false_success_for_not_applicable_fails_closed(self):
         r = {
@@ -125,6 +148,8 @@ class SCMHolderTests(unittest.TestCase):
             "scm_while_held": "UNKNOWN", "scm_after": "UNKNOWN",
             "diagnostic_before": "NOT_RUN", "diagnostic_while_held": "NOT_RUN",
             "diagnostic_after": "NOT_RUN",
+            "detail_before": "NOT_RUN", "detail_while_held": "NOT_RUN",
+            "detail_after": "NOT_RUN",
             "outcome": "NOT_APPLICABLE", "native_microsoft_clr": False,
             "solidworks_compatibility": "NOT_DEMONSTRATED",
         }
