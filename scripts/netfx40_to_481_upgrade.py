@@ -22,6 +22,7 @@ from scripts.netfx481_win32_exit import (
 )
 from scripts.netfx481_setup_evidence import (
     private_log_path, classify_log, discard_log, scan_secondary_logs,
+    snapshot_secondary_logs,
     validate_secondary_report, KNOWN_RESULTS, KNOWN_PHASES, KNOWN_CODES,
 )
 from scripts.netfx481_prereq_diagnostic import (
