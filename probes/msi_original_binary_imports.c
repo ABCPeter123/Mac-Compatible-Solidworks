@@ -13,6 +13,53 @@ static const char *names[CATEGORIES] = {
  "ADVAPI32","MSI","KERNEL32","FUSION","MSCOREE","OLE32","RPCRT4","NTDLL","OTHER"
 };
 static unsigned int counts[CATEGORIES];
+#define API_CATEGORIES 9
+#define MAX_API_IMPORTS 4096u
+static const char *api_names[API_CATEGORIES] = {
+ "SCM_READ","SCM_MODIFY","SCM_START","REGISTRY_READ","REGISTRY_WRITE",
+ "MSI_READ","MSI_WRITE","PROCESS_LOADER","OTHER_API"
+};
+static unsigned int api_counts[API_CATEGORIES];
+static unsigned int total_api_imports=0;
+static unsigned int api_family(const char *name) {
+ static const char *scm_read[]={"OpenSCManagerA","OpenSCManagerW","OpenServiceA",
+  "OpenServiceW","QueryServiceStatus","QueryServiceStatusEx","EnumServicesStatusExW"};
+ static const char *scm_modify[]={"CreateServiceA","CreateServiceW",
+  "ChangeServiceConfigW","ChangeServiceConfigA","ChangeServiceConfig2W",
+  "ChangeServiceConfig2A","DeleteService"};
+ static const char *scm_start[]={"StartServiceA","StartServiceW",
+  "ControlService","ControlServiceExW"};
+ static const char *registry_read[]={"RegOpenKeyExA","RegOpenKeyExW",
+  "RegQueryValueExA","RegQueryValueExW","RegGetValueW","RegGetValueA",
+  "RegEnumKeyExW","RegEnumValueW"};
+ static const char *registry_write[]={"RegCreateKeyExW","RegCreateKeyExA",
+  "RegSetValueExW","RegSetValueExA","RegDeleteKeyW","RegDeleteKeyA",
+  "RegDeleteValueW","RegDeleteValueA","RegCloseKey"};
+ static const char *msi_read[]={"MsiGetPropertyW","MsiGetPropertyA","MsiGetMode",
+  "MsiGetFeatureStateW","MsiGetFeatureStateA","MsiGetTargetPathW",
+  "MsiGetSourcePathW","MsiRecordGetStringW","MsiRecordGetInteger",
+  "MsiViewFetch","MsiDatabaseOpenViewW","MsiOpenDatabaseW"};
+ static const char *msi_write[]={"MsiSetPropertyW","MsiSetPropertyA",
+  "MsiDoActionW","MsiDoActionA","MsiProcessMessage","MsiViewExecute",
+  "MsiSetTargetPathW","MsiConfigureProductW","MsiInstallProductW"};
+ static const char *process_loader[]={"LoadLibraryW","LoadLibraryA",
+  "LoadLibraryExW","GetProcAddress","CreateProcessW","CreateProcessA",
+  "CreateProcessAsUserW","WaitForSingleObject","GetExitCodeProcess"};
+ const char **sets[]={scm_read,scm_modify,scm_start,registry_read,
+                      registry_write,msi_read,msi_write,process_loader};
+ const size_t sizes[]={sizeof(scm_read)/sizeof(*scm_read),
+  sizeof(scm_modify)/sizeof(*scm_modify),sizeof(scm_start)/sizeof(*scm_start),
+  sizeof(registry_read)/sizeof(*registry_read),
+  sizeof(registry_write)/sizeof(*registry_write),
+  sizeof(msi_read)/sizeof(*msi_read),sizeof(msi_write)/sizeof(*msi_write),
+  sizeof(process_loader)/sizeof(*process_loader)};
+ unsigned int i;size_t j;
+ for(i=0;i<8;i++)
+  for(j=0;j<sizes[i];j++)
+   if(!strcmp(name,sets[i][j]))return i;
+ return 8u;
+}
+
 static const char *arch="UNKNOWN";
 static HANDLE report=INVALID_HANDLE_VALUE;
 static unsigned int rd16(const unsigned char *p) {return (unsigned int)p[0]|((unsigned int)p[1]<<8);}
@@ -28,6 +75,10 @@ static int finish(const char *status) {
  unsigned int i; char num[20];
  put("STATUS",status); put("MACHINE",arch);
  for(i=0;i<CATEGORIES;i++){sprintf_s(num,sizeof(num),"%u",counts[i]);put(names[i],num);}
+ for(i=0;i<API_CATEGORIES;i++){
+  char key[80];sprintf_s(key,sizeof(key),"API_%s",api_names[i]);
+  sprintf_s(num,sizeof(num),"%u",api_counts[i]);put(key,num);
+ }
  if(report!=INVALID_HANDLE_VALUE){FlushFileBuffers(report);CloseHandle(report);}
  return 0;
 }
@@ -44,6 +95,34 @@ static size_t locate(const unsigned char *b,size_t n,size_t sect,unsigned int ns
   return (size_t)raw+d;
  }
  return (size_t)-1;
+}
+
+static int census_import_thunks(const unsigned char *b,size_t n,
+                                size_t sect,unsigned int ns,unsigned int thunk_rva,
+                                int is64) {
+ size_t thunk,offset,byname,end;unsigned int i,lo,hi,api;
+ unsigned int width=is64?8u:4u;
+ if(!thunk_rva)return 0;
+ thunk=locate(b,n,sect,ns,thunk_rva);
+ if(thunk==(size_t)-1)return 0;
+ for(i=0;i<MAX_API_IMPORTS;i++){
+  offset=thunk+(size_t)i*width;
+  if(!valid_at(n,offset,width))return 0;
+  lo=rd32(b+offset);hi=is64?rd32(b+offset+4):0;
+  if(!lo&&!hi)return 1;
+  if((is64&&(hi&0x80000000u))||(!is64&&(lo&0x80000000u)))
+   continue;
+  if(hi)return 0;
+  byname=locate(b,n,sect,ns,lo);
+  if(!valid_at(n,byname,3))return 0;
+  end=byname+2;
+  while(valid_at(n,end,1)&&end-byname<130&&b[end]>=32&&b[end]<=126)end++;
+  if(!valid_at(n,end,1)||b[end]!=0||end==byname+2)return 0;
+  api=api_family((const char *)(b+byname+2));
+  if(total_api_imports>=MAX_API_IMPORTS)return 0;
+  api_counts[api]++;total_api_imports++;
+ }
+ return 0;
 }
 static const char *inspect_pe(const unsigned char *b,size_t n) {
  size_t pe,opt,sect,entry; unsigned int ns,opts,magic,irva,i;
@@ -79,7 +158,14 @@ static const char *inspect_pe(const unsigned char *b,size_t n) {
     "mscoree.dll","ole32.dll","rpcrt4.dll","ntdll.dll"};
    if(!_stricmp((const char *)(b+p),match[k]))break;
   }
-  counts[k]++;entry+=20;
+  counts[k]++;
+  {
+   unsigned int lookup=rd32(b+entry);
+   if(!lookup)lookup=rd32(b+entry+16);
+   if(!census_import_thunks(b,n,sect,ns,lookup,magic==0x20b))
+    return "INVALID_PE";
+  }
+  entry+=20;
  }
  return "INVALID_PE";
 }
