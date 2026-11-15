@@ -80,42 +80,53 @@ def _failed_action_type(line: bytes) -> str | None:
     return "OTHER_ACTION"
 
 
+NONSTANDARD_NAME_HINTS = {
+    "NOT_APPLICABLE", "SERVICE_TEXT_ONLY", "REGISTRY_TEXT_ONLY",
+    "ASSEMBLY_TEXT_ONLY", "MSI_PROPERTY_EXPANSION", "OTHER_NONSTANDARD_NAME",
+}
+
+
+def _nonstandard_name_hint(line: bytes) -> str:
+    """Name-only hint. Cannot justify a Wine service/API compatibility hook."""
+    match = _ACTION_STRING.search(line)
+    if not match:
+        return "NOT_APPLICABLE"
+    name = match.group(1).lower()
+    if b"service" in name:
+        return "SERVICE_TEXT_ONLY"
+    if any(term in name for term in (b"regtlb", b"registry", b"typelib", b"regasm")):
+        return "REGISTRY_TEXT_ONLY"
+    if any(term in name for term in (b"fusion", b"assembl", b"ngen", b"gac_")):
+        return "ASSEMBLY_TEXT_ONLY"
+    if b"[" in name or b"]" in name:
+        return "MSI_PROPERTY_EXPANSION"
+    return "OTHER_NONSTANDARD_NAME"
+
+
 def _classify_failed_script_action(line: bytes) -> str | None:
-    """A script failure may precede the InstallFinalize rollback error.
+    """Classify a *standard* MSI action only by exact canonical name.
 
-    Never return raw action names: they can embed Windows paths, usernames,
-    GUIDs or vendor-specific install properties.
+    A vendor action containing 'StartServices' is not StartServices. Unknown
+    text is kept private; no service claim from a substring.
     """
-    m = _ACTION_STRING.search(line)
-    if not m:
-        return None
-    action = m.group(1).lower().replace(b" ", b"")
-    if b"installfinalize" == action or b"install" == action:
-        return "MSI_ACTION_FINALIZE"
-    if b"installfiles" == action or b"copyfiles" == action:
-        return "MSI_ACTION_INSTALLFILES"
-    if b"patchfiles" == action:
-        return "MSI_ACTION_PATCHFILES"
-    if any(x in action for x in (b"installservice", b"startservice",
-                                   b"stopservice", b"serviceconfig")):
+    action = _failed_action_type(line)
+    if action in SERVICE_ACTIONS:
         return "MSI_ACTION_SERVICE"
-    if any(x in action for x in (b"writeregistry", b"regasm",
-                                   b"registertypelib", b"registercom")):
-        return "MSI_ACTION_REGISTRY"
-    if any(x in action for x in (b"publishassembl", b"ngen", b"fusion", b"gac")):
-        return "MSI_ACTION_ASSEMBLY"
-    if action.startswith((b"ca_", b"customaction")) or re.search(
-            rb"(?i)\]ca_[a-z_0-9]{1,70}\Z", action):
-        return "MSI_ACTION_CUSTOM"
-    # Other execution-script action names are NOT evidence of a Wine API gap.
-    return None
-
+    return {
+        "FINALIZE_ONLY": "MSI_ACTION_FINALIZE",
+        "INSTALL_FILES": "MSI_ACTION_INSTALLFILES",
+        "PATCH_FILES": "MSI_ACTION_PATCHFILES",
+        "REGISTRY_COM": "MSI_ACTION_REGISTRY",
+        "ASSEMBLY_GAC": "MSI_ACTION_ASSEMBLY",
+        "CUSTOM_ACTION": "MSI_ACTION_CUSTOM",
+    }.get(action)
 
 
 def empty() -> dict:
     return {
         "status": "NOT_REQUESTED", "classes": [], "msi_error_lines": 0,
         "first_failed_action": "NOT_IDENTIFIED", "service_action_failures": [],
+        "nonstandard_name_hint": "NOT_APPLICABLE",
     }
 
 
@@ -126,6 +137,7 @@ def parse(raw: bytes, *, oversized: bool = False) -> dict:
         return {**empty(), "status": "TRUNCATED"}
     classes: set[str] = set()
     script_actions: list[str] = []
+    script_hints: list[str] = []
     service_failures: set[str] = set()
     lines = 0
     for line in raw.splitlines():
@@ -146,6 +158,10 @@ def parse(raw: bytes, *, oversized: bool = False) -> dict:
         if precise_action is not None:
             if len(script_actions) < 64:
                 script_actions.append(precise_action)
+                script_hints.append(
+                    _nonstandard_name_hint(line) if precise_action == "OTHER_ACTION"
+                    else "NOT_APPLICABLE"
+                )
             if precise_action in SERVICE_ACTIONS:
                 service_failures.add(precise_action)
         category = _classify_failed_script_action(line)
@@ -177,22 +193,25 @@ def parse(raw: bytes, *, oversized: bool = False) -> dict:
             classes.add("MSI_CUSTOM_ACTION_UNSUPPORTED")
         else:
             classes.add("OTHER_MSI_ERROR")
-    first = next(
-        (action for action in script_actions if action != "FINALIZE_ONLY"),
-        script_actions[0] if script_actions else "NOT_IDENTIFIED",
+    first_index = next(
+        (i for i, action in enumerate(script_actions) if action != "FINALIZE_ONLY"),
+        0 if script_actions else None,
     )
+    first = script_actions[first_index] if first_index is not None else "NOT_IDENTIFIED"
+    hint = script_hints[first_index] if first_index is not None else "NOT_APPLICABLE"
     return {
         "status": "SCANNED", "classes": sorted(classes),
         "msi_error_lines": min(lines, 9999),
         "first_failed_action": first,
         "service_action_failures": sorted(service_failures),
+        "nonstandard_name_hint": hint,
     }
 
 
 def validate(result: dict) -> bool:
     if type(result) is not dict or set(result) != {
         "status", "classes", "msi_error_lines",
-        "first_failed_action", "service_action_failures",
+        "first_failed_action", "service_action_failures", "nonstandard_name_hint",
     }:
         return False
     if (result["status"] not in STATUS or type(result["classes"]) is not list
@@ -201,6 +220,9 @@ def validate(result: dict) -> bool:
             or type(result["msi_error_lines"]) is not int
             or not 0 <= result["msi_error_lines"] <= 9999
             or result["first_failed_action"] not in FAILED_ACTIONS
+            or result["nonstandard_name_hint"] not in NONSTANDARD_NAME_HINTS
+            or ((result["first_failed_action"] == "OTHER_ACTION")
+                != (result["nonstandard_name_hint"] != "NOT_APPLICABLE"))
             or type(result["service_action_failures"]) is not list
             or result["service_action_failures"] != sorted(set(result["service_action_failures"]))
             or any(action not in SERVICE_ACTIONS for action in result["service_action_failures"])):
@@ -209,12 +231,14 @@ def validate(result: dict) -> bool:
     if result["status"] != "SCANNED":
         return (result["classes"] == [] and result["msi_error_lines"] == 0
                 and result["first_failed_action"] == "NOT_IDENTIFIED"
-                and result["service_action_failures"] == [])
+                and result["service_action_failures"] == []
+                and result["nonstandard_name_hint"] == "NOT_APPLICABLE")
     # A targeted fixme category can appear even when err:msi is absent.
     if result["msi_error_lines"] == 0:
         return (result["classes"] in ([], ["MSI_TSAWARE_UNIMPLEMENTED"])
                 and result["first_failed_action"] == "NOT_IDENTIFIED"
-                and result["service_action_failures"] == [])
+                and result["service_action_failures"] == []
+                and result["nonstandard_name_hint"] == "NOT_APPLICABLE")
     if result["service_action_failures"] and "MSI_ACTION_SERVICE" not in result["classes"]:
         return False
     if result["first_failed_action"] in SERVICE_ACTIONS and (
