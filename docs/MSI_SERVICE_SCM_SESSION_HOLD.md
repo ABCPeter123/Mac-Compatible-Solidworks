@@ -19,3 +19,20 @@ A positive result would justify testing a finite SCM-holder compatibility helper
 Prior source-backed upstream inspection shows Wine `svcctl_OpenServiceW` consults `scmdatabase_find_service()` while `services.exe` loads registry service entries into an in-memory database at startup. The observed mismatches are not yet a proven defect in those lines, so no blind patch is made.
 
 See [Wine RPC service source](https://github.com/wine-mirror/wine/blob/master/programs/services/rpc.c), [Wine service database source](https://github.com/wine-mirror/wine/blob/master/programs/services/services.c), and [original one-connection trial](MSI_SERVICE_SCM_COHERENCE.md).
+
+## Evidence-driven follow-up: distinguish independent lookup failures
+
+The first Apple Silicon holder run completed, confirmed `SERVICE_OPEN`, and measured `UNKNOWN` for the three external service status probes, even while the holder retained an actual service handle. This is **not** evidence that the SCM lookup returned error 1060; the old query helper collapsed start failures, Wine process exit status, timeouts and invalid probe output into the same category.
+
+The follow-up uses the original source-built Windows status controller and checks its process outcome independently. Each query now retains the existing `ABSENT/RUNNING/STOPPED/UNKNOWN` status and adds a **single finite diagnostic class**:
+
+- `PARSED`: strict four-field original Win32 marker protocol passed and yielded a recognized service result.
+- `LAUNCH_FAILED`: Wine or the original service probe could not be started.
+- `TIMED_OUT`: the Windows controller did not finish within the bounded timeout.
+- `BAD_EXIT`: the controller exited outside the defined original zero/one result protocol.
+- `NO_PROTOCOL`: no original service-status protocol header appeared.
+- `MALFORMED`: the protocol header appeared but strict parsing failed.
+- `OVERSIZED`: controller output exceeded 2048 bytes.
+- `NOT_EXECUTED`: the holder did not become ready or exited before a legitimate concurrent query.
+ 
+No arbitrary stdout or stderr, Win32 code, user path, or service registry contents enter the result. Only successful actual Windows API status markers may justify service visibility. Once these three categories are measured on Apple Silicon, the next fix can target service RPC/SCM lookup if `PARSED`, or the Wine process/probe boundary if another error occurs. No .NET or SOLIDWORKS compatibility claim changes.
