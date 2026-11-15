@@ -79,7 +79,7 @@ jobs:
           }
           $semantics = $data.mum_semantics
           $op = $semantics.operation_preflight
-          foreach ($key in @("documents","parsed","invalid","amd64_only","mixed_arch","other_arch","root_amd64","root_x86","root_arm64","root_neutral","root_unknown","updates","parents","dependencies","files","registry_values","unsupported_operations","safe_to_apply")) {
+          foreach ($key in @("documents","parsed","invalid","amd64_only","mixed_arch","other_arch","root_amd64","root_x86","root_arm64","root_neutral","root_unknown","root_amd64_updates","root_amd64_parents","root_amd64_dependencies","root_amd64_unsupported","updates","parents","dependencies","files","registry_values","unsupported_operations","installer_assembly","custom_information","security_descriptor","other_unsupported","safe_to_apply")) {
             Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "cbs_preflight_$($key): **$($op.$key)**"
           }
           foreach ($key in @("status","mums_seen","mums_parsed","mum_with_update","mum_with_package","mum_with_dependency","genuine_servicing_performed")) {
