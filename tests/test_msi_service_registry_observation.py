@@ -32,6 +32,7 @@ class RegistryVsScmTests(unittest.TestCase):
             with mock.patch.object(obs.subprocess, "run", side_effect=OSError):
                 self.assertEqual(obs.service_registry(wine, prefix), "UNAVAILABLE")
 
+    @unittest.skipIf(os.name == "nt", "Wine prefix comparison is POSIX-only")
     def test_true_registration_with_unobservable_scm_is_not_ready(self):
         with TemporaryDirectory() as td:
             prefix = Path(td)
