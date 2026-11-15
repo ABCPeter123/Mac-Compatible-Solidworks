@@ -14,7 +14,7 @@ class OriginalMsiActionTableTests(unittest.TestCase):
         found = b"SWCOMPAT_CA_TABLE_STATUS=ACTION_FOUND\nSWCOMPAT_CA_TABLE_TYPE=3073\n"
         r = table.parse(found, 0)
         self.assertEqual(r, {"status": "ACTION_FOUND", "base_type": 1,
-                             "family": "DLL_BINARY"})
+                             "family": "DLL_BINARY", "stage": "NOT_OBSERVED"})
         self.assertTrue(table.validate(r))
         absent = table.parse(b"SWCOMPAT_CA_TABLE_STATUS=ACTION_ABSENT\n"
                              b"SWCOMPAT_CA_TABLE_TYPE=0\n", 0)
@@ -24,6 +24,13 @@ class OriginalMsiActionTableTests(unittest.TestCase):
                          "MALFORMED")
         self.assertEqual(table.parse(found + found, 0)["status"], "MALFORMED")
         self.assertEqual(table.parse(found, 7)["status"], "BAD_EXIT")
+        stopped = table.parse(b"SWCOMPAT_CA_TABLE_STAGE=ENTRY\n"
+                              b"SWCOMPAT_CA_TABLE_STAGE=INPUT_OK\n", 1)
+        self.assertEqual(stopped["status"], "BAD_EXIT")
+        self.assertEqual(stopped["stage"], "INPUT_OK")
+        self.assertTrue(table.validate(stopped))
+        self.assertFalse(table.validate(dict(stopped, stage="PRIVATE_PATH")))
+
         self.assertEqual(table.parse(found.replace(b"3073", b"999999"), 0)["status"],
                          "MALFORMED")
         self.assertFalse(table.validate(dict(r, family="WORKING_NETFX")))
