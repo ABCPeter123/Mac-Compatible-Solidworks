@@ -10,9 +10,9 @@ Before inspecting any original Microsoft MSI metadata, we must determine whether
 
 ## Opt-in original-media check
 
-`scripts/netfx40_msi_inventory.py` scans **only** short-lived directories under the original marked disposable Wine prefix: users, Windows Temp and drive C Temp. It runs immediately after the unchanged authentic signed .NET 4.0 setup finishes, before a possible Wine restart. It neither changes nor extracts installer files. The scanner:
+`scripts/netfx40_msi_inventory.py` scans **only** short-lived directories under the original marked disposable Wine prefix: users, Windows Temp, drive C Temp, and at most 12 immediate C-drive extraction folders whose names consist of 10 to 40 hex digits. It runs immediately after the unchanged authentic signed .NET 4.0 setup finishes, before a possible Wine restart. It neither changes nor extracts installer files. The scanner:
 
-- Refuses symlinked roots and subdirectories and never follows symlinks.
+- Refuses symlinked roots and subdirectories and never follows symlinks. Scans only strict hex-named immediate C-drive folders rather than scanning the entire drive root.
 - Caps the scan to 144 directories, 600 file entries, depth seven, 24 candidate matches, and 200 MiB per candidate.
 - Recognizes conservative `.msi` candidate filenames with a bounded ASCII grammar and at least 4 KiB.
 - Exposes only finite status enums `ABSENT`, `CANDIDATE_PRESENT`, `PARTIAL_SCAN`, `INVALID_ROOT`, plus strictly bounded candidate/directory/file counts. It never returns filenames, paths, package identifiers, raw MSI content, logs or original action names.
@@ -27,3 +27,12 @@ The original Apple Silicon Wine Staging workflow opts in with `--experiment-inve
 - `PARTIAL_SCAN` or `INVALID_ROOT`: inconclusive. Improve bounded discovery without bypassing safety checks.
 
 No Wine service shim, Microsoft MSI patch, registry-forged CLR, serial bypass or SOLIDWORKS activation bypass is part of this experiment.
+
+
+## First original installer measurement and expanded extraction-root test
+
+[Authentic signed .NET 4.0 run 43675805446](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43675805446) passed all diagnostic gates, but Microsoft's original setup returned `MSI_FATAL_ERROR` (1603); real x64 `clr.dll` and `mscorlib.dll` were ABSENT and independent native loading returned NOT_FOUND. The initial bounded Temp-only census checked 37 directories and four file entries but found zero candidate MSI files. The original failed action is still `OTHER_ACTION` with the `SERVICE_TEXT_ONLY` name hint, and original action Type remains `TRACE_MISSING`.
+
+An `ABSENT` result from that Temp-only run does not prove that the installer never extracted MSIs elsewhere. Some genuine .NET 4.0 installers use direct C-drive random-named extraction folders. The revised census adds at most 12 immediate folders matching 10 to 40 hex digits under the **same marked disposable Wine drive C**. It does not scan other Wine drive mappings or arbitrary user paths. Windows and POSIX regression tests verify that an MSI inside a strict hex folder is counted, unrelated root folders are ignored, linked folders are never followed, and exceeding the root cap yields `PARTIAL_SCAN`.
+
+Even an `ABSENT` expanded-root result means only that no conservatively named, size-bounded MSI file survived in those enumerated locations **after the original setup exited**. It does not prove that a temporary MSI never existed during execution. If none survives, the next grounded investigation is a bounded during-execution census or a privately verified original-media extraction, not a fabricated action Type.
