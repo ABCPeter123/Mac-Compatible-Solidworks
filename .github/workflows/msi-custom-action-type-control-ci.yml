@@ -109,6 +109,16 @@ jobs:
             if ($LASTEXITCODE -ne 0 -or $metadataViaFile -notcontains 'SWCOMPAT_CA_TABLE_STATUS=ACTION_FOUND' -or $metadataViaFile -notcontains 'SWCOMPAT_CA_TABLE_TYPE=3073') {
               throw 'Native Windows private-file MSI query transport failed'
             }
+            # Same full query, but launched through the verified native
+            # CreateProcessW reference instead of through direct Wine args.
+            $spawnQuery = & build/msi_action_spawn_probe.exe (Resolve-Path build/msi_custom_action_table_probe.exe).Path $spawnFile $msi
+            if ($LASTEXITCODE -ne 0 -or $spawnQuery -notcontains 'SWCOMPAT_SPAWN_STATUS=STARTED' -or $spawnQuery -notcontains 'SWCOMPAT_SPAWN_CHILD_EXIT=ZERO') {
+              throw 'Native Windows Win32-created private MSI metadata query failed'
+            }
+            $spawnedType = Get-Content -LiteralPath $privateStatus
+            if ($spawnedType -notcontains 'SWCOMPAT_CA_TABLE_STATUS=ACTION_FOUND' -or $spawnedType -notcontains 'SWCOMPAT_CA_TABLE_TYPE=3073') {
+              throw 'Native Windows Win32-created MSI table data mismatch'
+            }
           } finally {
             Remove-Item -LiteralPath $privateInput, $privateStatus -Force -ErrorAction SilentlyContinue
           }
@@ -203,11 +213,36 @@ jobs:
           print("MSI table probe stage:", r["stage"])
           Path("build/msi-custom-table-control.json").write_text(
               json.dumps(r, sort_keys=True), encoding="utf-8")
-          assert r["status"] == "ACTION_FOUND"
-          assert r["base_type"] == 1
-          assert r["family"] == "DLL_BINARY"
-          print("MSI table probe status:", r["status"])
-          print("MSI table probe family:", r["family"])
+          # Retain the direct Wine query as a differential measurement.
+          # The self-authored Win32 CreateProcessW path is independently
+          # validated in the immediately following step.
+          PY
+      - name: Re-query original self-authored MSI through CreateProcessW child
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.msi_action_spawn_trial import inspect_query, validate as validate_spawn
+          from scripts.msi_custom_action_table_type import validate as validate_table
+          p = Path(os.environ["RUNNER_TEMP"]) / "msi-custom-control-prefix"
+          r = inspect_query(Path(os.environ["SWCOMPAT_WINE"]), p,
+                            Path("build/msi_action_spawn_probe.exe"),
+                            Path("build/msi_custom_action_table_probe.exe"),
+                            Path("build/swcompat_custom_action_type_control.msi"))
+          assert set(r) == {"spawn", "table"} and validate_spawn(r["spawn"]) and validate_table(r["table"])
+          for key in ("status", "child_exit", "error"):
+              print("Win32-created query", key, r["spawn"][key])
+          for key in ("status", "family", "base_type", "stage"):
+              print("Win32-created table", key, r["table"][key])
+          Path("build/msi-custom-table-win32-child.json").write_text(
+              json.dumps(r, sort_keys=True), encoding="utf-8")
+          assert r["spawn"]["status"] == "STARTED"
+          assert r["spawn"]["child_exit"] == "ZERO"
+          assert r["table"]["status"] == "ACTION_FOUND"
+          assert r["table"]["base_type"] == 1
+          assert r["table"]["family"] == "DLL_BINARY"
           PY
       - name: Run original self-authored MSI and inspect strict Wine action type
         shell: bash
@@ -250,6 +285,16 @@ jobs:
                       f.write(f"msi_table_status: **{m['status']}**\n\n")
                       f.write(f"msi_table_family: **{m['family']}**\n\n")
                       f.write(f"msi_table_stage: **{m['stage']}**\n\n")
+                  child_report = Path("build/msi-custom-table-win32-child.json")
+                  if child_report.is_file():
+                      c = json.loads(child_report.read_text())
+                      from scripts.msi_custom_action_table_type import validate as valid_child_table
+                      from scripts.msi_action_spawn_trial import validate as valid_child_spawn
+                      if not valid_child_table(c["table"]) or not valid_child_spawn(c["spawn"]):
+                          raise ValueError("Unsafe Win32-created MSI metadata report")
+                      f.write(f"win32_query_spawn: **{c['spawn']['status']}**\n\n")
+                      f.write(f"win32_query_table: **{c['table']['status']}**\n\n")
+                      f.write(f"win32_query_stage: **{c['table']['stage']}**\n\n")
                   f.write("native_microsoft_clr: **False**\n\n")
           PY
       - uses: actions/upload-artifact@v4
@@ -260,6 +305,7 @@ jobs:
             build/msi-custom-action-control.json
             build/msi-custom-table-control.json
             build/msi-win32-startup-status.json
+            build/msi-custom-table-win32-child.json
           if-no-files-found: warn
           retention-days: 7
       - name: Require real self-authored MSI failure and Wine DLL type match
