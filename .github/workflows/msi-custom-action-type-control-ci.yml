@@ -51,7 +51,7 @@ jobs:
           $lines = @('@echo off', ('call "' + $vcvars + '"'),
             'cl /nologo /W4 /O2 /LD /Fe:build\msi_custom_action_fail.dll probes\msi_custom_action_fail.c',
             'if errorlevel 1 exit /b %errorlevel%',
-            'cl /nologo /W4 /O2 /MT /DUNICODE /D_UNICODE /Fe:build\msi_custom_action_table_probe.exe probes\msi_custom_action_table_probe.c msi.lib',
+            'cl /nologo /W4 /O2 /MT /DUNICODE /D_UNICODE /Fe:build\msi_custom_action_table_probe.exe probes\msi_custom_action_table_probe.c',
             'exit /b %errorlevel%')
           [System.IO.File]::WriteAllLines((Join-Path (Get-Location) 'build\compile-custom-control.cmd'), $lines, [System.Text.Encoding]::ASCII)
           & cmd.exe /d /c build\compile-custom-control.cmd
