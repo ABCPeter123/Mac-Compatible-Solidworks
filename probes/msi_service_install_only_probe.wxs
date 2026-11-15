@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="SWCompat Original MSI Service Install Only Probe"
+           Manufacturer="SWCompat Open Compatibility Research"
+           Version="1.0.0"
+           UpgradeCode="{53A93E6B-4858-4941-97B0-74531C860C4B}"
+           Scope="perMachine">
+    <MediaTemplate EmbedCab="yes" />
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="SWCompatServiceActionDir" Name="SWCompatMsiServiceAction">
+        <Component Id="ServiceExeComponent" Guid="{A5B7154E-2D60-4C1D-BA1D-718A5B6DE32D}">
+          <File Id="ServiceExeFile" Source="build/service_smoke.exe" KeyPath="yes" />
+          <ServiceInstall Id="OriginalServiceInstall"
+                          Name="SWCompatOriginalServiceTest"
+                          DisplayName="SWCompat Original Harmless Service"
+                          Description="Isolated self-authored MSI/SCM regression fixture"
+                          Type="ownProcess" Start="demand" ErrorControl="normal"
+                          Arguments="run" Vital="yes" />
+          <ServiceControl Id="OriginalServiceControl"
+                          Name="SWCompatOriginalServiceTest"
+                          Stop="uninstall" Remove="uninstall"
+                          Wait="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="ServiceProbeFeature" Title="MSI Service Lifecycle" Level="1">
+      <ComponentRef Id="ServiceExeComponent" />
+    </Feature>
+  </Package>
+</Wix>
