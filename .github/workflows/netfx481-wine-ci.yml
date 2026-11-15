@@ -690,7 +690,8 @@ jobs:
               else:
                   r = json.loads(report.read_text())
                   assert valid_bridge(r)
-                  for k in ("status", "winetricks48_exit", "native48_candidate",
+                  for k in ("status", "winetricks48_exit", "verb_reboot",
+                            "native48_release", "native48_candidate",
                             "clr64_before481", "clr64_after481", "clr64_change",
                             "native_loader", "native_only_managed", "runtime_family",
                             "framework481_registry", "restart", "native481_confirmed",
@@ -729,6 +730,7 @@ jobs:
               assert r["solidworks"] == "NOT_DEMONSTRATED"
               if r["native481_confirmed"]:
                   assert r["native48_candidate"]
+                  assert r["native48_release"] == "AT_LEAST_48"
                   assert r["clr64_change"] == "CHANGED"
                   assert r["native_loader"] == "LOADED"
                   assert r["native_only_managed"] == "PASS"
