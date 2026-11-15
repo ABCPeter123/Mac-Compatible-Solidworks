@@ -146,6 +146,43 @@ class WineMsiErrorTests(unittest.TestCase):
         self.assertFalse(w.validate(dict(r, first_failed_action="C:\\Users\\private")))
         self.assertFalse(w.validate(dict(r, service_action_failures=[])))
 
+    def test_install_error_is_distinct_from_script_two_rollback(self):
+        raw = (
+            b'0120:err:msi:execute_script Execution of script 0 halted; action L"InstallFiles" returned 1603\n'
+            b'0120:err:msi:ITERATE_Actions Execution halted, action L"InstallFinalize" returned 1603\n'
+            b'0120:err:msi:execute_script Execution of script 2 halted; action L"RollbackServiceConfig" returned 1603\n'
+        )
+        r = w.parse(raw)
+        self.assertTrue(w.validate(r))
+        self.assertEqual(r["first_failed_script_phase"], "INSTALL")
+        self.assertEqual(r["first_install_failed_action"], "INSTALL_FILES")
+        self.assertEqual(r["install_script_failures"], 1)
+        self.assertEqual(r["rollback_script_failures"], 1)
+        self.assertNotIn("RollbackServiceConfig", str(r))
+
+    def test_rollback_only_does_not_claim_install_failure(self):
+        raw = (
+            b'0120:err:msi:execute_script Execution of script 2 halted; action L"RollbackServiceConfig" returned 1603\n'
+            b'0120:err:msi:ITERATE_Actions Execution halted, action L"InstallFinalize" returned 1603\n'
+        )
+        r = w.parse(raw)
+        self.assertTrue(w.validate(r))
+        self.assertEqual(r["first_failed_action"], "OTHER_ACTION")
+        self.assertEqual(r["first_failed_script_phase"], "ROLLBACK")
+        self.assertEqual(r["first_install_failed_action"], "NOT_IDENTIFIED")
+        self.assertEqual(r["install_script_failures"], 0)
+        self.assertEqual(r["rollback_script_failures"], 1)
+        self.assertFalse(w.validate(dict(r, first_install_failed_action="START_SERVICES")))
+        self.assertFalse(w.validate(dict(r, first_failed_script_phase="PRIVATE")))
+
+    def test_unscoped_wine_error_remains_undetermined(self):
+        r = w.parse(
+            b'0120:err:msi:execute_script action L"PrivateServiceAction" returned 1603\n'
+        )
+        self.assertTrue(w.validate(r))
+        self.assertEqual(r["first_failed_script_phase"], "UNDETERMINED")
+        self.assertEqual(r["first_install_failed_action"], "NOT_IDENTIFIED")
+
     def test_targeted_wine_fixme_is_a_warning_not_a_fatal_error(self):
         result = w.parse(
             b'0100:fixme:msi:ACTION_CustomAction msidbCustomActionTypeTSAware not handled\n'

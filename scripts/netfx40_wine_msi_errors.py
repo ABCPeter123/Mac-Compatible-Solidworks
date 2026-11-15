@@ -30,6 +30,9 @@ _BAD_EXE = re.compile(rb"(?i)\(193\)\s*$")
 _INSTALLFILES = re.compile(rb"(?i)\b(?:ACTION_InstallFiles|action L[\"']?InstallFiles)\b")
 _FINALIZE = re.compile(rb"(?i)\b(?:action L[\"']?InstallFinalize|InstallFinalize)\b")
 _UNSUPPORTED = re.compile(rb"(?i)\b(?:msidbCustomActionTypeTSAware|custom action.*not handled)\b")
+_SCRIPT_PHASE = re.compile(rb"(?i)\bExecution of script ([012]) halted;")
+_SCRIPT_PHASE_LABELS = {b"0": "INSTALL", b"1": "COMMIT", b"2": "ROLLBACK"}
+PHASES = {"INSTALL", "COMMIT", "ROLLBACK", "UNDETERMINED", "NOT_IDENTIFIED"}
 _ACTION_STRING = re.compile(rb'(?i)\baction\s+L"([^"\r\n]{1,350})"\s+returned\s+1603\b')
 _CUSTOM_PIPE = re.compile(rb"(?i)\bcustom_client_thread\b.*\bfailed to write\b.*\bpipe\b")
 _CUSTOM_RETURN = re.compile(rb"(?i)\bcustom_get_thread_return\b.*\binvalid Return Code\b")
@@ -49,6 +52,13 @@ SERVICE_ACTIONS = {
     "INSTALL_SERVICES", "START_SERVICES", "STOP_SERVICES",
     "DELETE_SERVICES", "SERVICE_CONFIG",
 }
+
+
+def _failure_phase(line: bytes) -> str:
+    if _ACTION_STRING.search(line) is None:
+        return "NOT_IDENTIFIED"
+    match = _SCRIPT_PHASE.search(line)
+    return _SCRIPT_PHASE_LABELS[match.group(1)] if match else "UNDETERMINED"
 
 
 def _failed_action_type(line: bytes) -> str | None:
@@ -127,6 +137,10 @@ def empty() -> dict:
         "status": "NOT_REQUESTED", "classes": [], "msi_error_lines": 0,
         "first_failed_action": "NOT_IDENTIFIED", "service_action_failures": [],
         "nonstandard_name_hint": "NOT_APPLICABLE",
+        "first_failed_script_phase": "NOT_IDENTIFIED",
+        "first_install_failed_action": "NOT_IDENTIFIED",
+        "install_script_failures": 0,
+        "rollback_script_failures": 0,
     }
 
 
@@ -138,6 +152,7 @@ def parse(raw: bytes, *, oversized: bool = False) -> dict:
     classes: set[str] = set()
     script_actions: list[str] = []
     script_hints: list[str] = []
+    script_phases: list[str] = []
     service_failures: set[str] = set()
     lines = 0
     for line in raw.splitlines():
@@ -158,6 +173,7 @@ def parse(raw: bytes, *, oversized: bool = False) -> dict:
         if precise_action is not None:
             if len(script_actions) < 64:
                 script_actions.append(precise_action)
+                script_phases.append(_failure_phase(line))
                 script_hints.append(
                     _nonstandard_name_hint(line) if precise_action == "OTHER_ACTION"
                     else "NOT_APPLICABLE"
@@ -199,12 +215,20 @@ def parse(raw: bytes, *, oversized: bool = False) -> dict:
     )
     first = script_actions[first_index] if first_index is not None else "NOT_IDENTIFIED"
     hint = script_hints[first_index] if first_index is not None else "NOT_APPLICABLE"
+    phase = script_phases[first_index] if first_index is not None else "NOT_IDENTIFIED"
+    install_actions = [a for a, p in zip(script_actions, script_phases) if p == "INSTALL"]
+    install_first = next((a for a in install_actions if a != "FINALIZE_ONLY"),
+                         install_actions[0] if install_actions else "NOT_IDENTIFIED")
     return {
         "status": "SCANNED", "classes": sorted(classes),
         "msi_error_lines": min(lines, 9999),
         "first_failed_action": first,
         "service_action_failures": sorted(service_failures),
         "nonstandard_name_hint": hint,
+        "first_failed_script_phase": phase,
+        "first_install_failed_action": install_first,
+        "install_script_failures": min(len(install_actions), 64),
+        "rollback_script_failures": min(script_phases.count("ROLLBACK"), 64),
     }
 
 
@@ -212,6 +236,8 @@ def validate(result: dict) -> bool:
     if type(result) is not dict or set(result) != {
         "status", "classes", "msi_error_lines",
         "first_failed_action", "service_action_failures", "nonstandard_name_hint",
+        "first_failed_script_phase", "first_install_failed_action",
+        "install_script_failures", "rollback_script_failures",
     }:
         return False
     if (result["status"] not in STATUS or type(result["classes"]) is not list
@@ -220,6 +246,14 @@ def validate(result: dict) -> bool:
             or type(result["msi_error_lines"]) is not int
             or not 0 <= result["msi_error_lines"] <= 9999
             or result["first_failed_action"] not in FAILED_ACTIONS
+            or result["first_install_failed_action"] not in FAILED_ACTIONS
+            or result["first_failed_script_phase"] not in PHASES
+            or any(type(result[k]) is not int or not 0 <= result[k] <= 64 for k in
+                   ("install_script_failures", "rollback_script_failures"))
+            or ((result["install_script_failures"] == 0) !=
+                (result["first_install_failed_action"] == "NOT_IDENTIFIED"))
+            or ((result["first_failed_action"] == "NOT_IDENTIFIED") !=
+                (result["first_failed_script_phase"] == "NOT_IDENTIFIED"))
             or result["nonstandard_name_hint"] not in NONSTANDARD_NAME_HINTS
             or ((result["first_failed_action"] == "OTHER_ACTION")
                 != (result["nonstandard_name_hint"] != "NOT_APPLICABLE"))
@@ -232,13 +266,21 @@ def validate(result: dict) -> bool:
         return (result["classes"] == [] and result["msi_error_lines"] == 0
                 and result["first_failed_action"] == "NOT_IDENTIFIED"
                 and result["service_action_failures"] == []
-                and result["nonstandard_name_hint"] == "NOT_APPLICABLE")
+                and result["nonstandard_name_hint"] == "NOT_APPLICABLE"
+                and result["first_failed_script_phase"] == "NOT_IDENTIFIED"
+                and result["first_install_failed_action"] == "NOT_IDENTIFIED"
+                and result["install_script_failures"] == 0
+                and result["rollback_script_failures"] == 0)
     # A targeted fixme category can appear even when err:msi is absent.
     if result["msi_error_lines"] == 0:
         return (result["classes"] in ([], ["MSI_TSAWARE_UNIMPLEMENTED"])
                 and result["first_failed_action"] == "NOT_IDENTIFIED"
                 and result["service_action_failures"] == []
-                and result["nonstandard_name_hint"] == "NOT_APPLICABLE")
+                and result["nonstandard_name_hint"] == "NOT_APPLICABLE"
+                and result["first_failed_script_phase"] == "NOT_IDENTIFIED"
+                and result["first_install_failed_action"] == "NOT_IDENTIFIED"
+                and result["install_script_failures"] == 0
+                and result["rollback_script_failures"] == 0)
     if result["service_action_failures"] and "MSI_ACTION_SERVICE" not in result["classes"]:
         return False
     if result["first_failed_action"] in SERVICE_ACTIONS and (
