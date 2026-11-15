@@ -4,6 +4,8 @@ on:
     paths:
       - '.github/workflows/netfx481-servicing-inventory-ci.yml'
       - 'scripts/netfx481_servicing_inventory.py'
+      - 'scripts/netfx481_mum_semantics.py'
+      - 'tests/test_netfx481_mum_semantics.py'
       - 'tests/test_netfx481_servicing_inventory.py'
   workflow_dispatch:
 permissions:
@@ -21,6 +23,8 @@ jobs:
         shell: pwsh
         run: |
           python -m unittest discover -s tests -p 'test_netfx481_servicing_inventory.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Authentic archive inventory tests failed" }
+          python -m unittest discover -s tests -p 'test_netfx481_mum_semantics.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Authentic servicing package inventory safety tests failed" }
       - name: Authenticate unchanged original signed Microsoft .NET 4.8.1 installer
         shell: pwsh
@@ -69,6 +73,16 @@ jobs:
           Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "## Authenticated original Microsoft .NET 4.8.1 CAB/MSU inventory"
           foreach ($key in @("outer_status","outer_entries","outer_arch_x64","outer_kb5011048_hint","embedded_candidates","embedded_checked","nested_status","nested_entries","nested_update_mum_hint","genuine_servicing_installed")) {
             Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "$($key): **$($data.$key)**"
+          }
+          $semantics = $data.mum_semantics
+          foreach ($key in @("status","mums_seen","mums_parsed","mum_with_update","mum_with_package","mum_with_dependency","genuine_servicing_performed")) {
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "mum_$($key): **$($semantics.$key)**"
+          }
+          foreach ($key in @("assemblyIdentity","package","update","parent","dependency","file","registryKeys","registryKey","registryValue","deployment","customInformation","securityDescriptor")) {
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "mum_tag_$($key): **$($semantics.tags.$key)**"
+          }
+          foreach ($arch in @("amd64","x86","arm64","neutral")) {
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "mum_identity_arch_$($arch): **$($semantics.architectures.$arch)**"
           }
           foreach ($kind in @("CAB","MSU","MUM","MANIFEST","MSI","DLL")) {
             Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "outer_$($kind): **$($data.outer_types.$kind)**"
