@@ -95,10 +95,10 @@ class SCMHolderTests(unittest.TestCase):
                     self.returncode = code
             def mock_run(*args, **kwargs):
                 kwargs["stdout"].write(
-                    b"SWCOMPAT_SERVICE_PHASE=status\\n"
-                    b"SWCOMPAT_SERVICE_ERROR=1060\\n"
-                    b"SWCOMPAT_SERVICE_STATE=0\\n"
-                    b"SWCOMPAT_SERVICE_CHECK=FAIL\\n"
+                    b"SWCOMPAT_SERVICE_PHASE=status\n"
+                    b"SWCOMPAT_SERVICE_ERROR=1060\n"
+                    b"SWCOMPAT_SERVICE_STATE=0\n"
+                    b"SWCOMPAT_SERVICE_CHECK=FAIL\n"
                 )
                 return Completed(1)
             with mock.patch.object(trial.subprocess, "run", side_effect=mock_run):
