@@ -176,14 +176,18 @@ jobs:
           python3 - <<'PY'
           import json, os
           from pathlib import Path
-          from scripts.msi_custom_action_table_type import inspect_selftest, validate as validate_table
+          from scripts.msi_custom_action_table_type import inspect_selftest, read_bootstrap, validate as validate_table
           from scripts.msi_action_spawn_trial import inspect as inspect_spawn, validate as validate_spawn
           w = Path(os.environ["SWCOMPAT_WINE"])
           prefix = Path(os.environ["RUNNER_TEMP"]) / "msi-custom-control-prefix"
           helper = Path("build/msi_custom_action_table_probe.exe")
           selftest = inspect_selftest(w, prefix, helper)
           startup = inspect_spawn(w, prefix, Path("build/msi_action_spawn_probe.exe"), helper)
+          boot = read_bootstrap(prefix)
           assert validate_table(selftest) and validate_spawn(startup)
+          print("Win32 bootstrap process entry:", boot["entry"])
+          print("Win32 bootstrap arg count:", boot["argc"])
+          print("Win32 bootstrap status channel:", boot["report"])
           print("Win32 MSI helper selftest:", selftest["status"])
           print("Win32 MSI helper selftest stage:", selftest["stage"])
           print("Win32 CreateProcessW startup:", startup["status"])
@@ -203,12 +207,16 @@ jobs:
           python3 - <<'PY'
           import json, os
           from pathlib import Path
-          from scripts.msi_custom_action_table_type import inspect, validate
+          from scripts.msi_custom_action_table_type import inspect, validate, read_bootstrap
           r = inspect(Path(os.environ["SWCOMPAT_WINE"]),
                       Path(os.environ["RUNNER_TEMP"]) / "msi-custom-control-prefix",
                       Path("build/msi_custom_action_table_probe.exe"),
                       Path("build/swcompat_custom_action_type_control.msi"))
           assert validate(r)
+          boot = read_bootstrap(Path(os.environ["RUNNER_TEMP"]) / "msi-custom-control-prefix")
+          print("Direct Wine MSI helper entry:", boot["entry"])
+          print("Direct Wine MSI helper argv:", boot["argc"])
+          print("Direct Wine MSI status channel:", boot["report"])
           print("MSI table probe status:", r["status"])
           print("MSI table probe stage:", r["stage"])
           Path("build/msi-custom-table-control.json").write_text(
@@ -225,13 +233,17 @@ jobs:
           import json, os
           from pathlib import Path
           from scripts.msi_action_spawn_trial import inspect_query, validate as validate_spawn
-          from scripts.msi_custom_action_table_type import validate as validate_table
+          from scripts.msi_custom_action_table_type import validate as validate_table, read_bootstrap
           p = Path(os.environ["RUNNER_TEMP"]) / "msi-custom-control-prefix"
           r = inspect_query(Path(os.environ["SWCOMPAT_WINE"]), p,
                             Path("build/msi_action_spawn_probe.exe"),
                             Path("build/msi_custom_action_table_probe.exe"),
                             Path("build/swcompat_custom_action_type_control.msi"))
           assert set(r) == {"spawn", "table"} and validate_spawn(r["spawn"]) and validate_table(r["table"])
+          boot = read_bootstrap(p)
+          print("Win32-created MSI helper entry:", boot["entry"])
+          print("Win32-created MSI helper argc:", boot["argc"])
+          print("Win32-created MSI report channel:", boot["report"])
           for key in ("status", "child_exit", "error"):
               print("Win32-created query", key, r["spawn"][key])
           for key in ("status", "family", "base_type", "stage"):
