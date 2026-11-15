@@ -1,4 +1,23 @@
-# Milestones and evidence
+# Current priority: .NET Framework 4.8.1 prerequisite 5100
+
+**Only active runtime blocker:** original Microsoft .NET Framework 4.8.1 installation on Apple Silicon Wine. On two fresh CI experiments ([43743135426](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43743135426), [43744752248](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43744752248)), original Microsoft .NET 4.0 x64 CLR was installed, loaded, executed native-only managed code, and survived a Wine restart following the msxml3 sequence. Other runs failed, so the setup lifecycle is not deterministic. A timeout is not a successful setup exit.
+
+Authentic 4.8.1 in-place attempts on the native 4.0 prefix returned **5100**, a Microsoft **system-requirements** code, under Wine-reported Windows 10 and Windows 11 **21H2**. Microsoft supports separate 4.8.1 installation on both corresponding real Windows OS generations. The installer-specific prerequisite condition is **unknown** and Wine's DISM/CBS compatibility is **not proven**. `clr.dll` remained from 4.0, 4.8.1 Release registration was absent, and `framework481_confirmed` remained false.
+
+## Next actions, in order
+
+1. **Diagnose the authentic 5100 condition** using one short-lived, sanitized prerequisite report from the original installer. Measure which setup condition rejected Wine, rather than changing winver again. A Wine-reported supported version is not proof of the real Windows servicing environment.
+2. **Test only the missing prerequisite** with a source-authored Windows-versus-Wine differential. If it is CBS, model the exact original update transaction and reject DISM false-success. Do not write an ungrounded registry or service shim.
+3. **Make 4.8.1 independently verifiable:** original runtime file change, native CLR load, managed functionality, authentic Release registration and successful installer outcome. No synthetic Release values.
+4. **Only then** attempt the licensed SOLIDWORKS installer and actual sketch/extrude/save workflow on an interactive Mac or equivalent test environment.
+
+**Already investigated:** ordinary self-authored deferred MSI transactions, SCM query/create, registry create/read/write/cleanup and original DLL import census. These tests passed, but do not establish Microsoft setup behavior. Preserve their evidence; do not repeat them without a new failing hypothesis. The original deferred DLL statically imports registry and process APIs but no recognized SCM APIs.
+
+**CI policy:** [Compatibility foundation](../.github/workflows/compatibility-ci.yml) runs tests automatically. Expensive authenticated Microsoft install/upgrade runs require explicit manual dispatch. Refer to [CI scoping](CI_SCOPING.md) and [Issue #115](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/issues/115).
+
+---
+
+# Long-term milestones and evidence
 
 ## M0: Reproducible foundations
 - [x] Dedicated Wine prefix and non-invasive command launcher
