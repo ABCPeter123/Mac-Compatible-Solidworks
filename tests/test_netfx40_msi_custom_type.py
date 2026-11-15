@@ -163,6 +163,21 @@ class OriginalMsiCustomTypeTests(unittest.TestCase):
                 "CAPTURE_TRUNCATED", reason="PROCESS_INCOMPLETE"))
             self.assertNotIn("Secret", str(r))
 
+    def test_rollback_failure_never_becomes_private_install_action(self):
+        only_rollback = (
+            b'0100:err:msi:execute_script Execution of script 2 halted; '
+            b'action L"RollbackServicePrivate" returned 1603\n'
+        )
+        self.assertIsNone(t._private_failed_action(only_rollback))
+        installed = (
+            b'0100:err:msi:execute_script Execution of script 0 halted; '
+            b'action L"ServiceActualInstall" returned 1603\n'
+        )
+        self.assertEqual(t._private_failed_action(only_rollback + installed),
+                         b"ServiceActualInstall")
+        self.assertEqual(t._private_failed_action(installed + only_rollback),
+                         b"ServiceActualInstall")
+
     def test_only_allowlisted_bounded_relevant_lines(self):
         self.assertTrue(t.relevant(b'0100:err:msi:execute_script error\n'))
         self.assertTrue(t.relevant(b'0100:fixme:msi:ACTION_CustomAction warning\n'))

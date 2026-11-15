@@ -15,6 +15,9 @@ from scripts.netfx40_wine_msi_errors import _ACTION_STRING, _failed_action_type
 MAX_RETAINED_BYTES = 3 * 1024 * 1024
 MAX_RETAINED_LINES = 1024
 MAX_LINE_BYTES = 4096
+# Wine msipriv.h: install script 0, commit 1, rollback 2.
+# Never treat a known rollback-only custom-action error as installer cause.
+SCRIPT = re.compile(rb"(?i)\bExecution of script ([012]) halted;")
 TRACE = re.compile(
     rb'(?i)\btrace:msi:[a-z_0-9]+\s+Handling custom action L"([^"\r\n]{1,350})"'
     rb'\s+\(([0-9a-f]{1,8})\s'
@@ -78,10 +81,15 @@ def _private_failed_action(raw: bytes) -> bytes | None:
         if _failed_action_type(line) is not None:
             match = _ACTION_STRING.search(line)
             if match:
-                candidates.append((_failed_action_type(line), match.group(1)))
-    for kind, name in candidates:
-        if kind not in {"FINALIZE_ONLY"}:
-            return name if kind in {"OTHER_ACTION", "CUSTOM_ACTION"} else None
+                script = SCRIPT.search(line)
+                phase = ("ROLLBACK" if script and script.group(1) == b"2" else
+                         "INSTALL" if script and script.group(1) == b"0" else
+                         "UNDETERMINED")
+                candidates.append((_failed_action_type(line), match.group(1), phase))
+    for preferred in ("INSTALL", "UNDETERMINED"):
+        for kind, name, phase in candidates:
+            if phase == preferred and kind != "FINALIZE_ONLY":
+                return name if kind in {"OTHER_ACTION", "CUSTOM_ACTION"} else None
     return None
 
 
