@@ -20,6 +20,10 @@ from scripts.netfx481_trial import (
 from scripts.netfx481_win32_exit import (
     blank as blank_launch, launch, validate as validate_launch,
 )
+from scripts.netfx481_setup_evidence import (
+    private_log_path, classify_log, discard_log, scan_secondary_logs,
+    validate_secondary_report, KNOWN_RESULTS, KNOWN_PHASES, KNOWN_CODES,
+)
 
 STATES_UPGRADE = {"PREREQUISITE_MISSING", "MEASURED"}
 RESTARTS = {"NOT_RUN", "COMPLETED", "TIMED_OUT", "START_FAILED",
@@ -34,6 +38,8 @@ def blank() -> dict:
         "status": "PREREQUISITE_MISSING",
         "original_native40_persistent": False,
         "setup": blank_launch(),
+        "setup_evidence": {"status": "NOT_REQUESTED", "phase": "UNKNOWN", "codes": []},
+        "secondary_evidence": None,
         "restart": "NOT_RUN",
         "clr64_before": "NOT_VERIFIED",
         "clr64_after": "NOT_VERIFIED",
@@ -51,6 +57,17 @@ def blank() -> dict:
 
 def validate(result: dict) -> bool:
     if type(result) is not dict or set(result) != set(blank()):
+        return False
+    evidence = result["setup_evidence"]
+    if (type(evidence) is not dict or set(evidence) != {"status", "phase", "codes"}
+            or evidence["status"] not in KNOWN_RESULTS
+            or evidence["phase"] not in KNOWN_PHASES
+            or type(evidence["codes"]) is not list
+            or len(evidence["codes"]) > len(KNOWN_CODES)
+            or any(x not in KNOWN_CODES.values() for x in evidence["codes"])):
+        return False
+    secondary = result["secondary_evidence"]
+    if secondary is not None and not validate_secondary_report(secondary):
         return False
     if (result["status"] not in STATES_UPGRADE
             or type(result["original_native40_persistent"]) is not bool
@@ -98,7 +115,7 @@ def _wine_host() -> bool:
 
 def inspect(wine: Path, prefix: Path, installer: Path, manifest: Path,
             launcher: Path, loader: Path, managed: Path,
-            native40: dict) -> dict:
+            native40: dict, *, capture_setup_evidence: bool = False) -> dict:
     if not _wine_host() or any(p.is_symlink() for p in (
             wine, prefix, installer, manifest, launcher, loader, managed)):
         raise ValueError("Only a real disposable Wine upgrade is permitted")
@@ -128,8 +145,20 @@ def inspect(wine: Path, prefix: Path, installer: Path, manifest: Path,
 
     # Same official .NET 4.8.1 bootstrapper and scoped Fusion option
     # used in the separate fresh-prefix baseline.
-    setup = launch(wine, prefix, installer, launcher,
-                   timeout=245, fusion_builtin=True)
+    if capture_setup_evidence:
+        log_file = private_log_path(prefix)
+        try:
+            setup = launch(wine, prefix, installer, launcher,
+                           timeout=245, fusion_builtin=True)
+        finally:
+            setup_evidence = classify_log(log_file)
+            discard_log(log_file)
+        secondary_evidence = scan_secondary_logs(prefix)
+    else:
+        setup = launch(wine, prefix, installer, launcher,
+                       timeout=245, fusion_builtin=True)
+        setup_evidence = {"status": "NOT_REQUESTED", "phase": "UNKNOWN", "codes": []}
+        secondary_evidence = None
     if not validate_launch(setup):
         raise ValueError("Unverified original Microsoft installer exit")
     restart = "NOT_RUN"
@@ -148,6 +177,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, manifest: Path,
         "status": "MEASURED",
         "original_native40_persistent": True,
         "setup": setup, "restart": restart,
+        "setup_evidence": setup_evidence,
+        "secondary_evidence": secondary_evidence,
         "clr64_before": comparison["before"]["CLR64"],
         "clr64_after": comparison["after"]["CLR64"],
         "clr64_change": comparison["changes"]["CLR64"],
@@ -187,10 +218,12 @@ def main(argv: list[str] | None = None) -> int:
                 "loader", "managed", "native40-report", "output"):
         ap.add_argument("--" + key, type=Path, required=True)
     ap.add_argument("--agree-disposable-prefix", action="store_true", required=True)
+    ap.add_argument("--experiment-private-setup-evidence", action="store_true")
     args = ap.parse_args(argv)
     native40 = json.loads(args.native40_report.read_text(encoding="utf-8"))
     outcome = inspect(args.wine, args.prefix, args.installer, args.sha256_file,
-                      args.launcher, args.loader, args.managed, native40)
+                      args.launcher, args.loader, args.managed, native40,
+                      capture_setup_evidence=args.experiment_private_setup_evidence)
     if not validate(outcome):
         raise ValueError("Unsafe original Microsoft upgrade outcome")
     if args.output.is_symlink():
@@ -205,6 +238,13 @@ def main(argv: list[str] | None = None) -> int:
         print("Genuine Microsoft .NET in-place upgrade", key, outcome[key])
     for key in ("status", "category", "child_lifecycle"):
         print("Genuine Microsoft .NET in-place setup", key, outcome["setup"][key])
+    for key in ("status", "phase"):
+        print("Genuine Microsoft .NET private setup", key, outcome["setup_evidence"][key])
+    print("Genuine Microsoft .NET private setup error classes", ",".join(outcome["setup_evidence"]["codes"]))
+    if outcome["secondary_evidence"] is not None:
+        for key in ("status", "phase"):
+            print("Genuine Microsoft .NET secondary setup", key, outcome["secondary_evidence"][key])
+        print("Genuine Microsoft .NET secondary setup error classes", ",".join(outcome["secondary_evidence"]["codes"]))
     return 0
 
 
