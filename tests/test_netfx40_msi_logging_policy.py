@@ -26,6 +26,8 @@ class VerboseMsiLoggingTests(unittest.TestCase):
             report = {field: "NOT_RUN" for field in fields}
             report.update({
                 "inner_msi": evidence.empty(),
+                "msi_inventory": __import__(
+                    "scripts.netfx40_msi_inventory", fromlist=["empty"]).empty(),
                 "wine_msi_errors": __import__(
                     "scripts.netfx40_wine_msi_errors", fromlist=["empty"]).empty(),
                 "msi_logging_policy": policy.blank(),
