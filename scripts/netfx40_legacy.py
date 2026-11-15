@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import threading
 
 from scripts.netfx481_trial import (
     NETFX_FULL_KEY, NETFX_WOW6432_FULL_KEY, probe, validate_prefix,
@@ -26,6 +27,9 @@ from scripts.netfx481_win32_exit import (
     parse as parse_win32, CATEGORIES, CHILD_VALUES, LIFECYCLE_VALUES, EXIT_VALUES,
 )
 from scripts.netfx40_msi_evidence import scan as scan_inner_msi, empty as empty_msi, validate as validate_msi
+from scripts.netfx40_msi_custom_type import (parse as parse_custom_type, empty as empty_custom_type,
+    relevant as relevant_custom_trace, validate as validate_custom_type,
+    MAX_RETAINED_BYTES, MAX_RETAINED_LINES, MAX_LINE_BYTES)
 from scripts.netfx40_wine_msi_errors import parse as parse_wine_msi, empty as empty_wine_msi, validate as validate_wine_msi, MAX_BYTES as WINE_MSI_MAX
 from scripts.netfx40_msi_logging_policy import apply as enable_msi_logging, restore as restore_msi_logging, blank as blank_logging, validate as validate_logging
 from scripts.wine_mono_removal import inventory, remove_mono
@@ -121,9 +125,91 @@ def _run(wine: Path, prefix: Path, fixture: Path, arguments: list[str],
     return result
 
 
+def _run_traced(wine: Path, prefix: Path, fixture: Path,
+                arguments: list[str], *, setup: bool = True, timeout: int = 75) -> dict:
+    """Stream private Wine MSI debug output; never spool raw trace to disk.
+
+    Only selected MSI err/fixme and exact custom-action type lines enter a
+    bounded in-memory buffer. Arbitrary source/target/command text is never
+    printed, placed in the result, or uploaded to an artifact.
+    """
+    if not setup:
+        raise ValueError("Custom-action trace only for signed original setup")
+    validate_prefix(prefix)
+    if fixture.is_symlink() or not fixture.is_file() or fixture.name.casefold() != LAUNCHER_NAME:
+        raise ValueError("Expected original self-authored Win32 process monitor")
+    env = _env(prefix, installation=True)
+    env["WINEDEBUG"] = "-all,err+msi,fixme+msi,trace+msi"
+    retained = bytearray()
+    state = {"overflow": False, "lines": 0}
+    code, failed = 124, "PROCESS_FAILED"
+    with tempfile.TemporaryFile() as output:
+        try:
+            process = subprocess.Popen(
+                [str(wine), str(fixture), *arguments], cwd=fixture.parent,
+                env=env, stdin=subprocess.DEVNULL, stdout=output,
+                stderr=subprocess.PIPE,
+            )
+        except OSError:
+            process = None
+        if process is not None:
+            def drain() -> None:
+                assert process.stderr is not None
+                try:
+                    with process.stderr as pipe:
+                        while True:
+                            line = pipe.readline(MAX_LINE_BYTES + 1)
+                            if not line:
+                                return
+                            if not relevant_custom_trace(line):
+                                continue
+                            if (state["lines"] >= MAX_RETAINED_LINES
+                                    or len(retained) + len(line) > MAX_RETAINED_BYTES):
+                                state["overflow"] = True
+                                continue
+                            retained.extend(line)
+                            state["lines"] += 1
+                except OSError:
+                    state["overflow"] = True
+
+            reader = threading.Thread(target=drain, daemon=True)
+            reader.start()
+            try:
+                code = process.wait(timeout=timeout)
+                failed = None
+            except subprocess.TimeoutExpired:
+                process.kill()
+                try:
+                    process.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    pass
+                failed = "TIMEOUT"
+            except OSError:
+                process.kill()
+                failed = "PROCESS_FAILED"
+            reader.join(timeout=5)
+            if reader.is_alive():
+                state["overflow"] = True
+        output.seek(0)
+        raw = output.read(4097)
+    private = bytes(retained)
+    errors = parse_wine_msi(private, oversized=state["overflow"])
+    action_type = parse_custom_type(private, truncated=state["overflow"])
+    if failed:
+        return {"status": failed, "category": "NOT_AVAILABLE",
+                "exit_hex": "NOT_VERIFIED", "child_seen": "NOT_VERIFIED",
+                "child_lifecycle": "NOT_VERIFIED", "child_exit": "NOT_VERIFIED",
+                "wine_msi_errors": errors, "custom_action_type": action_type}
+    result = parse_win32(raw, code)
+    result["wine_msi_errors"] = errors
+    result["custom_action_type"] = action_type
+    return result
+
+
 def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
             loader: Path, managed: Path, timeout: int = 210, *,
-            enable_verbose_msi: bool = False, refresh_scm_after_mono: bool = False) -> dict:
+            enable_verbose_msi: bool = False, refresh_scm_after_mono: bool = False,
+            enable_custom_action_type: bool = False) -> dict:
     if os.name == "nt":
         raise ValueError("Wine experiment cannot modify native Windows")
     if any(p.is_symlink() for p in (wine, prefix, installer, launcher, loader, managed)):
@@ -151,6 +237,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
         "installer_child_exit": "NOT_VERIFIED",
         "inner_msi": empty_msi(),
         "wine_msi_errors": empty_wine_msi(),
+        "custom_action_type": empty_custom_type(),
         "msi_logging_policy": blank_logging(),
         "pre_setup_scm_restart": "NOT_REQUESTED",
         "reboot": "NOT_RUN",
@@ -209,6 +296,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
         report["status"] = "BLOCKED_WIN32_SELFTEST"
         return report
     windows_path = windows_media_path(wine, prefix, installer)
+    setup_runner = _run_traced if enable_custom_action_type else _run
     if enable_verbose_msi:
         action = enable_msi_logging(wine, prefix)
         report["msi_logging_policy"]["activation"] = action
@@ -217,13 +305,13 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
             report["status"] = "BLOCKED_MSI_LOGGING"
             return report
         try:
-            installed = _run(wine, prefix, launcher, [windows_path],
-                             setup=True, timeout=min(timeout + 40, 390))
+            installed = setup_runner(wine, prefix, launcher, [windows_path],
+                                     setup=True, timeout=min(timeout + 40, 390))
         finally:
             report["msi_logging_policy"]["restoration"] = restore_msi_logging(wine, prefix, action)
     else:
-        installed = _run(wine, prefix, launcher, [windows_path],
-                         setup=True, timeout=min(timeout + 40, 390))
+        installed = setup_runner(wine, prefix, launcher, [windows_path],
+                                 setup=True, timeout=min(timeout + 40, 390))
     report["installer_status"] = installed["status"]
     report["installer_exit"] = installed["category"]
     report["installer_exit_hex"] = installed["exit_hex"]
@@ -234,6 +322,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
     # Raw logs NEVER leave this marked disposable prefix.
     report["inner_msi"] = scan_inner_msi(prefix)
     report["wine_msi_errors"] = installed.get("wine_msi_errors", empty_wine_msi())
+    report["custom_action_type"] = installed.get("custom_action_type", empty_custom_type())
     if installed["status"] == "EXIT_CAPTURED" and installed["category"] == "REBOOT_REQUIRED":
         report["reboot"] = wineboot_restart(wine, prefix)
     else:
@@ -270,7 +359,7 @@ def validate(r: dict) -> bool:
                        "mono", "selftest", "installer_status", "installer_exit",
                        "installer_exit_hex", "installer_child_seen",
                        "installer_child_lifecycle", "installer_child_exit", "inner_msi",
-                       "wine_msi_errors", "msi_logging_policy",
+                       "wine_msi_errors", "custom_action_type", "msi_logging_policy",
                        "pre_setup_scm_restart", "reboot", "clr64_before", "clr64_after",
                        "clr32_before", "clr32_after", "mscorlib64_after",
                        "native_loader", "runtime_family", "managed_functionality",
@@ -287,6 +376,7 @@ def validate(r: dict) -> bool:
         and r["installer_child_exit"] in EXIT_VALUES
         and validate_msi(r["inner_msi"])
         and validate_wine_msi(r["wine_msi_errors"])
+        and validate_custom_type(r["custom_action_type"])
         and validate_logging(r["msi_logging_policy"])
         and r["pre_setup_scm_restart"] in {
             "NOT_REQUESTED", "COMPLETED", "TIMED_OUT", "START_FAILED", "EXIT_NONZERO"
@@ -328,6 +418,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--agree-disposable-prefix", action="store_true", required=True)
     p.add_argument("--experiment-enable-verbose-msi", action="store_true")
     p.add_argument("--experiment-restart-after-mono", action="store_true")
+    p.add_argument("--experiment-trace-custom-action-type", action="store_true")
     args = p.parse_args(argv)
     if not 60 <= args.timeout <= 360:
         p.error("Invalid bounded runtime")
@@ -340,7 +431,8 @@ def main(argv: list[str] | None = None) -> int:
         report = inspect(args.wine, args.prefix, args.installer, args.launcher,
                          args.loader, args.managed, args.timeout,
                          enable_verbose_msi=args.experiment_enable_verbose_msi,
-                         refresh_scm_after_mono=args.experiment_restart_after_mono)
+                         refresh_scm_after_mono=args.experiment_restart_after_mono,
+                         enable_custom_action_type=args.experiment_trace_custom_action_type)
         if not validate(report):
             raise ValueError("Privacy-safe report invalid")
         args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -361,6 +453,9 @@ def main(argv: list[str] | None = None) -> int:
                 "first_failed_action", "service_action_failures",
                 "nonstandard_name_hint"):
         print("Wine MSI narrow error channel", key, report["wine_msi_errors"][key])
+    for key in ("status", "family", "base_type", "execution", "impersonation",
+                "asynchronous", "ts_aware"):
+        print("Microsoft MSI private action type", key, report["custom_action_type"][key])
     for key in ("activation", "restoration"):
         print("Microsoft MSI verbose logging policy", key, report["msi_logging_policy"][key])
     return 0
