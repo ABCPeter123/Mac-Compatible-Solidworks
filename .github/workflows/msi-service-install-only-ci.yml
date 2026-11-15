@@ -8,6 +8,9 @@ on:
       - 'probes/win_service_smoke.c'
       - 'scripts/msi_service_action_trial.py'
       - 'tests/test_msi_service_action_trial.py'
+      - 'scripts/msi_service_registry_observation.py'
+      - 'tests/test_msi_service_registry_observation.py'
+      - 'docs/MSI_SERVICE_REGISTRY_OBSERVATION.md'
       - 'docs/MSI_SERVICE_INSTALL_ONLY.md'
   workflow_dispatch:
 
@@ -28,6 +31,8 @@ jobs:
         shell: pwsh
         run: |
           python -m unittest discover -s tests -p 'test_msi_service_action_trial.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'Original service MSI regression' }
+          python -m unittest discover -s tests -p 'test_msi_service_registry_observation.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Unsafe MSI transaction test gate" }
       - name: Compile original x64 SCM service and MSI using MSVC and pinned WiX 5
         shell: pwsh
@@ -125,6 +130,39 @@ jobs:
             --exe build/service_smoke.exe \
             --output build/msi-service-action.json \
             --timeout 150 --agree-disposable-prefix
+      - name: Read-only independent service registry query after original MSI installation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p 'test_msi_service_registry_observation.py' -v
+          python3 -m scripts.msi_service_registry_observation \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/self-msi-prefix" \
+            --prior build/msi-service-action.json \
+            --output build/msi-service-registry-vs-scm.json \
+            --agree-disposable-prefix
+      - name: Report only fixed service registry and SCM comparison categories
+        shell: bash
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.msi_service_registry_observation import validate
+          path = Path("build/msi-service-registry-vs-scm.json")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("## Independent registry versus SCM service visibility\n\n")
+              if not path.is_file():
+                  f.write("Registry/SCM comparison not measured.\n")
+              else:
+                  data = json.loads(path.read_text())
+                  if not validate(data):
+                      raise ValueError("Invalid independent service registry status")
+                  for field in ("service_registry", "independent_scm", "difference",
+                                "installer_status", "file_status",
+                                "native_dotnet_compatibility"):
+                      f.write(f"{field}: **{data[field]}**\n\n")
+          PY
       - name: Summarize only fixed self-authored MSI outcomes
         if: always()
         shell: bash
@@ -152,7 +190,9 @@ jobs:
         if: always()
         with:
           name: macos-original-msi-service-status-only
-          path: build/msi-service-action.json
+          path: |
+            build/msi-service-action.json
+            build/msi-service-registry-vs-scm.json
           if-no-files-found: warn
           retention-days: 7
       - name: Require actual bounded MSI attempt and prohibit false compatibility
@@ -164,6 +204,12 @@ jobs:
           from scripts.msi_service_action_trial import validate
           report = json.loads(Path("build/msi-service-action.json").read_text())
           assert validate(report)
+          from scripts.msi_service_registry_observation import validate as validate_registration
+          other = json.loads(Path("build/msi-service-registry-vs-scm.json").read_text())
+          assert validate_registration(other)
+          assert other["installer_status"] == report["msi_process"]
+          assert other["independent_scm"] == report["service_after"]
+          assert other["file_status"] == report["binary_after"]
           assert report["status"] == "MEASURED"
           assert report["service_before"] == "ABSENT"
           assert report["winver"] == "APPLIED"
