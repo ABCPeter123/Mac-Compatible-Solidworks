@@ -57,16 +57,23 @@ class OriginalMumTests(TestCase):
             self.assertEqual(r["mum_with_update"], 1)
             self.assertEqual(r["mum_with_dependency"], 1)
             self.assertFalse(r["genuine_servicing_performed"])
+            self.assertEqual(r["operation_preflight"]["parsed"], 1)
+            self.assertEqual(r["operation_preflight"]["mixed_arch"], 1)
+            self.assertEqual(r["operation_preflight"]["updates"], 1)
+            self.assertEqual(r["operation_preflight"]["root_amd64_updates"], 1)
+            self.assertEqual(r["operation_preflight"]["root_amd64_unsupported"], 0)
             self.assertNotIn("SECRET", str(r))
 
     def test_distinct_x86_and_x64_cabs_are_aggregated(self):
         x86 = sem.blank("PARSED")
         x86["mums_seen"] = x86["mums_parsed"] = 1
+        x86["operation_preflight"].update(documents=1, parsed=1, other_arch=1, root_x86=1)
         x86["mum_with_update"] = 1
         x86["tags"]["assemblyIdentity"] = 2
         x86["architectures"]["x86"] = 2
         amd64 = sem.blank("PARSED")
         amd64["mums_seen"] = amd64["mums_parsed"] = 1
+        amd64["operation_preflight"].update(documents=1, parsed=1, amd64_only=1, root_amd64=1)
         amd64["mum_with_update"] = 1
         amd64["tags"]["assemblyIdentity"] = 3
         amd64["architectures"]["amd64"] = 3
@@ -76,6 +83,7 @@ class OriginalMumTests(TestCase):
         self.assertEqual(both["mums_seen"], 2)
         self.assertEqual(both["architectures"]["amd64"], 3)
         self.assertEqual(both["architectures"]["x86"], 2)
+        self.assertEqual(both["operation_preflight"]["parsed"], 2)
         self.assertFalse(both["genuine_servicing_performed"])
         one_partial = sem.combine([x86, sem.blank("EXTRACTION_FAILED")])
         self.assertEqual(one_partial["status"], "PARTIAL")

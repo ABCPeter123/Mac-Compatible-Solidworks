@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import xml.etree.ElementTree as ET
+from scripts.netfx481_cbs_operation_preflight import preflight, summarize_many
 
 TAGS = ("assembly", "assemblyIdentity", "package", "update", "parent",
         "dependency", "file", "registryKeys", "registryKey", "registryValue",
@@ -33,6 +34,7 @@ def blank(status: str = "NOT_RUN") -> dict:
         "mum_with_dependency": 0,
         "tags": {key: 0 for key in TAGS},
         "architectures": {key: 0 for key in ARCH},
+        "operation_preflight": summarize_many([]),
         "genuine_servicing_performed": False,
     }
 
@@ -41,6 +43,26 @@ def valid(r: object) -> bool:
     if type(r) is not dict or set(r) != set(blank()):
         return False
     if r["status"] not in STATUSES or r["genuine_servicing_performed"] is not False:
+        return False
+    ops = r["operation_preflight"]
+    template = summarize_many([])
+    if (type(ops) is not dict or set(ops) != set(template)
+            or ops["safe_to_apply"] is not False
+            or any(type(v) is not int or v < 0 or v > MAX_MUMS * MAX_ELEMENTS
+                   for k, v in ops.items() if k != "safe_to_apply")
+            or ops["parsed"] + ops["invalid"] != ops["documents"]
+            or ops["documents"] != r["mums_parsed"]
+            or ops["amd64_only"] + ops["mixed_arch"] + ops["other_arch"] != ops["parsed"]
+            or sum(ops["root_" + x] for x in ("amd64", "x86", "arm64", "neutral", "unknown")) != ops["parsed"]
+            or ops["unsupported_operations"] != sum(ops[k] for k in
+                ("installer_assembly", "custom_information", "security_descriptor",
+                 "other_unsupported"))
+            or any(ops[target] > ops[source] for target, source in (
+                ("root_amd64_updates", "updates"),
+                ("root_amd64_parents", "parents"),
+                ("root_amd64_dependencies", "dependencies"),
+                ("root_amd64_unsupported", "unsupported_operations"),
+            ))):
         return False
     for key in ("mums_seen", "mums_parsed", "mum_with_update",
                 "mum_with_package", "mum_with_dependency"):
@@ -140,7 +162,35 @@ def inspect_cab_mums(sevenzip: Path, archive: Path, destination: Path) -> dict:
                 if parsed is None:
                     incomplete = True
                     continue
+                operation = preflight(data)
+                if operation["status"] != "PARSED":
+                    incomplete = True
+                    continue
                 result["mums_parsed"] += 1
+                op = result["operation_preflight"]
+                op["documents"] += 1
+                op["parsed"] += 1
+                root_arch = operation["root_identity_arch"]
+                op["root_" + root_arch if root_arch in ("amd64", "x86", "arm64", "neutral") else "root_unknown"] += 1
+                if operation["target_arch"] == "amd64":
+                    op["amd64_only"] += 1
+                elif operation["target_arch"] == "MIXED":
+                    op["mixed_arch"] += 1
+                else:
+                    op["other_arch"] += 1
+                for key in ("updates", "parents", "dependencies", "files",
+                            "registry_values", "unsupported_operations",
+                            "installer_assembly", "custom_information",
+                            "security_descriptor", "other_unsupported"):
+                    op[key] += operation[key]
+                if root_arch == "amd64":
+                    for source, target in (
+                        ("updates", "root_amd64_updates"),
+                        ("parents", "root_amd64_parents"),
+                        ("dependencies", "root_amd64_dependencies"),
+                        ("unsupported_operations", "root_amd64_unsupported"),
+                    ):
+                        op[target] += operation[source]
                 for key in TAGS:
                     result["tags"][key] = min(MAX_ELEMENTS,
                                               result["tags"][key] + parsed["tags"][key])
@@ -178,6 +228,9 @@ def combine(reports: list[dict]) -> dict:
         for field in ("mums_seen", "mums_parsed", "mum_with_update",
                       "mum_with_package", "mum_with_dependency"):
             result[field] += report[field]
+        for key, value in report["operation_preflight"].items():
+            if key != "safe_to_apply":
+                result["operation_preflight"][key] += value
         for key in TAGS:
             result["tags"][key] += report["tags"][key]
         for key in ARCH:
