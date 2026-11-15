@@ -121,19 +121,19 @@ class SCMHolderTests(unittest.TestCase):
 
     def test_protocol_failures_are_diagnostic_only(self):
         base = (
-            b"SWCOMPAT_SERVICE_PHASE=status\\n"
-            b"SWCOMPAT_SERVICE_ERROR=1060\\n"
-            b"SWCOMPAT_SERVICE_STATE=0\\n"
-            b"SWCOMPAT_SERVICE_CHECK=FAIL\\n"
+            b"SWCOMPAT_SERVICE_PHASE=status\n"
+            b"SWCOMPAT_SERVICE_ERROR=1060\n"
+            b"SWCOMPAT_SERVICE_STATE=0\n"
+            b"SWCOMPAT_SERVICE_CHECK=FAIL\n"
         )
         self.assertEqual(trial.protocol_detail(base, 1, "status"), "VALID")
-        self.assertEqual(trial.protocol_detail(base + b"SWCOMPAT_SERVICE_CHECK=FAIL\\n", 1, "status"),
+        self.assertEqual(trial.protocol_detail(base + b"SWCOMPAT_SERVICE_CHECK=FAIL\n", 1, "status"),
                          "DUPLICATE_MARKER")
-        self.assertEqual(trial.protocol_detail(base.replace(b"SWCOMPAT_SERVICE_STATE=0\\n", b""), 1, "status"),
+        self.assertEqual(trial.protocol_detail(base.replace(b"SWCOMPAT_SERVICE_STATE=0\n", b""), 1, "status"),
                          "MISSING_MARKER")
         self.assertEqual(trial.protocol_detail(base.replace(b"PHASE=status", b"PHASE=install"), 1, "status"),
                          "WRONG_PHASE")
-        self.assertEqual(trial.protocol_detail(base + b"SWCOMPAT_SERVICE_BAD=with spaces\\n", 1, "status"),
+        self.assertEqual(trial.protocol_detail(base + b"SWCOMPAT_SERVICE_BAD=with spaces\n", 1, "status"),
                          "INVALID_MARKER")
         self.assertEqual(trial.protocol_detail(base + bytes([0]), 1, "status"), "NUL_BYTE")
         self.assertEqual(trial.protocol_detail(base, 7, "status"), "BAD_EXIT")
