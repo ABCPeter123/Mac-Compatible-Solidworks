@@ -38,6 +38,7 @@ on:
       - 'docs/NETFX40_FIRST_SERVICE_ACTION.md'
       - 'probes/netfx481_win32_launch.c'
       - 'tests/test_netfx40_legacy.py'
+      - 'tests/test_netfx40_launcher_timeout.py'
       - 'scripts/netfx481_trial.py'
       - 'scripts/wine_mono_removal.py'
       - 'scripts/netfx481_clr_load.py'
@@ -66,6 +67,7 @@ jobs:
       - name: Run absolute media and fixture path regression tests
         run: |
           python -m unittest discover -s tests -p 'test_netfx40_legacy.py' -v
+          python -m unittest discover -s tests -p 'test_netfx40_launcher_timeout.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_prerequisite.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_restart.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msi_evidence.py' -v
@@ -91,6 +93,8 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_netfx40_legacy.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Original Microsoft 4.0 safety tests failed" }
+          python -m unittest discover -s tests -p 'test_netfx40_launcher_timeout.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Original .NET 4.0 Win32 setup wait regression failed" }
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_prerequisite.py' -v
           if ($LASTEXITCODE -ne 0) { throw "msxml3 workaround tests failed" }
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_restart.py' -v
@@ -460,6 +464,7 @@ jobs:
             --launcher build/netfx40_win32_launch.exe \
             --output build/netfx40-msxml3-runtime.json \
             --timeout 330 --agree-disposable-prefix \
+            --experiment-extended-setup-wait \
             --experiment-enable-verbose-msi \
             --experiment-restart-after-mono \
             --experiment-trace-custom-action-type \

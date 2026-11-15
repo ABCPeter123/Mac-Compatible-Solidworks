@@ -15,6 +15,11 @@
 #include <stdio.h>
 
 #define WAIT_LIMIT_MS 210000u
+#if defined(SWCOMPAT_NETFX40)
+/* Only the opt-in msxml3 experiment may extend original setup monitoring.
+ * The other .NET harnesses and the .NET 4.0 baseline keep 210 seconds. */
+#define NETFX40_EXTENDED_WAIT_MS 330000u
+#endif
 #define COMMAND_LIMIT 8192u
 #define MAX_CHILDREN 12
 #define PREFIX L"SWCOMPAT_WIN32_SETUP"
@@ -155,11 +160,20 @@ int wmain(int argc, wchar_t **argv) {
     int child_count = 0, child_overflow = 0;
     int observed = 0, census_valid = 0;
     int selftest = (argc == 2 && wcscmp(argv[1], L"--selftest-3010") == 0);
+    DWORD wait_limit = WAIT_LIMIT_MS;
+#if defined(SWCOMPAT_NETFX40)
+    int extended_wait = (argc == 3 &&
+        wcscmp(argv[2], L"--extended-wait-330") == 0);
+    if (extended_wait)
+        wait_limit = NETFX40_EXTENDED_WAIT_MS;
+#else
+    int extended_wait = 0;
+#endif
     const char *child_status;
     const char *child_lifecycle = "UNKNOWN";
     const char *child_exit = "NOT_VERIFIED";
 
-    if (!selftest && (argc != 2 || !permitted_media(argv[1]))) {
+    if (!selftest && ((argc != 2 && !extended_wait) || !permitted_media(argv[1]))) {
         report("INVALID_ARGUMENT", 0xFFFFFFFFu, "UNKNOWN", "UNKNOWN", "NOT_VERIFIED");
         return 1;
     }
@@ -206,7 +220,7 @@ int wmain(int argc, wchar_t **argv) {
     /* Best-effort direct-child polling during the bootstrapper lifetime. */
     {
         DWORD elapsed = 0;
-        while (elapsed < WAIT_LIMIT_MS) {
+        while (elapsed < wait_limit) {
             result = WaitForSingleObject(pi.hProcess, 100);
             if (result != WAIT_TIMEOUT)
                 break;

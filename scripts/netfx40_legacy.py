@@ -240,9 +240,12 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
             enable_verbose_msi: bool = False, refresh_scm_after_mono: bool = False,
             enable_custom_action_type: bool = False,
             enable_msi_inventory: bool = False,
-            enable_private_action: bool = False) -> dict:
+            enable_private_action: bool = False,
+            enable_extended_setup_wait: bool = False) -> dict:
     if os.name == "nt":
         raise ValueError("Wine experiment cannot modify native Windows")
+    if enable_extended_setup_wait and timeout < 330:
+        raise ValueError("Extended Win32 wait needs matching outer timeout")
     if any(p.is_symlink() for p in (wine, prefix, installer, launcher, loader, managed)):
         raise ValueError("Refuse linked experiment media")
     # Prevent relative "build/build/foo.exe" errors from changing cwd.
@@ -328,6 +331,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
         report["status"] = "BLOCKED_WIN32_SELFTEST"
         return report
     windows_path = windows_media_path(wine, prefix, installer)
+    setup_args = [windows_path] + (["--extended-wait-330"]
+                                   if enable_extended_setup_wait else [])
     setup_runner = (partial(_run_traced, store_private=enable_private_action)
                     if enable_custom_action_type else _run)
     if enable_verbose_msi:
@@ -338,12 +343,12 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
             report["status"] = "BLOCKED_MSI_LOGGING"
             return report
         try:
-            installed = setup_runner(wine, prefix, launcher, [windows_path],
+            installed = setup_runner(wine, prefix, launcher, setup_args,
                                      setup=True, timeout=min(timeout + 40, 390))
         finally:
             report["msi_logging_policy"]["restoration"] = restore_msi_logging(wine, prefix, action)
     else:
-        installed = setup_runner(wine, prefix, launcher, [windows_path],
+        installed = setup_runner(wine, prefix, launcher, setup_args,
                                  setup=True, timeout=min(timeout + 40, 390))
     report["installer_status"] = installed["status"]
     report["installer_exit"] = installed["category"]
@@ -459,6 +464,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--experiment-trace-custom-action-type", action="store_true")
     p.add_argument("--experiment-inventory-retained-msi", action="store_true")
     p.add_argument("--experiment-private-original-action", action="store_true")
+    p.add_argument("--experiment-extended-setup-wait", action="store_true")
     args = p.parse_args(argv)
     if not 60 <= args.timeout <= 360:
         p.error("Invalid bounded runtime")
@@ -474,7 +480,8 @@ def main(argv: list[str] | None = None) -> int:
                          refresh_scm_after_mono=args.experiment_restart_after_mono,
                          enable_custom_action_type=args.experiment_trace_custom_action_type,
                          enable_msi_inventory=args.experiment_inventory_retained_msi,
-                         enable_private_action=args.experiment_private_original_action)
+                         enable_private_action=args.experiment_private_original_action,
+                         enable_extended_setup_wait=args.experiment_extended_setup_wait)
         if not validate(report):
             raise ValueError("Privacy-safe report invalid")
         args.output.parent.mkdir(parents=True, exist_ok=True)
