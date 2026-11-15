@@ -7,9 +7,13 @@ on:
       - 'probes/msi_custom_action_type_control.wxs'
       - 'probes/msi_custom_action_fail.c'
       - 'scripts/msi_custom_action_type_control.py'
+      - 'probes/msi_custom_action_table_probe.c'
+      - 'scripts/msi_custom_action_table_type.py'
+      - 'tests/test_msi_custom_action_table_type.py'
       - 'scripts/netfx40_msi_custom_type.py'
       - 'tests/test_msi_custom_action_type_control.py'
       - 'docs/MSI_CUSTOM_ACTION_TRACE_CONTROL.md'
+      - 'docs/MSI_CUSTOM_ACTION_TABLE_LOOKUP.md'
   workflow_dispatch:
 
 permissions:
@@ -30,6 +34,8 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_msi_custom_action_type_control.py' -v
           if ($LASTEXITCODE -ne 0) { throw 'Unsafe self-authored MSI differential' }
+          python -m unittest discover -s tests -p 'test_msi_custom_action_table_type.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'Unsafe MSI Action Type lookup' }
       - name: Compile original x64 DLL, WiX 5 MSI, and exact hash
         shell: pwsh
         run: |
@@ -44,10 +50,12 @@ jobs:
           if (!(Test-Path $vcvars)) { throw 'MSVC environment absent' }
           $lines = @('@echo off', ('call "' + $vcvars + '"'),
             'cl /nologo /W4 /O2 /LD /Fe:build\msi_custom_action_fail.dll probes\msi_custom_action_fail.c',
+            'if errorlevel 1 exit /b %errorlevel%',
+            'cl /nologo /W4 /O2 /DUNICODE /D_UNICODE /Fe:build\msi_custom_action_table_probe.exe probes\msi_custom_action_table_probe.c msi.lib',
             'exit /b %errorlevel%')
           [System.IO.File]::WriteAllLines((Join-Path (Get-Location) 'build\compile-custom-control.cmd'), $lines, [System.Text.Encoding]::ASCII)
           & cmd.exe /d /c build\compile-custom-control.cmd
-          if ($LASTEXITCODE -ne 0 -or !(Test-Path build/msi_custom_action_fail.dll)) { throw 'Original harmless DLL compile failed' }
+          if ($LASTEXITCODE -ne 0 -or !(Test-Path build/msi_custom_action_fail.dll) -or !(Test-Path build/msi_custom_action_table_probe.exe)) { throw 'Original harmless DLL / MSI table probe compile failed' }
           dotnet tool install wix --tool-path build/wix --version 5.0.1
           if ($LASTEXITCODE -ne 0) { throw 'WiX 5 setup failed' }
           & build/wix/wix.exe build probes/msi_custom_action_type_control.wxs -arch x64 -o build/swcompat_custom_action_type_control.msi
@@ -61,6 +69,10 @@ jobs:
           $msi = (Resolve-Path build/swcompat_custom_action_type_control.msi).Path
           $marker = Join-Path $env:ProgramFiles 'SWCompatMsiCustomActionControl\msi_custom_action_control.txt'
           if (Test-Path $marker) { throw 'Preexisting control marker' }
+          $metadata = 'ServiceTypeControlSentinel' | & build/msi_custom_action_table_probe.exe $msi
+          if ($LASTEXITCODE -ne 0 -or $metadata -notcontains 'SWCOMPAT_CA_TABLE_STATUS=ACTION_FOUND' -or $metadata -notcontains 'SWCOMPAT_CA_TABLE_TYPE=3073') {
+            throw 'Windows read-only MSI CustomAction Type metadata mismatch'
+          }
           $p = Start-Process msiexec.exe -ArgumentList @('/i', ('"' + $msi + '"'), '/qn', '/norestart') -PassThru -Wait -NoNewWindow
           if ($p.ExitCode -ne 1603) { throw "Expected native Windows MSI 1603 from deliberate custom action, got $($p.ExitCode)" }
           if (Test-Path $marker) { throw 'Expected MSI rollback failed to remove marker' }
@@ -71,6 +83,7 @@ jobs:
           path: |
             build/swcompat_custom_action_type_control.msi
             build/msi-custom-control.sha256
+            build/msi_custom_action_table_probe.exe
           retention-days: 1
 
   apple-silicon-wine-control:
@@ -106,6 +119,27 @@ jobs:
           set -euo pipefail
           python3 -m swcompat --prefix "$RUNNER_TEMP/msi-custom-control-prefix" --logs-dir "$RUNNER_TEMP/msi-custom-control-logs" init
           touch "$RUNNER_TEMP/msi-custom-control-prefix/.swcompat-netfx481-disposable"
+      - name: Inspect native Windows MSI CustomAction table metadata under Wine
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.msi_custom_action_table_type import inspect, validate
+          r = inspect(Path(os.environ["SWCOMPAT_WINE"]),
+                      Path(os.environ["RUNNER_TEMP"]) / "msi-custom-control-prefix",
+                      Path("build/msi_custom_action_table_probe.exe"),
+                      Path("build/swcompat_custom_action_type_control.msi"))
+          assert validate(r)
+          Path("build/msi-custom-table-control.json").write_text(
+              json.dumps(r, sort_keys=True), encoding="utf-8")
+          assert r["status"] == "ACTION_FOUND"
+          assert r["base_type"] == 1
+          assert r["family"] == "DLL_BINARY"
+          print("MSI table probe status:", r["status"])
+          print("MSI table probe family:", r["family"])
+          PY
       - name: Run original self-authored MSI and inspect strict Wine action type
         shell: bash
         run: |
@@ -138,13 +172,23 @@ jobs:
                   for field in ("status", "family", "base_type", "execution",
                                 "impersonation", "asynchronous", "capture_reason"):
                       f.write(f"custom_action_{field}: **{r['custom_action_type'][field]}**\n\n")
+                  table_report = Path("build/msi-custom-table-control.json")
+                  if table_report.is_file():
+                      m = json.loads(table_report.read_text())
+                      from scripts.msi_custom_action_table_type import validate as validate_table
+                      if not validate_table(m):
+                          raise ValueError("Unsafe CustomAction table metadata result")
+                      f.write(f"msi_table_status: **{m['status']}**\n\n")
+                      f.write(f"msi_table_family: **{m['family']}**\n\n")
                   f.write("native_microsoft_clr: **False**\n\n")
           PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: self-authored-msi-action-type-status-only
-          path: build/msi-custom-action-control.json
+          path: |
+            build/msi-custom-action-control.json
+            build/msi-custom-table-control.json
           if-no-files-found: warn
           retention-days: 7
       - name: Require real self-authored MSI failure and Wine DLL type match
