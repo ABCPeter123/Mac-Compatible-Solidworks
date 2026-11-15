@@ -79,10 +79,63 @@ jobs:
           Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "Original executable CreateProcess RT_MANIFEST: **$status**"
           Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "This is the signed *outer* executable manifest only. Nested original Setup.exe processes and their Wine OS-version API results remain unmeasured."
           Write-Output "Original .NET 4.8.1 manifest Windows 10 category: $status"
+      - name: Read embedded original executable manifests without executing setup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $seven = Join-Path $env:ProgramFiles "7-Zip\7z.exe"
+          if (!(Test-Path $seven)) { throw "Private 7-Zip archive reader unavailable" }
+          $original = Join-Path (Resolve-Path build) "NDP481-x86-x64-AllOS-ENU.exe"
+          $private = Join-Path $env:RUNNER_TEMP "swcompat-original-481-nested-exe-private"
+          New-Item -ItemType Directory -Force $private | Out-Null
+          try {
+            & $seven e -y $original '-ir!*.exe' "-o$private" > $null 2>$null
+            if ($LASTEXITCODE -ne 0) { throw "Original Microsoft executable archive extraction failed" }
+            $children = @(Get-ChildItem -LiteralPath $private -Filter "*.exe" -File)
+            if ($children.Count -lt 1 -or $children.Count -gt 8) {
+              throw "Unexpected extracted original executable count"
+            }
+            $allowed = @("WIN10_SUPPORTED_OS_DECLARED", "WIN10_SUPPORTED_OS_ABSENT",
+                         "CREATEPROCESS_MANIFEST_ABSENT", "MANIFEST_UNREADABLE")
+            $counts = @{}
+            foreach ($status in $allowed) { $counts[$status] = 0 }
+            foreach ($child in $children) {
+              if ($child.Length -lt 4096 -or $child.Length -gt 134217728) {
+                throw "Original executable exceeded read-only metadata size bound"
+              }
+              $lines = & build\netfx481_original_manifest.exe $child.FullName
+              if ($LASTEXITCODE -ne 0) { throw "Read-only embedded manifest inspection failed" }
+              $matches = @($lines | Where-Object { $_ -match '^SWCOMPAT_ORIGINAL_MANIFEST_STATUS=' })
+              if ($matches.Count -ne 1) { throw "Embedded manifest category not unique" }
+              $status = $matches[0].Substring("SWCOMPAT_ORIGINAL_MANIFEST_STATUS=".Length)
+              if ($status -notin $allowed) { throw "Unknown embedded manifest status" }
+              $counts[$status] += 1
+            }
+            $result = [ordered]@{
+              scope = "AUTHENTIC_ORIGINAL_NETFX481_EMBEDDED_EXECUTABLE_MANIFESTS"
+              authenticated_outer_microsoft = $true
+              executables_classified = $children.Count
+              categories = $counts
+            }
+            $result | ConvertTo-Json -Depth 4 -Compress |
+              Set-Content -LiteralPath build/netfx481-original-embedded-manifests.json -Encoding utf8
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "## Executables embedded in original signed 4.8.1 bootstrapper"
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "Read-only embedded EXEs classified: **$($children.Count)**"
+            foreach ($status in $allowed) {
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ("{0}: **{1}**" -f $status, $counts[$status])
+            }
+            Write-Output "Embedded original Microsoft EXE manifest count $($children.Count)"
+            foreach ($status in $allowed) { Write-Output ("Embedded original Microsoft EXE status {0} {1}" -f $status, $counts[$status]) }
+          } finally {
+            Remove-Item -LiteralPath $private -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $original -Force -ErrorAction SilentlyContinue
+          }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: authentic-netfx481-5100-original-manifest-categories
-          path: build/netfx481-original-manifest-status.json
+          path: |
+            build/netfx481-original-manifest-status.json
+            build/netfx481-original-embedded-manifests.json
           if-no-files-found: warn
           retention-days: 7
