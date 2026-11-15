@@ -10,6 +10,9 @@ on:
       - 'tests/test_msi_service_action_trial.py'
       - 'scripts/msi_service_registry_observation.py'
       - 'tests/test_msi_service_registry_observation.py'
+      - 'scripts/msi_service_restart_refresh.py'
+      - 'tests/test_msi_service_restart_refresh.py'
+      - 'docs/MSI_SERVICE_WINE_RESTART.md'
       - 'docs/MSI_SERVICE_REGISTRY_OBSERVATION.md'
       - 'docs/MSI_SERVICE_INSTALL_ONLY.md'
   workflow_dispatch:
@@ -33,6 +36,8 @@ jobs:
           python -m unittest discover -s tests -p 'test_msi_service_action_trial.py' -v
           if ($LASTEXITCODE -ne 0) { throw 'Original service MSI regression' }
           python -m unittest discover -s tests -p 'test_msi_service_registry_observation.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'Service registry test failed' }
+          python -m unittest discover -s tests -p 'test_msi_service_restart_refresh.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Unsafe MSI transaction test gate" }
       - name: Compile original x64 SCM service and MSI using MSVC and pinned WiX 5
         shell: pwsh
@@ -141,6 +146,40 @@ jobs:
             --prior build/msi-service-action.json \
             --output build/msi-service-registry-vs-scm.json \
             --agree-disposable-prefix
+      - name: Retry service visibility only via a bounded disposable Wine restart
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p 'test_msi_service_restart_refresh.py' -v
+          python3 -m scripts.msi_service_restart_refresh \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/self-msi-prefix" \
+            --exe build/service_smoke.exe \
+            --prior build/msi-service-registry-vs-scm.json \
+            --output build/msi-service-restart.json \
+            --agree-disposable-prefix
+      - name: Report finite pre/post-restart service visibility evidence
+        shell: bash
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.msi_service_restart_refresh import validate
+          path = Path("build/msi-service-restart.json")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("## Wine service registry to SCM visibility after isolated restart\n\n")
+              if not path.is_file():
+                  f.write("No verified service restart comparison.\n")
+              else:
+                  report = json.loads(path.read_text())
+                  if not validate(report):
+                      raise ValueError("Unsafe service restart report")
+                  for field in ("trial", "restart", "registry_before", "scm_before",
+                                "registry_after", "scm_after", "service_visibility_recovered",
+                                "native_microsoft_clr"):
+                      f.write(f"{field}: **{report[field]}**\n\n")
+          PY
       - name: Report only fixed service registry and SCM comparison categories
         shell: bash
         if: always()
@@ -193,6 +232,7 @@ jobs:
           path: |
             build/msi-service-action.json
             build/msi-service-registry-vs-scm.json
+            build/msi-service-restart.json
           if-no-files-found: warn
           retention-days: 7
       - name: Require actual bounded MSI attempt and prohibit false compatibility
@@ -210,6 +250,13 @@ jobs:
           assert other["installer_status"] == report["msi_process"]
           assert other["independent_scm"] == report["service_after"]
           assert other["file_status"] == report["binary_after"]
+          from scripts.msi_service_restart_refresh import validate as validate_restart
+          restart = json.loads(Path("build/msi-service-restart.json").read_text())
+          assert validate_restart(restart)
+          assert restart["trial"] == "MEASURED"
+          assert restart["registry_before"] == "PRESENT"
+          assert restart["scm_before"] == "ABSENT"
+          assert restart["native_microsoft_clr"] is False
           assert report["status"] == "MEASURED"
           assert report["service_before"] == "ABSENT"
           assert report["winver"] == "APPLIED"
