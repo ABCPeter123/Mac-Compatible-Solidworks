@@ -8,6 +8,7 @@ vendor executable, setup text, path or Wine output enters the public report.
 from __future__ import annotations
 
 import argparse
+from functools import partial
 import hashlib
 import json
 import os
@@ -129,7 +130,8 @@ def _run(wine: Path, prefix: Path, fixture: Path, arguments: list[str],
 
 
 def _run_traced(wine: Path, prefix: Path, fixture: Path,
-                arguments: list[str], *, setup: bool = True, timeout: int = 75) -> dict:
+                arguments: list[str], *, setup: bool = True, timeout: int = 75,
+                store_private: bool = False) -> dict:
     """Stream private Wine MSI debug output; never spool raw trace to disk.
 
     Only selected MSI err/fixme and exact custom-action type lines enter a
@@ -222,14 +224,14 @@ def _run_traced(wine: Path, prefix: Path, fixture: Path,
     result = parse_win32(raw, code)
     result["wine_msi_errors"] = errors
     result["custom_action_type"] = action_type
-    # Private only; the outer inspect() never includes this identifier in
-    # its JSON, console output or GitHub Actions artifacts.
-    raw_action = (_private_failed_action(private)
-                  if not state["overflow"] else None)
-    result["private_failed_action"] = (
-        raw_action.rsplit(b"]", 1)[-1] if raw_action and b"]" in raw_action
-        else raw_action
-    )
+    if (store_private and not state["overflow"]
+            and result["status"] == "EXIT_CAPTURED"
+            and result["category"] == "MSI_FATAL_ERROR"):
+        raw_action = _private_failed_action(private)
+        normalized = (raw_action.rsplit(b"]", 1)[-1]
+                      if raw_action and b"]" in raw_action else raw_action)
+        store_private_action(prefix, normalized)
+    # Do not return any original action string, even in an internal dict.
     return result
 
 
@@ -326,7 +328,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
         report["status"] = "BLOCKED_WIN32_SELFTEST"
         return report
     windows_path = windows_media_path(wine, prefix, installer)
-    setup_runner = _run_traced if enable_custom_action_type else _run
+    setup_runner = (partial(_run_traced, store_private=enable_private_action)
+                    if enable_custom_action_type else _run)
     if enable_verbose_msi:
         action = enable_msi_logging(wine, prefix)
         report["msi_logging_policy"]["activation"] = action
@@ -348,10 +351,6 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
     report["installer_child_seen"] = installed.get("child_seen", "NOT_VERIFIED")
     report["installer_child_lifecycle"] = installed.get("child_lifecycle", "NOT_VERIFIED")
     report["installer_child_exit"] = installed.get("child_exit", "NOT_VERIFIED")
-    if enable_private_action and enable_custom_action_type and (
-            installed["status"] == "EXIT_CAPTURED"
-            and installed["category"] == "MSI_FATAL_ERROR"):
-        store_private_action(prefix, installed.get("private_failed_action"))
     # Inspect the actual nested MSI failure before reboot can clear TEMP logs.
     # Raw logs NEVER leave this marked disposable prefix.
     report["inner_msi"] = scan_inner_msi(prefix)
