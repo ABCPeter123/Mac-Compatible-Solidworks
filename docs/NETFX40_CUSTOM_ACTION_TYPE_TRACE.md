@@ -26,3 +26,12 @@ The report adds `custom_action_type` with only allowlisted fields: `status`, `fa
 A **matching** DLL/EXE or script type identifies the correct kind of harmless Windows MSI custom-action reproduction to build. A Type 19 error action would instead suggest deliberate installer abort. A deferred no-impersonation action requires testing its execution context. `TRACE_MISSING` or `CAPTURE_TRUNCATED` means the evidence is insufficient and must not be treated as a discovered Win32 defect.
 
 **No compatibility bypass, original MSI modification, API hook, fake .NET registry value or product activation bypass is used.** A green CI job means only diagnostic completion, not a working native Microsoft CLR or SOLIDWORKS.
+
+
+## First real trace outcome and bounded refinement
+
+[Apple Silicon run 43670234342](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43670234342) authenticated and executed the original Microsoft setup, which still ended with Windows MSI 1603 and no native Microsoft CLR. The opt-in trace mode completed as a diagnostic, but its private selected trace exceeded the initial capture policy or did not fully drain before the bounded reader join. It reported `CAPTURE_TRUNCATED`, with no action Type claimed and no private logs exported.
+
+The next controlled iteration preserves the **same** signed setup, Wine Staging 11.21 and 3 MiB / 1,024-line memory ceilings, but now retains Wine `Handling custom action` events **only when the exact action name contains 'service'**. This restriction is justified by repeated original trials whose first nonstandard failing action was previously classified `SERVICE_TEXT_ONLY`. All `err:msi` and `fixme:msi` lines continue to be collected. It does not infer a service API call from that text.
+
+If capture is still incomplete, the report includes a finite `capture_reason`: `LINE_LIMIT`, `BYTE_LIMIT`, `READER_UNFINISHED`, `PROCESS_INCOMPLETE` or `UNKNOWN`. These codes distinguish trace volume from process/pipe lifecycle problems without publishing paths, raw log contents, or secret action names. An incomplete report remains `CAPTURE_TRUNCATED` with no claimed Type. The revised collector must pass original Win32 native-loader and managed-execution non-Mono gates independently.
