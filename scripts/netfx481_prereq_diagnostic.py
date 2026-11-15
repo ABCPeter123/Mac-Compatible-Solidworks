@@ -12,7 +12,8 @@ from scripts.netfx481_setup_evidence import _decode
 
 MAX_BYTES = 8 * 1024 * 1024
 OS_CLASSES = {"BELOW_WINDOWS_10", "WINDOWS_10_TOO_OLD", "WINDOWS_10_SUPPORTED",
-              "WINDOWS_11_SUPPORTED", "UNKNOWN_VERSION"}
+              "WINDOWS_11_21H2_INSTALLABLE",
+              "WINDOWS_11_22H2_PLUS_INBOX_481", "UNKNOWN_VERSION"}
 CAUSES = {
     "OS_VERSION_BLOCK", "OS_EDITION_BLOCK", "WINDOWS_SERVICING_BLOCK",
     "MISSING_UPDATE_BLOCK", "PENDING_REBOOT_BLOCK", "ADMIN_RIGHTS_BLOCK",
@@ -67,8 +68,10 @@ def _os_class(major: int, minor: int, build: int) -> str:
     if major == 10 and minor == 0:
         if 19042 <= build < 22000:
             return "WINDOWS_10_SUPPORTED"
-        if 22000 <= build < 30000:
-            return "WINDOWS_11_SUPPORTED"
+        if 22000 <= build < 22621:
+            return "WINDOWS_11_21H2_INSTALLABLE"
+        if 22621 <= build < 30000:
+            return "WINDOWS_11_22H2_PLUS_INBOX_481"
         return "WINDOWS_10_TOO_OLD"
     if major < 10:
         return "BELOW_WINDOWS_10"
