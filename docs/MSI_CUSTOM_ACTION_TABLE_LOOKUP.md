@@ -15,3 +15,10 @@ Before touching Microsoft media, validate this *separately* against the self-aut
 This probe does **not** modify a Windows Installer database, run installer actions or install Microsoft runtime files. The first iteration does not scan or redistribute proprietary Microsoft MSI internals. Once it passes on original source-authored media, a separate bounded original .NET experiment may invoke it against an original MSI **only if that original MSI file is verifiably available inside the existing marked disposable prefix**. If it has already been deleted, that result is `DATABASE_UNAVAILABLE`, not grounds to fabricate a CustomAction Type.
 
 A successful metadata lookup narrows the type of custom action; it does not establish which Win32 API failed. The native Microsoft CLR and actual SOLIDWORKS CAD remain unverified.
+
+
+## First Apple Silicon execution and stage isolation
+
+[Run 43672021668](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43672021668) passed the native Windows compilation, original MSI failure/rollback and **native read-only table query**, but its Apple Silicon metadata step stopped at `BAD_EXIT`: the Wine-launched Win32 helper returned a nonzero process code without a parseable final status. The original self-authored MSI custom-action trace itself had passed on this same Wine build in [run 43671644298](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43671644298).
+
+A `BAD_EXIT` is a helper process execution problem, not evidence that the Windows Installer CustomAction table lacks the action. The controlled follow-up uses static MSVC CRT linking and **fixed flushed stage markers** `ENTRY`, `INPUT_OK`, `DATABASE_OPEN`, `VIEW_OPEN`, `PARAMETER_SET`, `VIEW_EXECUTED` and `ROW_FETCHED` around the exact Win32 MSI APIs. The strict parser retains only the last allowlisted stage, even on a failed process, without publishing Win32 identifiers, paths or vendor data. If no `ENTRY` appears, investigate the helper's loader/execution environment; if a later stage appears, localize the corresponding Windows Installer API boundary.
