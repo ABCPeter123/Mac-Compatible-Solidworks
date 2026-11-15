@@ -31,7 +31,8 @@ static void bootstrap_mark(int argc, int output_open)
     const char *output = output_open ? "OPEN" : "UNAVAILABLE";
     char line[96];
     if (file == INVALID_HANDLE_VALUE) return;
-    WriteFile(file, "SWCOMPAT_CA_BOOT_ENTRY=YES\r\n", 27, &written, NULL);
+    WriteFile(file, "SWCOMPAT_CA_BOOT_ENTRY=YES\r\n",
+              lstrlenA("SWCOMPAT_CA_BOOT_ENTRY=YES\r\n"), &written, NULL);
     sprintf_s(line, sizeof(line), "SWCOMPAT_CA_BOOT_ARGC=%s\r\n", args);
     WriteFile(file, line, lstrlenA(line), &written, NULL);
     sprintf_s(line, sizeof(line), "SWCOMPAT_CA_BOOT_REPORT=%s\r\n", output);
