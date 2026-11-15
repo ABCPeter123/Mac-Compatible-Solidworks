@@ -1,6 +1,6 @@
-"""Bounded native-Windows-vs-Wine MSI Type 19 control, no vendor binaries.
+"""Bounded native-Windows-vs-Wine deferred MSI DLL action control, no vendor binaries.
 
-A self-authored MSI intentionally fails its Type 19 custom action. The
+A self-authored MSI intentionally fails its deferred DLL custom action. The
 independent original Microsoft .NET run returned TRACE_MISSING; this control
 determines whether the same Wine trace and Python classifier can capture an
 actual custom action. Never interpret success here as Microsoft CLR readiness.
@@ -129,7 +129,7 @@ def validate(report: dict) -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Original self-authored MSI Type 19 under Wine")
+    p = argparse.ArgumentParser(description="Original self-authored deferred MSI custom DLL under Wine")
     for name in ("wine", "prefix", "msi", "sha256", "output"):
         p.add_argument("--" + name, type=Path, required=True)
     p.add_argument("--timeout", type=int, default=120)
@@ -144,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, sort_keys=True), encoding="utf-8")
     for key in ("status", "msi_process"):
-        print("SWCOMPAT ORIGINAL MSI TYPE19", key, report[key])
+        print("SWCOMPAT ORIGINAL MSI CONTROL", key, report[key])
     for key in ("status", "family", "base_type", "execution", "capture_reason"):
         print("SWCOMPAT ORIGINAL MSI CUSTOM ACTION", key, report["custom_action_type"][key])
     return 0
