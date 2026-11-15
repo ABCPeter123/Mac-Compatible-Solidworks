@@ -35,16 +35,16 @@ static void emit(const char *line)
 static void stage(const char *phase)
 {
     char line[128];
-    wsprintfA(line, "SWCOMPAT_CA_TABLE_STAGE=%s", phase);
+    sprintf_s(line, sizeof(line), "SWCOMPAT_CA_TABLE_STAGE=%s", phase);
     emit(line);
 }
 
 static int result(const char *status, unsigned int type)
 {
     char line[128];
-    wsprintfA(line, "SWCOMPAT_CA_TABLE_STATUS=%s", status);
+    sprintf_s(line, sizeof(line), "SWCOMPAT_CA_TABLE_STATUS=%s", status);
     emit(line);
-    wsprintfA(line, "SWCOMPAT_CA_TABLE_TYPE=%u", type);
+    sprintf_s(line, sizeof(line), "SWCOMPAT_CA_TABLE_TYPE=%u", type);
     emit(line);
     if (diagnostic_file != INVALID_HANDLE_VALUE)
     {
