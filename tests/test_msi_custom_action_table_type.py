@@ -96,6 +96,30 @@ class OriginalMsiActionTableTests(unittest.TestCase):
             self.assertEqual(report["family"], "DLL_BINARY")
             self.assertFalse(report_path.exists())
 
+    def test_full_nine_stage_successful_msi_query_not_false_malformed(self):
+        stages = [
+            "ENTRY", "INPUT_OK", "MSI_DLL_LOADED", "MSI_EXPORTS_READY",
+            "DATABASE_OPEN", "VIEW_OPEN", "PARAMETER_SET",
+            "VIEW_EXECUTED", "ROW_FETCHED",
+        ]
+        raw = b"".join(
+            f"SWCOMPAT_CA_TABLE_STAGE={stage}\r\n".encode("ascii")
+            for stage in stages
+        ) + (b"SWCOMPAT_CA_TABLE_STATUS=ACTION_FOUND\r\n"
+             b"SWCOMPAT_CA_TABLE_TYPE=3073\r\n")
+        report = table.parse(raw, 0)
+        self.assertTrue(table.validate(report))
+        self.assertEqual(report, {
+            "status": "ACTION_FOUND", "base_type": 1,
+            "family": "DLL_BINARY", "stage": "ROW_FETCHED",
+        })
+        doubled = raw.replace(
+            b"SWCOMPAT_CA_TABLE_STAGE=VIEW_OPEN\r\n",
+            b"SWCOMPAT_CA_TABLE_STAGE=VIEW_OPEN\r\n" * 2,
+        )
+        self.assertEqual(table.parse(doubled, 0)["status"], "MALFORMED")
+        self.assertEqual(table.parse(doubled, 0)["stage"], "NOT_OBSERVED")
+
     def test_bootstrap_breadcrumb_parser_strict_and_erased(self):
         with TemporaryDirectory() as td:
             root = Path(td)
