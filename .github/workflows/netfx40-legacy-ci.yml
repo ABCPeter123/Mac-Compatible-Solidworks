@@ -542,6 +542,39 @@ jobs:
           python3 -m swcompat \
             --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
             --logs-dir "$RUNNER_TEMP/netfx40-msxml3-logs" set-winver win10
+      - name: Apply tested Windows 10 external manifest to unchanged Microsoft 4.8.1 media
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.netfx481_trial import verify_media
+          from scripts.netfx481_trial import validate_prefix
+          prefix = Path(__import__("os").environ["RUNNER_TEMP"]) / "netfx40-msxml3-prefix"
+          validate_prefix(prefix)
+          original = Path("build/NDP481-x86-x64-AllOS-ENU.exe")
+          digest = Path("build/netfx481.sha256")
+          manifest = Path("probes/winver_481_win10.manifest")
+          sidecar = original.with_name(original.name + ".manifest")
+          assert not original.is_symlink() and not sidecar.exists() and not sidecar.is_symlink()
+          assert not manifest.is_symlink() and manifest.is_file()
+          m = manifest.read_text(encoding="utf-8")
+          assert "8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a" in m
+          assert "<supportedOS" in m and len(m) < 2048
+          assert verify_media(original, digest)
+          with sidecar.open("x", encoding="utf-8") as out:
+              out.write(m)
+          assert verify_media(original, digest)
+          report = {"external_manifest": "WRITTEN", "signed_media_unchanged": True}
+          Path("build/netfx481-sidecar-setup.json").write_text(
+              json.dumps(report, sort_keys=True), encoding="ascii")
+          print("Original Microsoft .NET 4.8.1 executable unchanged; external Windows 10 compatibility manifest installed")
+          PY
+          WINEPREFIX="$RUNNER_TEMP/netfx40-msxml3-prefix" WINEARCH=win64 WINEDEBUG=-all \
+            "$SWCOMPAT_WINE" reg.exe add 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\SideBySide' \
+            /v PreferExternalManifest /t REG_DWORD /d 1 /f >/dev/null 2>&1
       - name: Upgrade the functioning Microsoft .NET 4.0 CLR with original Microsoft 4.8.1
         if: env.SWCOMPAT_NATIVE40_READY == 'yes'
         shell: bash
@@ -558,6 +591,32 @@ jobs:
             --native40-report build/netfx40-msxml3-restart.json \
             --output build/netfx40-to-481-upgrade.json \
             --agree-disposable-prefix
+      - name: Remove external compatibility manifest and restore original signed media
+        if: always() && env.SWCOMPAT_NATIVE40_READY == 'yes'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.netfx481_trial import verify_media
+          original = Path("build/NDP481-x86-x64-AllOS-ENU.exe")
+          digest = Path("build/netfx481.sha256")
+          sidecar = original.with_name(original.name + ".manifest")
+          expected = Path("probes/winver_481_win10.manifest").read_bytes()
+          if sidecar.is_file() and not sidecar.is_symlink():
+              assert sidecar.read_bytes() == expected, "Unexpected vendor sidecar content"
+              sidecar.unlink()
+          assert not sidecar.exists()
+          assert verify_media(original, digest)
+          report = {"external_manifest": "REMOVED", "signed_media_unchanged": True}
+          Path("build/netfx481-sidecar-cleanup.json").write_text(
+              json.dumps(report, sort_keys=True), encoding="ascii")
+          print("Original Microsoft installer SHA256 unchanged after manifest experiment")
+          PY
+          WINEPREFIX="$RUNNER_TEMP/netfx40-msxml3-prefix" WINEARCH=win64 WINEDEBUG=-all \
+            "$SWCOMPAT_WINE" reg.exe delete 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\SideBySide' \
+            /v PreferExternalManifest /f >/dev/null 2>&1 || true
       - name: Restore Windows 11 profile and verify native-only managed CLR
         if: always() && env.SWCOMPAT_NATIVE40_READY == 'yes'
         shell: bash
@@ -671,6 +730,8 @@ jobs:
             build/netfx40-msxml3-restart.json
             build/netfx40-to-481-upgrade.json
             build/netfx40-to-481-win11.json
+            build/netfx481-sidecar-setup.json
+            build/netfx481-sidecar-cleanup.json
           if-no-files-found: warn
           retention-days: 7
       - name: Validate that msxml3 cannot fabricate a CLR install
@@ -703,6 +764,11 @@ jobs:
               rr = json.loads(restart_path.read_text())
               assert validate_restart(rr)
               if rr["persistent_native_managed"]:
+                  for name, expected in (("setup", "WRITTEN"), ("cleanup", "REMOVED")):
+                      policy = Path(f"build/netfx481-sidecar-{name}.json")
+                      assert policy.is_file(), "Signed installer external manifest policy unverified"
+                      p = json.loads(policy.read_text())
+                      assert p == {"external_manifest": expected, "signed_media_unchanged": True}
                   assert rr["restart"] == "COMPLETED"
                   assert rr["native_loader"] == "LOADED"
                   assert rr["native_only_managed"] == "PASS"
