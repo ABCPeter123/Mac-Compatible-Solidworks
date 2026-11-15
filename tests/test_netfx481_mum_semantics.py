@@ -60,6 +60,8 @@ class OriginalMumTests(TestCase):
             self.assertEqual(r["operation_preflight"]["parsed"], 1)
             self.assertEqual(r["operation_preflight"]["mixed_arch"], 1)
             self.assertEqual(r["operation_preflight"]["updates"], 1)
+            self.assertEqual(r["operation_preflight"]["root_amd64_updates"], 1)
+            self.assertEqual(r["operation_preflight"]["root_amd64_unsupported"], 0)
             self.assertNotIn("SECRET", str(r))
 
     def test_distinct_x86_and_x64_cabs_are_aggregated(self):
