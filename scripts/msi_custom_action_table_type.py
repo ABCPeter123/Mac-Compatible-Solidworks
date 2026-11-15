@@ -186,3 +186,43 @@ def inspect_selftest(wine: Path, prefix: Path, probe: Path) -> dict:
         finally:
             status_file.unlink(missing_ok=True)
     return parse(raw, child.returncode)
+
+
+_BOOTSTRAP_LINES = re.compile(
+    rb"SWCOMPAT_CA_BOOT_(ENTRY|ARGC|REPORT)=([A-Z_]+)\Z"
+)
+
+
+def read_bootstrap(prefix: Path) -> dict:
+    """Consume *only* fixed Win32 entry breadcrumbs, never vendor metadata."""
+    validate_prefix(prefix)
+    file = prefix / "drive_c" / "swcompat_ca_bootstrap.status"
+    default = {"entry": "NOT_OBSERVED", "argc": "NOT_VERIFIED",
+               "report": "NOT_VERIFIED"}
+    if file.is_symlink() or file.parent.is_symlink():
+        raise ValueError("Linked Win32 bootstrap marker")
+    if not file.is_file():
+        return default
+    try:
+        with file.open("rb") as stream:
+            raw = stream.read(385)
+    finally:
+        file.unlink(missing_ok=True)
+    if len(raw) > 384:
+        return default
+    fields = {}
+    for line in raw.splitlines():
+        m = _BOOTSTRAP_LINES.fullmatch(line.strip())
+        if not m:
+            return default
+        key, value = m.group(1).decode("ascii"), m.group(2).decode("ascii")
+        if key in fields:
+            return default
+        fields[key] = value
+    if (fields.get("ENTRY") != "YES"
+            or fields.get("ARGC") not in {"THREE", "FOUR", "OTHER"}
+            or fields.get("REPORT") not in {"OPEN", "UNAVAILABLE"}
+            or len(fields) != 3):
+        return default
+    return {"entry": "YES", "argc": fields["ARGC"],
+            "report": fields["REPORT"]}
