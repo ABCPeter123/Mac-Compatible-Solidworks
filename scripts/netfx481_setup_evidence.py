@@ -249,7 +249,7 @@ def scan_secondary_logs(prefix: Path, *,
     validate_prefix(prefix)
     roots = _secondary_roots(prefix)
     if baseline is not None and (type(baseline) is not dict
-            or any(type(k) is not Path or type(v) is not tuple
+            or any(not isinstance(k, Path) or type(v) is not tuple
                    or len(v) != 3 or any(type(n) is not int for n in v)
                    for k, v in baseline.items())):
         raise ValueError("Untrusted pre-upgrade log metadata")
