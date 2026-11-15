@@ -58,6 +58,7 @@ class OriginalMsiMetadataTests(unittest.TestCase):
             self._msi(root)
             with (mock.patch.object(private, "validate_prefix"),
                   mock.patch.object(original, "validate_prefix"),
+                  mock.patch.object(original, "_is_wine_host", return_value=True),
                   mock.patch.object(original, "verify_media"),
                   mock.patch.object(original, "query",
                                     return_value={"status": "ACTION_FOUND",
@@ -81,6 +82,7 @@ class OriginalMsiMetadataTests(unittest.TestCase):
             self._msi(root)
             with (mock.patch.object(private, "validate_prefix"),
                   mock.patch.object(original, "validate_prefix"),
+                  mock.patch.object(original, "_is_wine_host", return_value=True),
                   mock.patch.object(original, "verify_media"),
                   mock.patch.object(original, "query") as query):
                 result = original.inspect(wine, prefix, helper, installer)
@@ -96,6 +98,7 @@ class OriginalMsiMetadataTests(unittest.TestCase):
             self._msi(root, "netfx_Core_x86.msi")
             with (mock.patch.object(private, "validate_prefix"),
                   mock.patch.object(original, "validate_prefix"),
+                  mock.patch.object(original, "_is_wine_host", return_value=True),
                   mock.patch.object(original, "verify_media"),
                   mock.patch.object(original, "query",
                                     return_value={"status": "ACTION_FOUND",
@@ -118,6 +121,7 @@ class OriginalMsiMetadataTests(unittest.TestCase):
                 (root / f"dir_{i:02d}").mkdir()
             with (mock.patch.object(private, "validate_prefix"),
                   mock.patch.object(original, "validate_prefix"),
+                  mock.patch.object(original, "_is_wine_host", return_value=True),
                   mock.patch.object(original, "verify_media"),
                   mock.patch.object(original, "query",
                                     return_value={"status": "ACTION_FOUND",
@@ -138,6 +142,7 @@ class OriginalMsiMetadataTests(unittest.TestCase):
             (root / "invalid.msi").write_bytes(b"z" * 9000)
             with (mock.patch.object(private, "validate_prefix"),
                   mock.patch.object(original, "validate_prefix"),
+                  mock.patch.object(original, "_is_wine_host", return_value=True),
                   mock.patch.object(original, "verify_media"),
                   mock.patch.object(original, "query",
                                     return_value={"status": "ACTION_ABSENT",
