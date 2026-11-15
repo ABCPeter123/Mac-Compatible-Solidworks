@@ -371,11 +371,33 @@ static int scm_coherence(const wchar_t *exe) {
     return 0;
 }
 
+/* Bounded, read-only live SCM connection for a second-process visibility
+ * differential. Unlike the old 'hold' mode, this retains the actual SCM
+ * manager and, when available, a service handle until the controller exits. */
+static int scm_hold(void) {
+    SC_HANDLE scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
+    SC_HANDLE service = NULL;
+    if (!scm) {
+        puts("SWCOMPAT_SCM_HOLDER=FAILED");
+        fflush(stdout);
+        return 1;
+    }
+    service = OpenServiceW(scm, SERVICE_NAME, SERVICE_QUERY_STATUS);
+    printf("SWCOMPAT_SCM_HOLDER=%s\n", service ? "SERVICE_OPEN" : "MANAGER_ONLY");
+    fflush(stdout);
+    Sleep(50000);
+    if (service) CloseServiceHandle(service);
+    CloseServiceHandle(scm);
+    return 0;
+}
+
 int wmain(int argc, wchar_t **argv) {
     if (argc < 2) {
-        fputs("Usage: service_smoke.exe single-roundtrip|coherence <path>|run|hold|absent|install <path>|status|access|start|stop|delete\n",stderr);
+        fputs("Usage: service_smoke.exe single-roundtrip|coherence <path>|scm-hold|run|hold|absent|install <path>|status|access|start|stop|delete\n",stderr);
         return 2;
     }
+    if (!wcscmp(argv[1], L"scm-hold"))
+        return scm_hold();
     if (!wcscmp(argv[1], L"coherence"))
         return scm_coherence(argc > 2 ? argv[2] : NULL);
     if (!wcscmp(argv[1], L"single-roundtrip"))
