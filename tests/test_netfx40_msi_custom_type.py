@@ -23,6 +23,7 @@ class OriginalMsiCustomTypeTests(unittest.TestCase):
             "status": "TRACE_MATCHED", "family": "DLL_BINARY", "base_type": 1,
             "execution": "DEFERRED", "impersonation": "NO_IMPERSONATE",
             "asynchronous": "SYNCHRONOUS", "ts_aware": True,
+            "capture_reason": "NONE",
         })
         for secret in ("Private", "SECRET", "Vendor", "original.dll", "PRODUCT"):
             self.assertNotIn(secret, str(report))
@@ -134,13 +135,15 @@ class OriginalMsiCustomTypeTests(unittest.TestCase):
                 r = legacy._run_traced(root / "wine", root, fixture, ["SYNTHETIC"], timeout=30)
             proc.kill.assert_called_once()
             self.assertEqual(r["status"], "TIMEOUT")
-            self.assertEqual(r["custom_action_type"], t.empty("CAPTURE_TRUNCATED"))
+            self.assertEqual(r["custom_action_type"], t.empty(
+                "CAPTURE_TRUNCATED", reason="PROCESS_INCOMPLETE"))
             self.assertNotIn("Secret", str(r))
 
     def test_only_allowlisted_bounded_relevant_lines(self):
         self.assertTrue(t.relevant(b'0100:err:msi:execute_script error\n'))
         self.assertTrue(t.relevant(b'0100:fixme:msi:ACTION_CustomAction warning\n'))
-        self.assertTrue(t.relevant(b'0100:trace:msi:ACTION_CustomAction Handling custom action L"secret" (1)\n'))
+        self.assertTrue(t.relevant(b'0100:trace:msi:ACTION_CustomAction Handling custom action L"ServiceSecret" (1 L"private" L"private")\n'))
+        self.assertFalse(t.relevant(b'0100:trace:msi:ACTION_CustomAction Handling custom action L"other" (1 L"private" L"private")\n'))
         self.assertFalse(t.relevant(b'0100:trace:msi:ACTION_InstallFiles L"secret"\n'))
         self.assertFalse(t.relevant(b'0100:trace:service:OpenServiceW L"secret"\n'))
         self.assertFalse(t.relevant(b'0100:trace:msi:ACTION_CustomAction Handling custom action '
