@@ -19,12 +19,13 @@ STATUSES = {
     "ACTION_FOUND", "ACTION_ABSENT", "DATABASE_UNAVAILABLE", "TABLE_UNAVAILABLE",
     "QUERY_FAILED", "INVALID_ARGUMENT", "PROCESS_FAILED", "TIMED_OUT",
     "MALFORMED", "BAD_EXIT", "MSI_DLL_UNAVAILABLE", "MSI_EXPORT_UNAVAILABLE",
+    "SELFTEST_OK",
 }
 LINE = re.compile(rb"SWCOMPAT_CA_TABLE_(STATUS|TYPE|STAGE)=([A-Z_]+|[0-9]{1,10})\Z")
 STAGES = {
     "NOT_OBSERVED", "ENTRY", "INPUT_OK", "MSI_DLL_LOADED", "MSI_EXPORTS_READY",
     "DATABASE_OPEN", "VIEW_OPEN",
-    "PARAMETER_SET", "VIEW_EXECUTED", "ROW_FETCHED",
+    "PARAMETER_SET", "VIEW_EXECUTED", "ROW_FETCHED", "SELFTEST",
 }
 ACTIONS = {"ServiceTypeControlSentinel"}
 
@@ -129,3 +130,42 @@ def inspect(wine: Path, prefix: Path, probe: Path, msi: Path,
         finally:
             status_file.unlink(missing_ok=True)
     return parse(raw, result.returncode)
+
+
+def inspect_selftest(wine: Path, prefix: Path, probe: Path) -> dict:
+    """Read-only executable-start smoke before any original MSI API is used."""
+    if os.name == "nt" or any(p.is_symlink() for p in (wine, prefix, probe)):
+        raise ValueError("Selftest requires non-linked Wine paths")
+    wine, prefix, probe = (p.resolve(strict=True) for p in (wine, prefix, probe))
+    validate_prefix(prefix)
+    if probe.name != "msi_custom_action_table_probe.exe" or not probe.is_file():
+        raise ValueError("Expected original Win32 MSI metadata helper")
+    status_file = prefix / "drive_c" / "windows" / "temp" / "swcompat_ca_table_probe.status"
+    if status_file.is_symlink() or status_file.parent.is_symlink():
+        raise ValueError("Linked status path not allowed")
+    status_file.parent.mkdir(parents=True, exist_ok=True)
+    status_file.unlink(missing_ok=True)
+    env = os.environ.copy()
+    env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64", "WINEDEBUG": "-all"})
+    try:
+        child = subprocess.run(
+            [str(wine), str(probe), "--selftest",
+             r"C:\windows\temp\swcompat_ca_table_probe.status"],
+            cwd=prefix, env=env, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=20, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {"status": "TIMED_OUT", "family": "NOT_VERIFIED",
+                "base_type": None, "stage": "NOT_OBSERVED"}
+    except OSError:
+        return {"status": "PROCESS_FAILED", "family": "NOT_VERIFIED",
+                "base_type": None, "stage": "NOT_OBSERVED"}
+    raw = child.stdout
+    if status_file.is_file() and not status_file.is_symlink():
+        try:
+            with status_file.open("rb") as f:
+                raw = f.read(2049)
+        finally:
+            status_file.unlink(missing_ok=True)
+    return parse(raw, child.returncode)
