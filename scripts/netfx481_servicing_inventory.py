@@ -18,6 +18,7 @@ import tempfile
 from scripts.netfx481_trial import verify_media
 from scripts.netfx481_mum_semantics import (
     blank as blank_mum, valid as valid_mum, inspect_cab_mums,
+    combine as combine_mums,
 )
 
 EXTENSIONS = ("CAB", "MSU", "MUM", "MANIFEST", "MSI", "DLL")
@@ -26,8 +27,8 @@ NESTED = {"NOT_RUN", "NOT_FOUND", "MEASURED", "PARTIAL", "EXTRACTION_FAILED"}
 MAX_LISTING = 4 * 1024 * 1024
 MAX_FILES = 25000
 MAX_EMBEDDED = 16
-MAX_EXTRACTED_BYTES = 512 * 1024 * 1024
-MAX_EMBEDDED_BYTES = 192 * 1024 * 1024
+MAX_EXTRACTED_BYTES = 2 * 1024 * 1024 * 1024
+MAX_EMBEDDED_BYTES = 1024 * 1024 * 1024
 MAX_DIRS = 60
 PACKAGE_EXT = {".cab", ".msu"}
 PATH_ROW = re.compile(r"^Path = (.{1,1024})$")
@@ -221,11 +222,11 @@ def inspect(installer: Path, sha_manifest: Path, sevenzip: Path) -> dict:
             report["nested_status"] = "NOT_FOUND"
         else:
             report["nested_status"] = "PARTIAL" if partial else "MEASURED"
-        for package in packages:
-            if (package.suffix.casefold() == ".cab"
-                    and report["mum_semantics"]["status"] == "NOT_RUN"):
-                report["mum_semantics"] = inspect_cab_mums(
-                    sevenzip, package, root / "extracted-mums")
+        mummetas = []
+        for index, package in enumerate(packages):
+            if package.suffix.casefold() == ".cab":
+                mummetas.append(inspect_cab_mums(
+                    sevenzip, package, root / ("extracted-mums-" + str(index))))
             state, raw = _invoke_sevenzip(
                 sevenzip, ["l", "-slt", str(package)], root)
             inner = summarize_listing(raw, exit_code=0 if state == "OK" else 1)
@@ -239,6 +240,7 @@ def inspect(installer: Path, sha_manifest: Path, sevenzip: Path) -> dict:
             for ext in EXTENSIONS:
                 report["nested_types"][ext] = min(
                     MAX_FILES, report["nested_types"][ext] + inner["types"][ext])
+        report["mum_semantics"] = combine_mums(mummetas)
         assert valid(report)
         return report
 
