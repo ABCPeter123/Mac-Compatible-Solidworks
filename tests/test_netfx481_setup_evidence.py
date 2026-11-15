@@ -252,7 +252,7 @@ class NetFxSetupEvidenceTests(unittest.TestCase):
             self.assertEqual(result["stage_prerequisite"]["os_versions"],
                              ["WINDOWS_10_SUPPORTED"])
             self.assertEqual(result["stage_prerequisite"]["blockers"],
-                             ["DISK_SPACE_BLOCK", "WINDOWS_UPDATE_BLOCK"])
+                             ["DISK_SPACE_BLOCK", "WINDOWS_SERVICING_BLOCK", "WINDOWS_UPDATE_BLOCK"])
             self.assertTrue(result["stage_prerequisite"]["5100_in_log"])
             for secret in ("tester", "dd_old_generic", "dd_current_generic", "one_new"):
                 self.assertNotIn(secret, json.dumps(result))
