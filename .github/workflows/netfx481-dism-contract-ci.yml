@@ -1,0 +1,85 @@
+name: Verify Wine DISM servicing contract for genuine .NET 4.8.1
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/netfx481-dism-contract-ci.yml'
+      - 'scripts/netfx481_dism_contract.py'
+      - 'tests/test_netfx481_dism_contract.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  safe-negative-control-regression:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate fail-closed genuine servicing gate
+        run: python -m unittest discover -s tests -p 'test_netfx481_dism_contract.py' -v
+
+  apple-silicon-wine-dism:
+    needs: safe-negative-control-regression
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download and pin Wine Staging 11.21 Apple Silicon build
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-staging-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-staging-11.21-osx64.tar.xz"
+          echo "d7bcd5abf4df27aae397a7898aef074fea4a2e0b51e0a55aa9659517bbf9d452  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/netfx481-dism-wine"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/netfx481-dism-wine"
+          WINE_BIN="$(find "$RUNNER_TEMP/netfx481-dism-wine" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Initialize separate marked non-production Wine prefix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat --prefix "$RUNNER_TEMP/netfx481-dism-prefix" \
+            --logs-dir "$RUNNER_TEMP/netfx481-dism-logs" init
+          touch "$RUNNER_TEMP/netfx481-dism-prefix/.swcompat-netfx481-disposable"
+      - name: Test whether missing Windows CAB triggers false DISM success
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx481_dism_contract \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx481-dism-prefix" \
+            --output build/netfx481-dism-result.json \
+            --agree-disposable-prefix
+      - name: Report exact DISM contract, never infer genuine install
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx481_dism_contract import validate
+          path = Path("build/netfx481-dism-result.json")
+          assert path.is_file(), "Missing Wine DISM contract measurement"
+          result = json.loads(path.read_text())
+          assert validate(result)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write("## Genuine .NET Framework 4.8.1 Windows servicing dependency\n\n")
+              out.write(f"DISM missing package response: **{result['status']}**\n\n")
+              out.write(f"Genuine 4.8.1 servicing demonstrated: **{result['genuine481_servicing_proven']}**\n\n")
+              if result["status"] == "DISM_FALSE_SUCCESS":
+                  out.write("**Wine accepted a missing Windows CAB without actually installing anything.**\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wine-netfx481-dism-servicing-negative-control
+          path: build/netfx481-dism-result.json
+          if-no-files-found: warn
+          retention-days: 7
