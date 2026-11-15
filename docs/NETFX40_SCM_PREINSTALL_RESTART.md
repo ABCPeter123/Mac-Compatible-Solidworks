@@ -19,3 +19,12 @@ In a **fresh marked disposable Wine prefix only**, the experiment performs the s
 The opt-in CLI flag `--experiment-restart-after-mono` is not enabled for user-managed Wine prefixes or local native SOLIDWORKS installation. The report adds `pre_setup_scm_restart` with `NOT_REQUESTED` as the default in other invocations. Explicit test validation requires a completed restart for the CI A/B, verifies no original Microsoft installer runs on restart failure, and preserves all false-compatibility gates.
 
 **Decision:** if this fixes native CLR deployment, test which services become visible and whether that persists for 4.8.1. If the original installer still fails 1603, the restart only solves the separate service registration symptom, and we need the earliest causative MSI custom action or service transaction failure. No fabricated licensing or .NET registration states are used.
+
+
+## Actual Apple Silicon evidence
+
+[Authenticated original Microsoft .NET 4.0 run 43665743538](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43665743538) passed its CI evidence gates. Wine Mono MSI uninstall was verified (`REMOVED`) and the new pre-install service-manager restart completed (the integration gate requires `pre_setup_scm_restart=COMPLETED`). The identical signed Microsoft installer was then launched by the independently verified original Win32 process monitor.
+
+Despite this refresh, Microsoft setup returned `MSI_FATAL_ERROR` (Windows 1603), the observed child exited nonzero, the real x64 and x86 `clr.dll` files were ABSENT, `mscorlib.dll` was ABSENT and the native CLR loader returned NOT_FOUND. The nested MSI report found four logs (one nested MSI) but no first failing `Return value 3` action. Wine trace categories remained `MSI_ACTION_FINALIZE`, `MSI_ACTION_SERVICE`, `MSI_TSAWARE_UNIMPLEMENTED` and `OTHER_MSI_ERROR`, from three Wine MSI error lines. A service action category is a direction, not causality.
+
+**A bounded restart between Wine Mono removal and .NET 4.0 setup is insufficient to install native Microsoft CLR.** The verified SCM restart from a separate harmless MSI cannot be assumed to repair service actions *inside* Microsoft's nested MSI transaction. Next isolate the exact first service action (InstallServices versus StartServices) in the private Wine error trace, using fixed enums only, and build a matching self-authored MSI regression.
