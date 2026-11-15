@@ -45,6 +45,39 @@ class OriginalMsiActionTableTests(unittest.TestCase):
         self.assertFalse(table.validate(dict(r, family="WORKING_NETFX")))
         self.assertFalse(table.validate(dict(r, raw_action="PRIVATE")))
 
+    @unittest.skipIf(os.name == "nt", "Wine-only temporary status file")
+    def test_fixed_marker_file_overrides_missing_wine_console(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            probe = root / "msi_custom_action_table_probe.exe"
+            probe.write_bytes(b"fixture")
+            msi = root / "control.msi"
+            msi.write_bytes(b"fixture")
+            wine = root / "wine"
+            wine.write_bytes(b"fixture")
+            completed = mock.Mock(returncode=0, stdout=b"")
+            report_path = root / "drive_c" / "windows" / "temp" / "swcompat_ca_table_probe.status"
+
+            def original_control(*_args, **_kwargs):
+                report_path.write_bytes(
+                    b"SWCOMPAT_CA_TABLE_STAGE=ENTRY\n"
+                    b"SWCOMPAT_CA_TABLE_STAGE=INPUT_OK\n"
+                    b"SWCOMPAT_CA_TABLE_STATUS=ACTION_FOUND\n"
+                    b"SWCOMPAT_CA_TABLE_TYPE=3073\n")
+                return completed
+
+            with (
+                mock.patch.object(table, "validate_prefix"),
+                mock.patch.object(table, "windows_media_path", return_value="Z:\\control.msi"),
+                mock.patch.object(table.subprocess, "run", side_effect=original_control),
+            ):
+                report = table.inspect(wine, root, probe, msi)
+            self.assertTrue(table.validate(report))
+            self.assertEqual(report["status"], "ACTION_FOUND")
+            self.assertEqual(report["stage"], "INPUT_OK")
+            self.assertEqual(report["family"], "DLL_BINARY")
+            self.assertFalse(report_path.exists())
+
     @unittest.skipIf(os.name == "nt", "Wine-only guarded wrapper")
     def test_metadata_probe_receives_action_through_stdin_only(self):
         with TemporaryDirectory() as td:
