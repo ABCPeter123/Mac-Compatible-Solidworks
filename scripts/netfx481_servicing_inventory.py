@@ -16,6 +16,9 @@ import subprocess
 import tempfile
 
 from scripts.netfx481_trial import verify_media
+from scripts.netfx481_mum_semantics import (
+    blank as blank_mum, valid as valid_mum, inspect_cab_mums,
+)
 
 EXTENSIONS = ("CAB", "MSU", "MUM", "MANIFEST", "MSI", "DLL")
 STATES = {"OK", "UNSUPPORTED", "TIMEOUT", "START_FAILED", "TOO_LARGE", "INVALID"}
@@ -50,12 +53,13 @@ def blank() -> dict:
         "nested_types": counters(),
         "nested_entries": 0,
         "nested_update_mum_hint": False,
+        "mum_semantics": blank_mum(),
         "genuine_servicing_installed": False,
     }
 
 
 def valid(r: dict) -> bool:
-    if type(r) is not dict or set(r) != set(blank()):
+    if type(r) is not dict or set(r) != set(blank()) or not valid_mum(r["mum_semantics"]):
         return False
     b = blank()
     if (r["scope"] != b["scope"] or r["original_sha256_verified"] is not True
@@ -218,6 +222,10 @@ def inspect(installer: Path, sha_manifest: Path, sevenzip: Path) -> dict:
         else:
             report["nested_status"] = "PARTIAL" if partial else "MEASURED"
         for package in packages:
+            if (package.suffix.casefold() == ".cab"
+                    and report["mum_semantics"]["status"] == "NOT_RUN"):
+                report["mum_semantics"] = inspect_cab_mums(
+                    sevenzip, package, root / "extracted-mums")
             state, raw = _invoke_sevenzip(
                 sevenzip, ["l", "-slt", str(package)], root)
             inner = summarize_listing(raw, exit_code=0 if state == "OK" else 1)
@@ -247,11 +255,17 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, sort_keys=True), encoding="ascii")
     for key, value in result.items():
-        if key not in {"outer_types", "nested_types"}:
+        if key not in {"outer_types", "nested_types", "mum_semantics"}:
             print("Authentic .NET 4.8.1 package inventory", key, value)
     for key in ("outer_types", "nested_types"):
         for ext, n in result[key].items():
             print("Authentic .NET 4.8.1 package inventory", key, ext, n)
+    for key, value in result["mum_semantics"].items():
+        if key not in {"tags", "architectures"}:
+            print("Original Microsoft 4.8.1 MUM semantics", key, value)
+    for field in ("tags", "architectures"):
+        for key, number in result["mum_semantics"][field].items():
+            print("Original Microsoft 4.8.1 MUM semantics", field, key, number)
     return 0
 
 
