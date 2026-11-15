@@ -37,6 +37,49 @@ _MISSING_FILE = re.compile(rb"(?i)\bcompressed file wasn'?t installed\b")
 _PATCHFILES = re.compile(rb"(?i)\b(?:ACTION_PatchFiles|action L[\"']?PatchFiles)\b")
 
 
+# Interpret only Wine's explicit script action L"..." returned 1603 marker.
+# Arbitrary vendor action text is NEVER included in the result.
+FAILED_ACTIONS = {
+    "INSTALL_SERVICES", "START_SERVICES", "STOP_SERVICES", "DELETE_SERVICES",
+    "SERVICE_CONFIG", "INSTALL_FILES", "PATCH_FILES", "REGISTRY_COM",
+    "ASSEMBLY_GAC", "CUSTOM_ACTION", "OTHER_ACTION", "FINALIZE_ONLY",
+    "NOT_IDENTIFIED",
+}
+SERVICE_ACTIONS = {
+    "INSTALL_SERVICES", "START_SERVICES", "STOP_SERVICES",
+    "DELETE_SERVICES", "SERVICE_CONFIG",
+}
+
+
+def _failed_action_type(line: bytes) -> str | None:
+    match = _ACTION_STRING.search(line)
+    if not match:
+        return None
+    raw = match.group(1).lower().replace(b" ", b"")
+    names = {
+        b"installservices": "INSTALL_SERVICES",
+        b"startservices": "START_SERVICES",
+        b"stopservices": "STOP_SERVICES",
+        b"deleteservices": "DELETE_SERVICES",
+        b"serviceconfig": "SERVICE_CONFIG",
+        b"installfiles": "INSTALL_FILES",
+        b"copyfiles": "INSTALL_FILES",
+        b"patchfiles": "PATCH_FILES",
+        b"writeregistryvalues": "REGISTRY_COM",
+        b"registertypelib": "REGISTRY_COM",
+        b"registercom": "REGISTRY_COM",
+        b"publishassemblies": "ASSEMBLY_GAC",
+        b"installfinalize": "FINALIZE_ONLY",
+        b"install": "FINALIZE_ONLY",
+    }
+    if raw in names:
+        return names[raw]
+    if raw.startswith((b"ca_", b"customaction")) or re.search(
+            rb"(?i)\]ca_[a-z_0-9]{1,70}\Z", raw):
+        return "CUSTOM_ACTION"
+    return "OTHER_ACTION"
+
+
 def _classify_failed_script_action(line: bytes) -> str | None:
     """A script failure may precede the InstallFinalize rollback error.
 
@@ -70,15 +113,20 @@ def _classify_failed_script_action(line: bytes) -> str | None:
 
 
 def empty() -> dict:
-    return {"status": "NOT_REQUESTED", "classes": [], "msi_error_lines": 0}
+    return {
+        "status": "NOT_REQUESTED", "classes": [], "msi_error_lines": 0,
+        "first_failed_action": "NOT_IDENTIFIED", "service_action_failures": [],
+    }
 
 
 def parse(raw: bytes, *, oversized: bool = False) -> dict:
     if not isinstance(raw, bytes):
-        return {"status": "UNREADABLE", "classes": [], "msi_error_lines": 0}
+        return {**empty(), "status": "UNREADABLE"}
     if len(raw) > MAX_BYTES or oversized:
-        return {"status": "TRUNCATED", "classes": [], "msi_error_lines": 0}
+        return {**empty(), "status": "TRUNCATED"}
     classes: set[str] = set()
+    script_actions: list[str] = []
+    service_failures: set[str] = set()
     lines = 0
     for line in raw.splitlines():
         if len(line) > MAX_LINE_BYTES:
@@ -94,6 +142,12 @@ def parse(raw: bytes, *, oversized: bool = False) -> dict:
                 classes.add("MSI_TSAWARE_UNIMPLEMENTED")
             continue
         lines += 1
+        precise_action = _failed_action_type(line)
+        if precise_action is not None:
+            if len(script_actions) < 64:
+                script_actions.append(precise_action)
+            if precise_action in SERVICE_ACTIONS:
+                service_failures.add(precise_action)
         category = _classify_failed_script_action(line)
         if _CAB.search(line):
             classes.add("CABINET_MEDIA_MISSING")
@@ -123,24 +177,50 @@ def parse(raw: bytes, *, oversized: bool = False) -> dict:
             classes.add("MSI_CUSTOM_ACTION_UNSUPPORTED")
         else:
             classes.add("OTHER_MSI_ERROR")
-    return {"status": "SCANNED", "classes": sorted(classes),
-            "msi_error_lines": min(lines, 9999)}
+    first = next(
+        (action for action in script_actions if action != "FINALIZE_ONLY"),
+        script_actions[0] if script_actions else "NOT_IDENTIFIED",
+    )
+    return {
+        "status": "SCANNED", "classes": sorted(classes),
+        "msi_error_lines": min(lines, 9999),
+        "first_failed_action": first,
+        "service_action_failures": sorted(service_failures),
+    }
 
 
 def validate(result: dict) -> bool:
     if type(result) is not dict or set(result) != {
-        "status", "classes", "msi_error_lines"
+        "status", "classes", "msi_error_lines",
+        "first_failed_action", "service_action_failures",
     }:
         return False
     if (result["status"] not in STATUS or type(result["classes"]) is not list
             or result["classes"] != sorted(set(result["classes"]))
             or any(v not in CLASSES for v in result["classes"])
             or type(result["msi_error_lines"]) is not int
-            or not 0 <= result["msi_error_lines"] <= 9999):
+            or not 0 <= result["msi_error_lines"] <= 9999
+            or result["first_failed_action"] not in FAILED_ACTIONS
+            or type(result["service_action_failures"]) is not list
+            or result["service_action_failures"] != sorted(set(result["service_action_failures"]))
+            or any(action not in SERVICE_ACTIONS for action in result["service_action_failures"])):
+
         return False
     if result["status"] != "SCANNED":
-        return result["classes"] == [] and result["msi_error_lines"] == 0
+        return (result["classes"] == [] and result["msi_error_lines"] == 0
+                and result["first_failed_action"] == "NOT_IDENTIFIED"
+                and result["service_action_failures"] == [])
     # A targeted fixme category can appear even when err:msi is absent.
-    return result["msi_error_lines"] >= 1 or result["classes"] in (
-        [], ["MSI_TSAWARE_UNIMPLEMENTED"]
-    )
+    if result["msi_error_lines"] == 0:
+        return (result["classes"] in ([], ["MSI_TSAWARE_UNIMPLEMENTED"])
+                and result["first_failed_action"] == "NOT_IDENTIFIED"
+                and result["service_action_failures"] == [])
+    if result["service_action_failures"] and "MSI_ACTION_SERVICE" not in result["classes"]:
+        return False
+    if result["first_failed_action"] in SERVICE_ACTIONS and (
+            result["first_failed_action"] not in result["service_action_failures"]):
+        return False
+    if result["first_failed_action"] == "FINALIZE_ONLY" and (
+            "MSI_ACTION_FINALIZE" not in result["classes"]):
+        return False
+    return True
