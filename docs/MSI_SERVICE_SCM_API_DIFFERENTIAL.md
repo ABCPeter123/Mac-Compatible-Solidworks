@@ -19,3 +19,8 @@ Interpretation:
 - `STARTED` plus independently observed `RUNNING`: the benign fixture's direct API service start is proven. It **does not** show that native Microsoft .NET Framework loads or that genuine SOLIDWORKS starts.
 
 No original Microsoft or SOLIDWORKS media is modified. No license logic, false registry readiness, host services or persistent user prefixes are involved. The Apple Silicon CI outcome determines whether the next justified work is a safe Wine SCM registration synchronization shim, a lower-level service RPC fix, or simply better diagnostics.
+## Upstream code-location evidence
+
+Wine 11.19's native MSI `ITERATE_InstallService` invokes `CreateServiceW` itself, while `ACTION_StartServices` iterates the MSI `ServiceControl` table. Therefore this test is **not** based on an assumption that MSI only writes the registry directly. It isolates the separate-process and separate-transaction behavior after the MSI has already invoked the SCM APIs. Wine 11.21's `programs/services/services.c` maintains an in-memory service database and populates it from `HKLM\\SYSTEM\\CurrentControlSet\\Services` at `services.exe` startup. Its RPC `svcctl_OpenServiceW` searches the in-memory database and returns 1060 when no matching entry is found. This is a plausible location for targeted investigation but is **not yet a proven defect** in the pinned macOS build.
+
+Sources: [Wine MSI InstallServices implementation (11.19)](https://fossies.org/dox/wine-11.19/action_8c_source.html), [Wine service database initialization (11.21)](https://fossies.org/dox/wine-11.21/programs_2services_2services_8c_source.html), and [Wine svcctl OpenService implementation](https://fossies.org/linux/wine/programs/services/rpc.c).
