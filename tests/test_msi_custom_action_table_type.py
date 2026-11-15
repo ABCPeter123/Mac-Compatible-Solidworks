@@ -96,6 +96,32 @@ class OriginalMsiActionTableTests(unittest.TestCase):
             self.assertEqual(report["family"], "DLL_BINARY")
             self.assertFalse(report_path.exists())
 
+    def test_bootstrap_breadcrumb_parser_strict_and_erased(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            file = root / "drive_c" / "swcompat_ca_bootstrap.status"
+            file.parent.mkdir(parents=True)
+            file.write_bytes(
+                b"SWCOMPAT_CA_BOOT_ENTRY=YES\r\n"
+                b"SWCOMPAT_CA_BOOT_ARGC=FOUR\r\n"
+                b"SWCOMPAT_CA_BOOT_REPORT=OPEN\r\n"
+            )
+            with mock.patch.object(table, "validate_prefix"):
+                result = table.read_bootstrap(root)
+                self.assertEqual(result, {
+                    "entry": "YES", "argc": "FOUR", "report": "OPEN",
+                })
+                self.assertFalse(file.exists())
+                file.write_bytes(
+                    b"SWCOMPAT_CA_BOOT_ENTRY=YES\r\n"
+                    b"SWCOMPAT_CA_BOOT_ARGC=FOUR\r\n"
+                    b"SWCOMPAT_CA_BOOT_REPORT=OPEN\r\n"
+                    b"SWCOMPAT_CA_BOOT_PRIVATE_PATH=secret\r\n"
+                )
+                self.assertEqual(table.read_bootstrap(root)["entry"], "NOT_OBSERVED")
+                self.assertFalse(file.exists())
+                self.assertEqual(table.read_bootstrap(root)["entry"], "NOT_OBSERVED")
+
     @unittest.skipIf(os.name == "nt", "Wine-only selftest")
     def test_pre_msi_win32_selftest_cleans_fixed_wine_prefix_report(self):
         with TemporaryDirectory() as td:
