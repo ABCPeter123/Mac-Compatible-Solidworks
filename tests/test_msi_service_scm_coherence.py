@@ -75,6 +75,15 @@ class SameHandleTests(unittest.TestCase):
             ):
                 r = probe.inspect(wine, root, exe, prior)
                 runner.assert_called_once()
+                # The real Apple Silicon run also returned CREATED with no
+                # independently verified SCM view. That must still be measured.
+                evidence["api_register"] = "CREATED"
+                evidence["scm_after_register"] = "UNKNOWN"
+                self.assertTrue(previous.validate(evidence))
+                prior.write_text(json.dumps(evidence))
+                r2 = probe.inspect(wine, root, exe, prior)
+            self.assertTrue(probe.validate(r2))
+            self.assertEqual(r2["trial"], "MEASURED")
             self.assertTrue(probe.validate(r))
             self.assertEqual(r["outcome"], "EXISTS_BUT_INVISIBLE")
             self.assertNotIn(str(root), str(r))
