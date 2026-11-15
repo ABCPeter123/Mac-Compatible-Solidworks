@@ -224,8 +224,12 @@ def _run_traced(wine: Path, prefix: Path, fixture: Path,
     result["custom_action_type"] = action_type
     # Private only; the outer inspect() never includes this identifier in
     # its JSON, console output or GitHub Actions artifacts.
-    result["private_failed_action"] = (_private_failed_action(private)
-                                       if not state["overflow"] else None)
+    raw_action = (_private_failed_action(private)
+                  if not state["overflow"] else None)
+    result["private_failed_action"] = (
+        raw_action.rsplit(b"]", 1)[-1] if raw_action and b"]" in raw_action
+        else raw_action
+    )
     return result
 
 
