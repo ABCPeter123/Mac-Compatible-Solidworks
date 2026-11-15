@@ -380,13 +380,25 @@ jobs:
           from scripts.msi_service_scm_api_reconcile import validate as validate_api
           api = json.loads(Path("build/msi-scm-api-reconcile.json").read_text())
           assert validate_api(api)
-          assert api["trial"] == "MEASURED"
+          if restart["service_visibility_recovered"]:
+              # Original MSI service is already independently visible after a
+              # bounded Wine restart. A *repair* must not be attempted.
+              assert restart["restart"] == "COMPLETED"
+              assert restart["registry_after"] == "PRESENT"
+              assert restart["scm_after"] in {"RUNNING", "STOPPED"}
+              assert report["msi_process"] == "ZERO"
+              assert report["binary_after"] == "PRESENT_MATCH"
+              assert api["trial"] == "NOT_APPLICABLE"
+          else:
+              assert api["trial"] == "MEASURED"
           assert api["native_microsoft_clr"] is False
           assert api["solidworks_compatibility"] == "NOT_DEMONSTRATED"
           from scripts.msi_service_scm_coherence import validate as validate_coherence
           coherence = json.loads(Path("build/msi-scm-coherence.json").read_text())
           assert validate_coherence(coherence)
           assert coherence["trial"] in {"MEASURED", "NOT_APPLICABLE"}
+          if restart["service_visibility_recovered"]:
+              assert coherence["trial"] == "NOT_APPLICABLE"
           if (api["trial"] == "MEASURED"
               and api["installed_binary"] == "PRESENT_MATCH"
               and api["api_register"] in {"ALREADY_EXISTS", "CREATED"}
@@ -399,6 +411,8 @@ jobs:
           from scripts.msi_service_scm_session_hold import validate as validate_hold
           hold = json.loads(Path("build/msi-scm-session-hold.json").read_text())
           assert validate_hold(hold)
+          if restart["service_visibility_recovered"]:
+              assert hold["trial"] == "NOT_APPLICABLE"
           if coherence["trial"] == "MEASURED" and coherence["registry_after"] == "PRESENT":
               assert hold["trial"] == "MEASURED"
           assert hold["native_microsoft_clr"] is False
