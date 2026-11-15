@@ -36,6 +36,13 @@ class OriginalMsiActionTableTests(unittest.TestCase):
             b"SWCOMPAT_CA_TABLE_TYPE=0\n", 0)
         self.assertEqual(dll_missing["status"], "MSI_DLL_UNAVAILABLE")
         self.assertEqual(dll_missing["stage"], "INPUT_OK")
+        missing_input = table.parse(
+            b"SWCOMPAT_CA_TABLE_STAGE=ENTRY\n"
+            b"SWCOMPAT_CA_TABLE_STATUS=INPUT_UNAVAILABLE\n"
+            b"SWCOMPAT_CA_TABLE_TYPE=0\n", 0)
+        self.assertTrue(table.validate(missing_input))
+        self.assertEqual(missing_input["status"], "INPUT_UNAVAILABLE")
+
         self.assertTrue(table.validate(dll_missing))
         selftest = table.parse(
             b"SWCOMPAT_CA_TABLE_STAGE=ENTRY\n"
@@ -67,6 +74,9 @@ class OriginalMsiActionTableTests(unittest.TestCase):
             report_path = root / "drive_c" / "windows" / "temp" / "swcompat_ca_table_probe.status"
 
             def original_control(*_args, **_kwargs):
+                secret_file = report_path.parent / "swcompat_ca_action_private.input"
+                self.assertEqual(secret_file.read_bytes(), b"ServiceTypeControlSentinel")
+                self.assertEqual(secret_file.stat().st_mode & 0o777, 0o600)
                 report_path.write_bytes(
                     b"SWCOMPAT_CA_TABLE_STAGE=ENTRY\n"
                     b"SWCOMPAT_CA_TABLE_STAGE=INPUT_OK\n"
@@ -148,7 +158,10 @@ class OriginalMsiActionTableTests(unittest.TestCase):
             self.assertEqual(args[1], str(probe.resolve()))
             self.assertTrue(Path(args[1]).is_absolute())
             self.assertNotIn("ServiceTypeControlSentinel", str(args))
-            self.assertEqual(run.call_args.kwargs["input"], b"ServiceTypeControlSentinel")
+            self.assertEqual(run.call_args.kwargs["stdin"], table.subprocess.DEVNULL)
+            self.assertNotIn("input", run.call_args.kwargs)
+            self.assertFalse((root / "drive_c" / "windows" / "temp" /
+                              "swcompat_ca_action_private.input").exists())
             self.assertEqual(run.call_args.kwargs["stderr"], table.subprocess.DEVNULL)
             self.assertTrue(table.validate(r))
             with self.assertRaises(ValueError):
