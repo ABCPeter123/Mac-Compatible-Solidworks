@@ -27,13 +27,14 @@ class Msxml3PrerequisiteTests(unittest.TestCase):
             dll = prefix / "drive_c" / "windows" / "syswow64" / "msxml3.dll"
 
             def fake_run(cmd, **kwargs):
-                self.assertEqual(cmd, [str(tricks), "-q", "msxml3"])
+                self.assertEqual(cmd[1:], ["-q", "msxml3"])
+                self.assertTrue(Path(cmd[0]).samefile(tricks))
                 self.assertIs(kwargs["stdout"], subprocess.DEVNULL)
                 self.assertIs(kwargs["stderr"], subprocess.DEVNULL)
-                self.assertEqual(kwargs["env"]["WINEPREFIX"], str(prefix))
-                self.assertEqual(kwargs["env"]["WINE"], str(wine))
+                self.assertTrue(Path(kwargs["env"]["WINEPREFIX"]).samefile(prefix))
+                self.assertTrue(Path(kwargs["env"]["WINE"]).samefile(wine))
                 self.assertEqual(kwargs["env"]["WINEARCH"], "win64")
-                self.assertEqual(kwargs["env"]["PATH"].split(__import__("os").pathsep)[0], str(wine.parent))
+                self.assertTrue(Path(kwargs["env"]["PATH"].split(__import__("os").pathsep)[0]).samefile(wine.parent))
                 dll.write_bytes(b"MZ" + b"original fixture" * 350)
                 return mock.Mock(returncode=0)
 
