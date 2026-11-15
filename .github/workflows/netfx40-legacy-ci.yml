@@ -12,6 +12,8 @@ on:
       - 'scripts/netfx40_msi_inventory.py'
       - 'scripts/netfx40_offline_extract.py'
       - 'tests/test_netfx40_offline_extract.py'
+      - 'scripts/netfx40_windows_extract_reference.py'
+      - 'tests/test_netfx40_windows_extract_reference.py'
       - 'docs/NETFX40_ORIGINAL_OFFLINE_EXTRACTION.md'
       - 'tests/test_netfx40_msi_inventory.py'
       - 'docs/NETFX40_RETAINED_MSI_CENSUS.md'
@@ -58,6 +60,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx40_msi_evidence.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msi_inventory.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_offline_extract.py' -v
+          python -m unittest discover -s tests -p 'test_netfx40_windows_extract_reference.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_wine_msi_errors.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msi_custom_type.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msi_logging_policy.py' -v
@@ -82,6 +85,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Retained MSI candidate census privacy test failed" }
           python -m unittest discover -s tests -p 'test_netfx40_offline_extract.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Original .NET offline extraction privacy and fixture tests failed" }
+          python -m unittest discover -s tests -p 'test_netfx40_windows_extract_reference.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Native Windows /x reference privacy and fixture tests failed" }
           python -m unittest discover -s tests -p 'test_netfx40_wine_msi_errors.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Wine MSI error evidence regression failed" }
           python -m unittest discover -s tests -p 'test_netfx40_msi_logging_policy.py' -v
@@ -141,6 +146,12 @@ jobs:
           (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant() |
             Set-Content -LiteralPath build/netfx40.sha256 -NoNewline -Encoding ascii
           Write-Output "Original .NET Framework 4.8 signed by Microsoft and digest bound"
+      - name: Check authenticated Microsoft /x extraction on native Windows without installing
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m scripts.netfx40_windows_extract_reference --installer build/dotNetFx40_Full_x86_x64.exe
+          if ($LASTEXITCODE -ne 0) { throw "Original .NET 4.0 native Windows extraction control failed" }
       - uses: actions/upload-artifact@v4
         with:
           name: authenticated-original-microsoft-netfx40-private
