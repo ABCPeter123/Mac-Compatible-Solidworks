@@ -357,7 +357,8 @@ def main(argv: list[str] | None = None) -> int:
     for key in ("status", "files_scanned", "msi_files", "primary_source",
                 "msi_result", "first_failed_action_class", "errors", "causality"):
         print("Original .NET 4.0 nested MSI", key, report["inner_msi"][key])
-    for key in ("status", "classes", "msi_error_lines"):
+    for key in ("status", "classes", "msi_error_lines",
+                "first_failed_action", "service_action_failures"):
         print("Wine MSI narrow error channel", key, report["wine_msi_errors"][key])
     for key in ("activation", "restoration"):
         print("Microsoft MSI verbose logging policy", key, report["msi_logging_policy"][key])

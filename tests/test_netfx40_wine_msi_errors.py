@@ -66,6 +66,50 @@ class WineMsiErrorTests(unittest.TestCase):
         self.assertIn("MSI_ACTION_REGISTRY", result["classes"])
         self.assertIn("MSI_ACTION_FINALIZE", result["classes"])
 
+    def test_exact_original_msi_service_action_not_just_generic_service(self):
+        raw = (
+            b'01ac:err:msi:execute_script Execution of script 0 halted; action L"StartServices" returned 1603\n'
+            b'01ac:err:msi:ITERATE_Actions Execution halted, action L"InstallFinalize" returned 1603\n'
+        )
+        r = w.parse(raw)
+        self.assertTrue(w.validate(r))
+        self.assertEqual(r["first_failed_action"], "START_SERVICES")
+        self.assertEqual(r["service_action_failures"], ["START_SERVICES"])
+        self.assertEqual(r["msi_error_lines"], 2)
+        self.assertEqual(w.parse(raw.replace(b"StartServices", b"InstallServices"))["first_failed_action"],
+                         "INSTALL_SERVICES")
+        self.assertEqual(w.parse(raw.replace(b"StartServices", b"StopServices"))["first_failed_action"],
+                         "STOP_SERVICES")
+        # An arbitrary custom action with StartServices in its name is NOT a
+        # system StartServices action and cannot justify an SCM hook.
+        injected = raw.replace(b"StartServices", b"StartServices_Secret")
+        r2 = w.parse(injected)
+        self.assertEqual(r2["first_failed_action"], "OTHER_ACTION")
+        self.assertEqual(r2["service_action_failures"], [])
+        self.assertNotIn("Secret", str(r2))
+
+    def test_script_failure_order_and_no_false_claim_without_action_name(self):
+        raw = (
+            b'01ac:err:msi:ITERATE_Actions action L"InstallFinalize" returned 1603\n'
+            b'01ac:err:msi:execute_script action L"InstallServices" returned 1603\n'
+            b'01ac:err:msi:execute_script action L"StartServices" returned 1603\n'
+        )
+        r = w.parse(raw)
+        self.assertTrue(w.validate(r))
+        self.assertEqual(r["first_failed_action"], "INSTALL_SERVICES")
+        self.assertEqual(r["service_action_failures"],
+                         ["INSTALL_SERVICES", "START_SERVICES"])
+        only_finalize = w.parse(raw.splitlines(keepends=True)[0])
+        self.assertEqual(only_finalize["first_failed_action"], "FINALIZE_ONLY")
+        self.assertEqual(only_finalize["service_action_failures"], [])
+        no_action = w.parse(b'0120:err:msi:CreateService failed with code 1055\n')
+        self.assertEqual(no_action["first_failed_action"], "NOT_IDENTIFIED")
+        self.assertEqual(no_action["service_action_failures"], [])
+        self.assertTrue(w.validate(no_action))
+        self.assertFalse(w.validate(dict(r, service_action_failures=["PRIVATE"])))
+        self.assertFalse(w.validate(dict(r, first_failed_action="C:\\Users\\private")))
+        self.assertFalse(w.validate(dict(r, service_action_failures=[])))
+
     def test_targeted_wine_fixme_is_a_warning_not_a_fatal_error(self):
         result = w.parse(
             b'0100:fixme:msi:ACTION_CustomAction msidbCustomActionTypeTSAware not handled\n'
