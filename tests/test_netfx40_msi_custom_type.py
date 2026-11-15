@@ -117,6 +117,30 @@ class OriginalMsiCustomTypeTests(unittest.TestCase):
             self.assertIn("trace+msi", popen.call_args.kwargs["env"]["WINEDEBUG"])
             self.assertEqual(popen.call_args.kwargs["stderr"], legacy.subprocess.PIPE)
 
+    def test_opt_in_private_store_never_enters_result(self):
+        original = (
+            b'0140:err:msi:execute_script action '
+            b'L"[DATA<=>S-1-5<=>P]ServicePrivateReference" returned 1603\n'
+        )
+        proc = mock.Mock()
+        proc.stderr = io.BytesIO(original)
+        proc.wait.return_value = 0
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            fixture = root / "netfx40_win32_launch.exe"
+            fixture.write_bytes(b"synthetic fixture")
+            with (mock.patch.object(legacy, "validate_prefix"),
+                  mock.patch.object(legacy.subprocess, "Popen", return_value=proc),
+                  mock.patch.object(legacy, "parse_win32", return_value={
+                      "status": "EXIT_CAPTURED", "category": "MSI_FATAL_ERROR"}),
+                  mock.patch.object(legacy, "store_private_action") as saver):
+                report = legacy._run_traced(root / "wine", root, fixture,
+                                            ["SYNTHETIC"], timeout=30,
+                                            store_private=True)
+            saver.assert_called_once_with(root, b"ServicePrivateReference")
+            self.assertNotIn("private_failed_action", report)
+            self.assertNotIn("ServicePrivateReference", str(report))
+
     def test_timed_out_original_setup_cannot_assert_custom_action_type(self):
         original = (
             b'0140:trace:msi:ACTION_CustomAction Handling custom action L"Secret" '

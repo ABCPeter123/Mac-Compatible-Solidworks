@@ -8,6 +8,7 @@ vendor executable, setup text, path or Wine output enters the public report.
 from __future__ import annotations
 
 import argparse
+from functools import partial
 import hashlib
 import json
 import os
@@ -29,12 +30,13 @@ from scripts.netfx481_win32_exit import (
 from scripts.netfx40_msi_evidence import scan as scan_inner_msi, empty as empty_msi, validate as validate_msi
 from scripts.netfx40_msi_inventory import (scan as scan_msi_inventory,
     empty as empty_msi_inventory, validate as validate_msi_inventory)
-from scripts.netfx40_msi_custom_type import (parse as parse_custom_type, empty as empty_custom_type,
+from scripts.netfx40_msi_custom_type import (_private_failed_action, parse as parse_custom_type, empty as empty_custom_type,
     relevant as relevant_custom_trace, validate as validate_custom_type,
     MAX_RETAINED_BYTES, MAX_RETAINED_LINES, MAX_LINE_BYTES)
 from scripts.netfx40_wine_msi_errors import parse as parse_wine_msi, empty as empty_wine_msi, validate as validate_wine_msi, MAX_BYTES as WINE_MSI_MAX
 from scripts.netfx40_msi_logging_policy import apply as enable_msi_logging, restore as restore_msi_logging, blank as blank_logging, validate as validate_logging
 from scripts.wine_mono_removal import inventory, remove_mono
+from scripts.netfx40_private_action import store as store_private_action
 from swcompat.wine_paths import windows_media_path
 
 INSTALLER_NAME = "dotnetfx40_full_x86_x64.exe"
@@ -128,7 +130,8 @@ def _run(wine: Path, prefix: Path, fixture: Path, arguments: list[str],
 
 
 def _run_traced(wine: Path, prefix: Path, fixture: Path,
-                arguments: list[str], *, setup: bool = True, timeout: int = 75) -> dict:
+                arguments: list[str], *, setup: bool = True, timeout: int = 75,
+                store_private: bool = False) -> dict:
     """Stream private Wine MSI debug output; never spool raw trace to disk.
 
     Only selected MSI err/fixme and exact custom-action type lines enter a
@@ -221,6 +224,14 @@ def _run_traced(wine: Path, prefix: Path, fixture: Path,
     result = parse_win32(raw, code)
     result["wine_msi_errors"] = errors
     result["custom_action_type"] = action_type
+    if (store_private and not state["overflow"]
+            and result["status"] == "EXIT_CAPTURED"
+            and result["category"] == "MSI_FATAL_ERROR"):
+        raw_action = _private_failed_action(private)
+        normalized = (raw_action.rsplit(b"]", 1)[-1]
+                      if raw_action and b"]" in raw_action else raw_action)
+        store_private_action(prefix, normalized)
+    # Do not return any original action string, even in an internal dict.
     return result
 
 
@@ -228,7 +239,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
             loader: Path, managed: Path, timeout: int = 210, *,
             enable_verbose_msi: bool = False, refresh_scm_after_mono: bool = False,
             enable_custom_action_type: bool = False,
-            enable_msi_inventory: bool = False) -> dict:
+            enable_msi_inventory: bool = False,
+            enable_private_action: bool = False) -> dict:
     if os.name == "nt":
         raise ValueError("Wine experiment cannot modify native Windows")
     if any(p.is_symlink() for p in (wine, prefix, installer, launcher, loader, managed)):
@@ -316,7 +328,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
         report["status"] = "BLOCKED_WIN32_SELFTEST"
         return report
     windows_path = windows_media_path(wine, prefix, installer)
-    setup_runner = _run_traced if enable_custom_action_type else _run
+    setup_runner = (partial(_run_traced, store_private=enable_private_action)
+                    if enable_custom_action_type else _run)
     if enable_verbose_msi:
         action = enable_msi_logging(wine, prefix)
         report["msi_logging_policy"]["activation"] = action
@@ -445,6 +458,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--experiment-restart-after-mono", action="store_true")
     p.add_argument("--experiment-trace-custom-action-type", action="store_true")
     p.add_argument("--experiment-inventory-retained-msi", action="store_true")
+    p.add_argument("--experiment-private-original-action", action="store_true")
     args = p.parse_args(argv)
     if not 60 <= args.timeout <= 360:
         p.error("Invalid bounded runtime")
@@ -459,7 +473,8 @@ def main(argv: list[str] | None = None) -> int:
                          enable_verbose_msi=args.experiment_enable_verbose_msi,
                          refresh_scm_after_mono=args.experiment_restart_after_mono,
                          enable_custom_action_type=args.experiment_trace_custom_action_type,
-                         enable_msi_inventory=args.experiment_inventory_retained_msi)
+                         enable_msi_inventory=args.experiment_inventory_retained_msi,
+                         enable_private_action=args.experiment_private_original_action)
         if not validate(report):
             raise ValueError("Privacy-safe report invalid")
         args.output.parent.mkdir(parents=True, exist_ok=True)
