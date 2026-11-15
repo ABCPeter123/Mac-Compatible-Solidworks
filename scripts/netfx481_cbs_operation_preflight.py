@@ -5,13 +5,11 @@ identities, or claims that an actual .NET Framework runtime was installed.
 """
 from __future__ import annotations
 
-from collections import Counter
 import xml.etree.ElementTree as ET
 
 MAX_BYTES = 512 * 1024
 MAX_NODES = 30000
 ALLOWED_ARCH = {"amd64", "x86", "arm64", "neutral"}
-MAX_COUNT = 30000
 
 
 def _local(tag: str) -> str:
@@ -30,6 +28,10 @@ def preflight(raw: bytes) -> dict:
         "files": 0,
         "registry_values": 0,
         "unsupported_operations": 0,
+        "installer_assembly": 0,
+        "custom_information": 0,
+        "security_descriptor": 0,
+        "other_unsupported": 0,
         "safe_to_apply": False,
     }
     if not isinstance(raw, bytes) or not raw or len(raw) > MAX_BYTES:
@@ -73,6 +75,12 @@ def preflight(raw: bytes) -> dict:
         elif tag in {"installerAssembly", "customInformation", "securityDescriptor",
                      "driver", "serviceData", "scheduledTasks"}:
             result["unsupported_operations"] += 1
+            category = {
+                "installerAssembly": "installer_assembly",
+                "customInformation": "custom_information",
+                "securityDescriptor": "security_descriptor",
+            }.get(tag, "other_unsupported")
+            result[category] += 1
 
     result["target_arch"] = next(iter(arch)) if len(arch) == 1 else (
         "MIXED" if arch else "UNDETERMINED")
@@ -92,7 +100,12 @@ def summarize_many(payloads: list[bytes]) -> dict:
               "root_neutral": 0, "root_unknown": 0,
               "updates": 0, "parents": 0, "dependencies": 0,
               "files": 0, "registry_values": 0,
-              "unsupported_operations": 0, "safe_to_apply": False}
+              "unsupported_operations": 0, "installer_assembly": 0,
+              "custom_information": 0, "security_descriptor": 0,
+              "other_unsupported": 0,
+              "root_amd64_updates": 0, "root_amd64_parents": 0,
+              "root_amd64_dependencies": 0, "root_amd64_unsupported": 0,
+              "safe_to_apply": False}
     for raw in payloads:
         r = preflight(raw)
         if r["status"] != "PARSED":
@@ -101,6 +114,14 @@ def summarize_many(payloads: list[bytes]) -> dict:
         output["parsed"] += 1
         root_arch = r["root_identity_arch"]
         output["root_" + root_arch if root_arch in ALLOWED_ARCH else "root_unknown"] += 1
+        if root_arch == "amd64":
+            for source, target in (
+                ("updates", "root_amd64_updates"),
+                ("parents", "root_amd64_parents"),
+                ("dependencies", "root_amd64_dependencies"),
+                ("unsupported_operations", "root_amd64_unsupported"),
+            ):
+                output[target] += r[source]
         if r["target_arch"] == "amd64":
             output["amd64_only"] += 1
         elif r["target_arch"] == "MIXED":
@@ -108,6 +129,12 @@ def summarize_many(payloads: list[bytes]) -> dict:
         else:
             output["other_arch"] += 1
         for key in ("updates", "parents", "dependencies", "files",
-                    "registry_values", "unsupported_operations"):
+                    "registry_values", "unsupported_operations",
+                    "installer_assembly", "custom_information",
+                    "security_descriptor", "other_unsupported"):
             output[key] += r[key]
+    assert output["unsupported_operations"] == sum(
+        output[k] for k in ("installer_assembly", "custom_information",
+                            "security_descriptor", "other_unsupported")
+    )
     return output
