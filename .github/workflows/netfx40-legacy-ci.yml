@@ -8,6 +8,8 @@ on:
       - 'scripts/netfx40_msxml3_prerequisite.py'
       - 'tests/test_netfx40_msxml3_prerequisite.py'
       - 'scripts/netfx40_msxml3_restart.py'
+      - 'scripts/netfx40_to_481_upgrade.py'
+      - 'tests/test_netfx40_to_481_upgrade.py'
       - 'tests/test_netfx40_msxml3_restart.py'
       - 'scripts/netfx40_msi_logging_policy.py'
       - 'tests/test_netfx40_msi_logging_policy.py'
@@ -70,6 +72,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx40_launcher_timeout.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_prerequisite.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_restart.py' -v
+          python -m unittest discover -s tests -p 'test_netfx40_to_481_upgrade.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msi_evidence.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msi_inventory.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_offline_extract.py' -v
@@ -98,7 +101,9 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_prerequisite.py' -v
           if ($LASTEXITCODE -ne 0) { throw "msxml3 workaround tests failed" }
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_restart.py' -v
+          python -m unittest discover -s tests -p 'test_netfx40_to_481_upgrade.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Post-setup CLR restart persistence safety regression failed" }
+          if ($LASTEXITCODE -ne 0) { throw "Original Microsoft .NET in-place upgrade safety regression failed" }
           python -m unittest discover -s tests -p 'test_netfx40_msi_evidence.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Nested MSI privacy and failure-action tests failed" }
           python -m unittest discover -s tests -p 'test_netfx40_msi_inventory.py' -v
@@ -136,6 +141,14 @@ jobs:
           $selftest = & build\netfx40_win32_launch.exe --selftest-3010
           if ($LASTEXITCODE -ne 0 -or $selftest -notcontains 'SWCOMPAT_WIN32_SETUP_EXIT_HEX=00000BC2') {
             throw "Exact 4.8 Windows process exit selftest failed"
+          }
+          $cmdText = "@echo off`r`ncall `"$vcvars`"`r`ncl /nologo /W4 /O2 /DUNICODE /D_UNICODE /Fe:build\netfx481_win32_launch.exe probes\netfx481_win32_launch.c`r`nexit /b %errorlevel%`r`n"
+          Set-Content -LiteralPath build/compile-upgrade-481-launcher.cmd -Value $cmdText -Encoding ascii
+          & cmd.exe /d /c build\compile-upgrade-481-launcher.cmd
+          if ($LASTEXITCODE -ne 0) { throw "Original .NET 4.8.1 upgrade launcher compilation failed" }
+          $selftest481 = & build\netfx481_win32_launch.exe --selftest-3010
+          if ($LASTEXITCODE -ne 0 -or $selftest481 -notcontains 'SWCOMPAT_WIN32_SETUP_EXIT_HEX=00000BC2') {
+            throw "Original .NET 4.8.1 upgrade launch reference failed"
           }
           $csc = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
           if (!(Test-Path $csc)) { throw "Microsoft C# compiler missing" }
@@ -187,6 +200,24 @@ jobs:
           (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant() |
             Set-Content -LiteralPath build/netfx40.sha256 -NoNewline -Encoding ascii
           Write-Output "Original .NET Framework 4.8 signed by Microsoft and digest bound"
+      - name: Download and authenticate original Microsoft .NET Framework 4.8.1 upgrade media
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $url = "https://download.microsoft.com/download/4/b/2/cd00d4ed-ebdd-49ee-8a33-eabc3d1030e3/NDP481-x86-x64-AllOS-ENU.exe"
+          $exe = Join-Path (Resolve-Path build) "NDP481-x86-x64-AllOS-ENU.exe"
+          curl.exe --fail --location --retry 3 --max-time 600 --output $exe $url
+          if ($LASTEXITCODE -ne 0) { throw "Authentic Microsoft .NET 4.8.1 upgrade media unavailable" }
+          $item = Get-Item -LiteralPath $exe
+          if ($item.Length -lt 15728640 -or $item.Length -gt 262144000) { throw "Unexpected .NET 4.8.1 media size" }
+          $sig = Get-AuthenticodeSignature -LiteralPath $exe
+          if ($sig.Status -ne [System.Management.Automation.SignatureStatus]::Valid) { throw "Original .NET 4.8.1 signature invalid" }
+          if ($null -eq $sig.SignerCertificate -or $sig.SignerCertificate.Subject -notmatch '(^|, )O=Microsoft Corporation(,|$)') {
+            throw "Original .NET 4.8.1 upgrade media not Microsoft-signed"
+          }
+          (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant() |
+            Set-Content -LiteralPath build/netfx481.sha256 -NoNewline -Encoding ascii
+          Write-Output "Verified signed official .NET 4.8.1 in-place upgrade package"
       - name: Check authenticated Microsoft /x extraction on native Windows without installing
         shell: pwsh
         run: |
@@ -199,9 +230,12 @@ jobs:
           path: |
             build/dotNetFx40_Full_x86_x64.exe
             build/netfx40.sha256
+            build/NDP481-x86-x64-AllOS-ENU.exe
+            build/netfx481.sha256
             build/netfx481_runtime_probe.exe
             build/netfx481_clr_load.exe
             build/netfx40_win32_launch.exe
+            build/netfx481_win32_launch.exe
             build/msi_custom_action_table_probe.exe
           compression-level: 0
           retention-days: 1
@@ -482,6 +516,91 @@ jobs:
             --original build/netfx40-msxml3-runtime.json \
             --output build/netfx40-msxml3-restart.json \
             --agree-disposable-prefix
+      - name: Gate original 4.8.1 upgrade on restarted native Microsoft 4.0
+        if: env.SWCOMPAT_MSXML3_READY == 'yes'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx40_msxml3_restart import validate
+          p = Path("build/netfx40-msxml3-restart.json")
+          assert p.is_file(), "Real Microsoft .NET 4.0 restart evidence missing"
+          r = json.loads(p.read_text(encoding="utf-8"))
+          assert validate(r)
+          if r["persistent_native_managed"] and r["native_only_managed"] == "PASS":
+              with open(os.environ["GITHUB_ENV"], "a") as f:
+                  f.write("SWCOMPAT_NATIVE40_READY=yes\n")
+          print("Original native .NET 4.0 prerequisites passed:", r["persistent_native_managed"])
+          PY
+      - name: Select Windows 10 reported version for original Microsoft 4.8.1 upgrade
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --logs-dir "$RUNNER_TEMP/netfx40-msxml3-logs" set-winver win10
+      - name: Upgrade the functioning Microsoft .NET 4.0 CLR with original Microsoft 4.8.1
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx40_to_481_upgrade \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --installer build/NDP481-x86-x64-AllOS-ENU.exe \
+            --sha256-file build/netfx481.sha256 \
+            --launcher build/netfx481_win32_launch.exe \
+            --loader build/netfx481_clr_load.exe \
+            --managed build/netfx481_runtime_probe.exe \
+            --native40-report build/netfx40-msxml3-restart.json \
+            --output build/netfx40-to-481-upgrade.json \
+            --agree-disposable-prefix
+      - name: Restore Windows 11 profile and verify native-only managed CLR
+        if: always() && env.SWCOMPAT_NATIVE40_READY == 'yes'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --logs-dir "$RUNNER_TEMP/netfx40-msxml3-logs" set-winver win11
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx481_trial import probe
+          from scripts.netfx40_to_481_upgrade import validate
+          up = Path("build/netfx40-to-481-upgrade.json")
+          if not up.is_file():
+              print("Upgrade did not produce an outcome. No runtime claim.")
+          else:
+              original = json.loads(up.read_text(encoding="utf-8"))
+              assert validate(original)
+              wine = Path(os.environ["SWCOMPAT_WINE"])
+              prefix = Path(os.environ["RUNNER_TEMP"]) / "netfx40-msxml3-prefix"
+              fixture = Path("build/netfx481_runtime_probe.exe").resolve()
+              actual = probe(wine, prefix, fixture, override="native_only")
+              ready = (original["framework481_confirmed"]
+                       and actual["registry"] == "AT_LEAST_481"
+                       and actual["clr_family"] == "MICROSOFT_CLR_CANDIDATE"
+                       and actual["managed"] == "PASS")
+              report = {
+                  "win11_native_only_registry": actual["registry"],
+                  "win11_native_only_family": actual["clr_family"],
+                  "win11_native_only_managed": actual["managed"],
+                  "win11_native481_ready": ready,
+              }
+              assert report["win11_native_only_registry"] in {
+                  "AT_LEAST_481", "BELOW_481", "NOT_FOUND", "UNAVAILABLE", "NOT_VERIFIED"}
+              assert report["win11_native_only_family"] in {
+                  "MICROSOFT_CLR_CANDIDATE", "MONO", "UNKNOWN", "NOT_VERIFIED"}
+              assert report["win11_native_only_managed"] in {"PASS", "FAIL", "NOT_VERIFIED"}
+              Path("build/netfx40-to-481-win11.json").write_text(
+                  json.dumps(report, sort_keys=True), encoding="ascii")
+              for key, value in report.items():
+                  print("Original .NET 4.8.1 post-upgrade Windows 11", key, value)
+          PY
       - name: Report only prerequisite and independently verified CLR categories
         if: always()
         shell: bash
@@ -513,6 +632,25 @@ jobs:
                             "runtime_family", "managed_functionality",
                             "candidate_native40", "solidworks_compatibility"):
                       out.write(f"msxml3_trial_{k}: **{r[k]}**\n\n")
+              upgrade_path = Path("build/netfx40-to-481-upgrade.json")
+              if upgrade_path.is_file():
+                  from scripts.netfx40_to_481_upgrade import validate as valid_upgrade
+                  upgraded = json.loads(upgrade_path.read_text(encoding="utf-8"))
+                  assert valid_upgrade(upgraded)
+                  for k in ("status", "original_native40_persistent", "restart",
+                            "clr64_before", "clr64_after", "clr64_change",
+                            "native_clr_load", "native_only_managed",
+                            "runtime_family", "registry", "native_upgrade_candidate",
+                            "framework481_confirmed", "solidworks_compatibility"):
+                      out.write(f"native40_to481_{k}: **{upgraded[k]}**\n\n")
+                  for k in ("status", "category", "child_lifecycle"):
+                      out.write(f"native40_to481_setup_{k}: **{upgraded['setup'][k]}**\n\n")
+              win11_path = Path("build/netfx40-to-481-win11.json")
+              if win11_path.is_file():
+                  resumed = json.loads(win11_path.read_text(encoding="utf-8"))
+                  for k in ("win11_native_only_registry", "win11_native_only_family",
+                            "win11_native_only_managed", "win11_native481_ready"):
+                      out.write(f"{k}: **{resumed[k]}**\n\n")
               restart_path = Path("build/netfx40-msxml3-restart.json")
               if restart_path.is_file():
                   from scripts.netfx40_msxml3_restart import validate as validate_restart
@@ -531,6 +669,8 @@ jobs:
             build/netfx40-msxml3-prerequisite.json
             build/netfx40-msxml3-runtime.json
             build/netfx40-msxml3-restart.json
+            build/netfx40-to-481-upgrade.json
+            build/netfx40-to-481-win11.json
           if-no-files-found: warn
           retention-days: 7
       - name: Validate that msxml3 cannot fabricate a CLR install
@@ -566,4 +706,22 @@ jobs:
                   assert rr["restart"] == "COMPLETED"
                   assert rr["native_loader"] == "LOADED"
                   assert rr["native_only_managed"] == "PASS"
+                  from scripts.netfx40_to_481_upgrade import validate as upgrade_valid
+                  upgrade_path = Path("build/netfx40-to-481-upgrade.json")
+                  assert upgrade_path.is_file(), "Confirmed native 4.0 but upgrade not attempted"
+                  upgraded = json.loads(upgrade_path.read_text(encoding="utf-8"))
+                  assert upgrade_valid(upgraded)
+                  assert upgraded["original_native40_persistent"]
+                  assert upgraded["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+                  win11_path = Path("build/netfx40-to-481-win11.json")
+                  assert win11_path.is_file(), "Upgrade not tested after returning to Windows 11"
+                  after = json.loads(win11_path.read_text(encoding="utf-8"))
+                  assert set(after) == {"win11_native_only_registry",
+                                        "win11_native_only_family",
+                                        "win11_native_only_managed",
+                                        "win11_native481_ready"}
+                  assert type(after["win11_native481_ready"]) is bool
+                  if after["win11_native481_ready"]:
+                      assert upgraded["framework481_confirmed"]
+                      assert after["win11_native_only_managed"] == "PASS"
           PY
