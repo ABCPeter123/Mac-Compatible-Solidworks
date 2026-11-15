@@ -5,6 +5,7 @@ on:
       - '.github/workflows/netfx481-servicing-inventory-ci.yml'
       - 'scripts/netfx481_servicing_inventory.py'
       - 'scripts/netfx481_mum_semantics.py'
+      - 'scripts/netfx481_cbs_operation_preflight.py'
       - 'tests/test_netfx481_mum_semantics.py'
       - 'tests/test_netfx481_servicing_inventory.py'
   workflow_dispatch:
@@ -24,6 +25,8 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_netfx481_servicing_inventory.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Authentic archive inventory tests failed" }
+          python -m unittest discover -s tests -p 'test_netfx481_cbs_operation_preflight.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "CBS operation preflight tests failed" }
           python -m unittest discover -s tests -p 'test_netfx481_mum_semantics.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Authentic servicing package inventory safety tests failed" }
       - name: Authenticate unchanged original signed Microsoft .NET 4.8.1 installer
@@ -75,6 +78,10 @@ jobs:
             Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "$($key): **$($data.$key)**"
           }
           $semantics = $data.mum_semantics
+          $op = $semantics.operation_preflight
+          foreach ($key in @("documents","parsed","invalid","amd64_only","mixed_arch","other_arch","updates","parents","dependencies","files","registry_values","unsupported_operations","safe_to_apply")) {
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "cbs_preflight_$($key): **$($op.$key)**"
+          }
           foreach ($key in @("status","mums_seen","mums_parsed","mum_with_update","mum_with_package","mum_with_dependency","genuine_servicing_performed")) {
             Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "mum_$($key): **$($semantics.$key)**"
           }
