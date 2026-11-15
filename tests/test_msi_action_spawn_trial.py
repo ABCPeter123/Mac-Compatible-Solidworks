@@ -63,6 +63,54 @@ class Win32MsiProbeSpawnTests(unittest.TestCase):
             self.assertNotIn("PRIVATE", str(got))
             self.assertEqual(runner.call_args.kwargs["stderr"], spawn.subprocess.DEVNULL)
 
+    @unittest.skipIf(os.name == "nt", "Wine-only private metadata query")
+    def test_real_win32_child_query_uses_original_private_input_and_two_fixed_reports(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            wine = root / "wine"
+            wine.write_bytes(b"wine")
+            launcher = root / "msi_action_spawn_probe.exe"
+            launcher.write_bytes(b"launcher")
+            probe = root / "msi_custom_action_table_probe.exe"
+            probe.write_bytes(b"probe")
+            msi = root / "swcompat_custom_action_type_control.msi"
+            msi.write_bytes(b"source-authored")
+            temp = root / "drive_c" / "windows" / "temp"
+            input_file = temp / "swcompat_ca_action_private.input"
+            spawn_file = temp / "swcompat_ca_spawn.status"
+            table_file = temp / "swcompat_ca_table_probe.status"
+
+            def invoke(*_args, **kwargs):
+                self.assertEqual(input_file.read_bytes(), b"ServiceTypeControlSentinel")
+                self.assertEqual(input_file.stat().st_mode & 0o777, 0o600)
+                self.assertIs(kwargs["stdin"], spawn.subprocess.DEVNULL)
+                spawn_file.write_bytes(
+                    b"SWCOMPAT_SPAWN_STATUS=STARTED\n"
+                    b"SWCOMPAT_SPAWN_CHILD_EXIT=ZERO\n"
+                    b"SWCOMPAT_SPAWN_ERROR=NONE\n")
+                table_file.write_bytes(
+                    b"SWCOMPAT_CA_TABLE_STAGE=ENTRY\n"
+                    b"SWCOMPAT_CA_TABLE_STAGE=ROW_FETCHED\n"
+                    b"SWCOMPAT_CA_TABLE_STATUS=ACTION_FOUND\n"
+                    b"SWCOMPAT_CA_TABLE_TYPE=3073\n")
+                return mock.Mock(stdout=b"", returncode=0)
+
+            with (
+                mock.patch.object(spawn, "validate_prefix"),
+                mock.patch.object(spawn, "windows_media_path",
+                                  side_effect=[r"Z:\probe.exe", r"Z:\control.msi"]),
+                mock.patch.object(spawn.subprocess, "run", side_effect=invoke) as ran,
+            ):
+                report = spawn.inspect_query(wine, root, launcher, probe, msi)
+            self.assertEqual(report["spawn"]["status"], "STARTED")
+            self.assertEqual(report["table"]["status"], "ACTION_FOUND")
+            self.assertEqual(report["table"]["family"], "DLL_BINARY")
+            self.assertEqual(report["table"]["stage"], "ROW_FETCHED")
+            self.assertEqual(ran.call_args.args[0][1], str(launcher.resolve()))
+            self.assertNotIn("ServiceTypeControlSentinel", str(report))
+            for file in (input_file, spawn_file, table_file):
+                self.assertFalse(file.exists())
+
     def test_rejects_unsafe_enums(self):
         base = {"status": "TIMED_OUT", "child_exit": "NOT_VERIFIED", "error": "NONE"}
         self.assertTrue(spawn.validate(base))
