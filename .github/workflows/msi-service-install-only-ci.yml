@@ -13,6 +13,9 @@ on:
       - 'scripts/msi_service_restart_refresh.py'
       - 'scripts/msi_service_scm_api_reconcile.py'
       - 'scripts/msi_service_scm_coherence.py'
+      - 'scripts/msi_service_scm_session_hold.py'
+      - 'tests/test_msi_service_scm_session_hold.py'
+      - 'docs/MSI_SERVICE_SCM_SESSION_HOLD.md'
       - 'tests/test_msi_service_scm_coherence.py'
       - 'docs/MSI_SERVICE_SCM_COHERENCE.md'
       - 'tests/test_msi_service_scm_api_reconcile.py'
@@ -46,6 +49,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_msi_service_restart_refresh.py' -v
           python -m unittest discover -s tests -p 'test_msi_service_scm_api_reconcile.py' -v
           python -m unittest discover -s tests -p 'test_msi_service_scm_coherence.py' -v
+          python -m unittest discover -s tests -p 'test_msi_service_scm_session_hold.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Unsafe MSI transaction test gate" }
       - name: Compile original x64 SCM service and MSI using MSVC and pinned WiX 5
         shell: pwsh
@@ -190,6 +194,40 @@ jobs:
             --prior build/msi-scm-api-reconcile.json \
             --output build/msi-scm-coherence.json \
             --agree-disposable-prefix
+      - name: Test independent service lookup while real SCM handle stays open
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p 'test_msi_service_scm_session_hold.py' -v
+          python3 -m scripts.msi_service_scm_session_hold \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/self-msi-prefix" \
+            --exe build/service_smoke.exe \
+            --prior build/msi-scm-coherence.json \
+            --output build/msi-scm-session-hold.json \
+            --agree-disposable-prefix
+      - name: Report independent cross-process SCM observation during handle hold
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.msi_service_scm_session_hold import validate
+          path = Path("build/msi-scm-session-hold.json")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("## Cross-process original SCM service while handle retained\n\n")
+              if not path.is_file():
+                  f.write("No bounded handle-lifetime measurement.\n\n")
+              else:
+                  r = json.loads(path.read_text())
+                  if not validate(r):
+                      raise ValueError("Invalid SCM lifetime report")
+                  for field in ("trial", "binary", "registry", "scm_before",
+                                "holder", "scm_while_held", "scm_after",
+                                "outcome", "native_microsoft_clr"):
+                      f.write(f"{field}: **{r[field]}**\n\n")
+          PY
       - name: Report original MSI same-handle SCM coherence
         if: always()
         shell: bash
@@ -312,6 +350,7 @@ jobs:
             build/msi-service-restart.json
             build/msi-scm-api-reconcile.json
             build/msi-scm-coherence.json
+            build/msi-scm-session-hold.json
           if-no-files-found: warn
           retention-days: 7
       - name: Require actual bounded MSI attempt and prohibit false compatibility
@@ -355,6 +394,13 @@ jobs:
               assert coherence["trial"] == "MEASURED"
           assert coherence["native_microsoft_clr"] is False
           assert coherence["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+          from scripts.msi_service_scm_session_hold import validate as validate_hold
+          hold = json.loads(Path("build/msi-scm-session-hold.json").read_text())
+          assert validate_hold(hold)
+          if coherence["trial"] == "MEASURED" and coherence["registry_after"] == "PRESENT":
+              assert hold["trial"] == "MEASURED"
+          assert hold["native_microsoft_clr"] is False
+          assert hold["solidworks_compatibility"] == "NOT_DEMONSTRATED"
           assert report["status"] == "MEASURED"
           assert report["service_before"] == "ABSENT"
           assert report["winver"] == "APPLIED"
