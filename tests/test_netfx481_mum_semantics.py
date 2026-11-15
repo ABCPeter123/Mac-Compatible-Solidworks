@@ -59,6 +59,28 @@ class OriginalMumTests(TestCase):
             self.assertFalse(r["genuine_servicing_performed"])
             self.assertNotIn("SECRET", str(r))
 
+    def test_distinct_x86_and_x64_cabs_are_aggregated(self):
+        x86 = sem.blank("PARSED")
+        x86["mums_seen"] = x86["mums_parsed"] = 1
+        x86["mum_with_update"] = 1
+        x86["tags"]["assemblyIdentity"] = 2
+        x86["architectures"]["x86"] = 2
+        amd64 = sem.blank("PARSED")
+        amd64["mums_seen"] = amd64["mums_parsed"] = 1
+        amd64["mum_with_update"] = 1
+        amd64["tags"]["assemblyIdentity"] = 3
+        amd64["architectures"]["amd64"] = 3
+        both = sem.combine([x86, amd64])
+        self.assertTrue(sem.valid(both))
+        self.assertEqual(both["status"], "PARSED")
+        self.assertEqual(both["mums_seen"], 2)
+        self.assertEqual(both["architectures"]["amd64"], 3)
+        self.assertEqual(both["architectures"]["x86"], 2)
+        self.assertFalse(both["genuine_servicing_performed"])
+        one_partial = sem.combine([x86, sem.blank("EXTRACTION_FAILED")])
+        self.assertEqual(one_partial["status"], "PARTIAL")
+        self.assertEqual(one_partial["mums_parsed"], 1)
+
     def test_unexpected_existing_extract_folder_is_refused(self):
         with TemporaryDirectory() as td:
             p = Path(td)
