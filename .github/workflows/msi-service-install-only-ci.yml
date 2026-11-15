@@ -11,6 +11,9 @@ on:
       - 'scripts/msi_service_registry_observation.py'
       - 'tests/test_msi_service_registry_observation.py'
       - 'scripts/msi_service_restart_refresh.py'
+      - 'scripts/msi_service_scm_api_reconcile.py'
+      - 'tests/test_msi_service_scm_api_reconcile.py'
+      - 'docs/MSI_SERVICE_SCM_API_DIFFERENTIAL.md'
       - 'tests/test_msi_service_restart_refresh.py'
       - 'docs/MSI_SERVICE_WINE_RESTART.md'
       - 'docs/MSI_SERVICE_REGISTRY_OBSERVATION.md'
@@ -38,6 +41,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_msi_service_registry_observation.py' -v
           if ($LASTEXITCODE -ne 0) { throw 'Service registry test failed' }
           python -m unittest discover -s tests -p 'test_msi_service_restart_refresh.py' -v
+          python -m unittest discover -s tests -p 'test_msi_service_scm_api_reconcile.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Unsafe MSI transaction test gate" }
       - name: Compile original x64 SCM service and MSI using MSVC and pinned WiX 5
         shell: pwsh
@@ -158,6 +162,42 @@ jobs:
             --prior build/msi-service-registry-vs-scm.json \
             --output build/msi-service-restart.json \
             --agree-disposable-prefix
+      - name: Test real CreateServiceW registration after original MSI registry-only service
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p 'test_msi_service_scm_api_reconcile.py' -v
+          python3 -m scripts.msi_service_scm_api_reconcile \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/self-msi-prefix" \
+            --exe build/service_smoke.exe \
+            --prior build/msi-service-restart.json \
+            --output build/msi-scm-api-reconcile.json \
+            --agree-disposable-prefix
+      - name: Report finite SCM API registration and service start evidence
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.msi_service_scm_api_reconcile import validate
+          path = Path("build/msi-scm-api-reconcile.json")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("## SCM API registration after original MSI service install\n\n")
+              if not path.is_file():
+                  f.write("Original API reconciliation not measured.\n")
+              else:
+                  r = json.loads(path.read_text())
+                  if not validate(r):
+                      raise ValueError("Unsafe SCM API reconciliation report")
+                  for field in ("trial", "installed_binary", "scm_before",
+                                "registry_before", "api_register", "scm_after_register",
+                                "api_start", "scm_final", "registry_final",
+                                "registration_visibility_recovered",
+                                "service_running_verified", "native_microsoft_clr"):
+                      f.write(f"{field}: **{r[field]}**\n\n")
+          PY
       - name: Report finite pre/post-restart service visibility evidence
         shell: bash
         if: always()
@@ -233,6 +273,7 @@ jobs:
             build/msi-service-action.json
             build/msi-service-registry-vs-scm.json
             build/msi-service-restart.json
+            build/msi-scm-api-reconcile.json
           if-no-files-found: warn
           retention-days: 7
       - name: Require actual bounded MSI attempt and prohibit false compatibility
@@ -257,6 +298,12 @@ jobs:
           assert restart["registry_before"] == "PRESENT"
           assert restart["scm_before"] == "ABSENT"
           assert restart["native_microsoft_clr"] is False
+          from scripts.msi_service_scm_api_reconcile import validate as validate_api
+          api = json.loads(Path("build/msi-scm-api-reconcile.json").read_text())
+          assert validate_api(api)
+          assert api["trial"] == "MEASURED"
+          assert api["native_microsoft_clr"] is False
+          assert api["solidworks_compatibility"] == "NOT_DEMONSTRATED"
           assert report["status"] == "MEASURED"
           assert report["service_before"] == "ABSENT"
           assert report["winver"] == "APPLIED"
