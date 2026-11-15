@@ -851,6 +851,21 @@ jobs:
                   assert upgrade_valid(upgraded)
                   assert upgraded["original_native40_persistent"]
                   assert upgraded["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+                  retry = Path("build/netfx40-to-481-win11retry.json")
+                  if (upgraded["setup"]["exit_hex"] == "000013EC"
+                          and upgraded["clr64_change"] == "UNCHANGED"
+                          and upgraded["native_clr_load"] == "LOADED"
+                          and upgraded["native_only_managed"] == "PASS"):
+                      assert retry.is_file(), "Windows 11 original setup after 5100 not measured"
+                  if retry.is_file():
+                      second = json.loads(retry.read_text(encoding="utf-8"))
+                      assert upgrade_valid(second)
+                      assert second["original_native40_persistent"]
+                      assert second["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+                      if second["framework481_confirmed"]:
+                          assert second["setup"]["category"] in {"SUCCESS", "REBOOT_REQUIRED"}
+                          assert second["clr64_change"] == "CHANGED"
+                          assert second["native_only_managed"] == "PASS"
                   win11_path = Path("build/netfx40-to-481-win11.json")
                   assert win11_path.is_file(), "Upgrade not tested after returning to Windows 11"
                   after = json.loads(win11_path.read_text(encoding="utf-8"))
