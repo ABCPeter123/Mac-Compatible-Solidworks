@@ -397,6 +397,36 @@ jobs:
           python3 -m swcompat \
             --prefix "$RUNNER_TEMP/netfx481-msxml3-prefix" \
             --logs-dir "$RUNNER_TEMP/netfx481-msxml3-logs" set-winver win10
+      - name: Test verified Windows 10 compatibility sidecar on original .NET 4.8.1
+        if: env.SWCOMPAT_NETFX481_MSXML3_READY == 'yes'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx481_trial import validate_prefix, verify_media
+          prefix = Path(os.environ["RUNNER_TEMP"]) / "netfx481-msxml3-prefix"
+          validate_prefix(prefix)
+          installer = Path("build/NDP481-x86-x64-AllOS-ENU.exe")
+          digest = Path("build/netfx481.sha256")
+          sidecar = installer.with_name(installer.name + ".manifest")
+          manifest = Path("probes/winver_481_win10.manifest")
+          assert not sidecar.exists() and not sidecar.is_symlink() and not manifest.is_symlink()
+          assert verify_media(installer, digest)
+          xml = manifest.read_text(encoding="utf-8")
+          assert "8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a" in xml and len(xml) < 2048
+          with sidecar.open("x", encoding="utf-8") as f:
+              f.write(xml)
+          assert verify_media(installer, digest)
+          Path("build/netfx481-direct-sidecar-setup.json").write_text(
+              json.dumps({"status": "WRITTEN", "original_media_unchanged": True}),
+              encoding="ascii")
+          print("Original signed Microsoft installer unchanged, Windows 10 sidecar active")
+          PY
+          WINEPREFIX="$RUNNER_TEMP/netfx481-msxml3-prefix" WINEARCH=win64 WINEDEBUG=-all \
+            "$SWCOMPAT_WINE" reg.exe add 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\SideBySide' \
+            /v PreferExternalManifest /t REG_DWORD /d 1 /f >/dev/null 2>&1
       - name: Run unchanged authentic Microsoft .NET 4.8.1 installer after msxml3
         if: env.SWCOMPAT_NETFX481_MSXML3_READY == 'yes'
         shell: bash
@@ -418,6 +448,31 @@ jobs:
             --experiment-remove-wine-mono \
             --experiment-reboot-after-possible-3010 \
             --experiment-setup-log
+      - name: Remove external manifest after original .NET 4.8.1 setup
+        if: always() && env.SWCOMPAT_NETFX481_MSXML3_READY == 'yes'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.netfx481_trial import verify_media
+          installer = Path("build/NDP481-x86-x64-AllOS-ENU.exe")
+          sidecar = installer.with_name(installer.name + ".manifest")
+          expected = Path("probes/winver_481_win10.manifest").read_bytes()
+          if sidecar.is_file():
+              assert not sidecar.is_symlink() and sidecar.read_bytes() == expected
+              sidecar.unlink()
+          assert not sidecar.exists()
+          assert verify_media(installer, Path("build/netfx481.sha256"))
+          Path("build/netfx481-direct-sidecar-cleanup.json").write_text(
+              json.dumps({"status": "REMOVED", "original_media_unchanged": True}),
+              encoding="ascii")
+          print("Signed original Microsoft .NET 4.8.1 bytes verified unchanged after setup")
+          PY
+          WINEPREFIX="$RUNNER_TEMP/netfx481-msxml3-prefix" WINEARCH=win64 WINEDEBUG=-all \
+            "$SWCOMPAT_WINE" reg.exe delete 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\SideBySide' \
+            /v PreferExternalManifest /f >/dev/null 2>&1 || true
       - name: Restore Windows 11 profile and test the actual managed runtime
         if: always()
         shell: bash
@@ -487,6 +542,8 @@ jobs:
           path: |
             build/netfx481-msxml3-prerequisite.json
             build/netfx481-msxml3-experiment.json
+            build/netfx481-direct-sidecar-setup.json
+            build/netfx481-direct-sidecar-cleanup.json
           if-no-files-found: warn
           retention-days: 7
       - name: Require real signed installer measurement without false SOLIDWORKS claims
@@ -507,6 +564,11 @@ jobs:
                   and p["x86_dll_changed"] and p["x64_dll_changed"]):
               assert runtime.is_file(), "Original .NET 4.8.1 trial did not execute"
           if runtime.is_file():
+              for name, expected in (("setup", "WRITTEN"), ("cleanup", "REMOVED")):
+                  policy = Path(f"build/netfx481-direct-sidecar-{name}.json")
+                  assert policy.is_file(), "Original Microsoft sidecar setup not verified"
+                  assert json.loads(policy.read_text()) == {
+                      "status": expected, "original_media_unchanged": True}
               r = json.loads(runtime.read_text())
               assert r["scope"] == "MICROSOFT_NETFX481_WINE_DISPOSABLE_EXPERIMENT"
               assert r["media_sha256_verified"] is True
