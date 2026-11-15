@@ -29,3 +29,21 @@ This experiment is not a SOLIDWORKS installation and does not establish function
 The prior aggregate Wine class still contains `MSI_ACTION_SERVICE`. **This is not evidence of a failed standard InstallServices or StartServices action.** The older broad classifier matches `installservice`/ `startservice` *substrings* in arbitrary action names. The exact classifier requires canonical full action names, and found none. Do not target a Wine standard service-action implementation based solely on that broad category.
 
 **Next change:** remove the misleading substring-based service classification; distinguish an original nonstandard action name from a genuine built-in MSI action. For nonstandard actions, allow only finite shape/category hints without emitting its raw expanded identifier. Then reproduce the actual failing behavior in a harmless independently authored MSI before proposing compatibility hooks.
+
+
+## Correcting an unsafe earlier service classification
+
+The broad Wine error classifier had treated *any* failed script action whose name contained a word such as `installservice` as a standard `MSI_ACTION_SERVICE`. The exact-action trial proved `first_failed_action=OTHER_ACTION` with zero canonical `InstallServices`/`StartServices` failures, revealing that this broad heuristic was unreliable. Matching a word inside a private MSI property expansion or vendor-defined custom-action identifier is **not proof** that Wine's standard service code failed.
+
+The classifier now uses the **same exact allowlisted standard action categories** for both `classes` and `first_failed_action`, preventing this mismatch. When an original failed script action is nonstandard, `nonstandard_name_hint` reports only one name-shape hint from `SERVICE_TEXT_ONLY`, `REGISTRY_TEXT_ONLY`, `ASSEMBLY_TEXT_ONLY`, `MSI_PROPERTY_EXPANSION` or `OTHER_NONSTANDARD_NAME`. The default for a known standard action or missing action is `NOT_APPLICABLE`. A hint is always **NAME_ONLY**, never an API result or root-cause classification. Original action names and log bytes remain local to the disposable runner.
+
+The next native .NET A/B will reveal whether the original action merely contains service-related text, is an expanded MSI property, or another nonstandard action. Even a `SERVICE_TEXT_ONLY` result does not authorize a Wine `StartServiceW` shim. A source-authored reproduction of the actual operation remains necessary.
+
+
+## Original signed Apple Silicon result after removing false service matches
+
+[PR #82 run 43667409044](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43667409044) passed the original Microsoft media authentication, strict cross-platform tests and full Apple Silicon original installation evidence gates. The Microsoft installer still returned `MSI_FATAL_ERROR`, both native CLR binaries remained absent and independent native DLL loading reported NOT_FOUND.
+
+The corrected Wine error categories are `MSI_ACTION_FINALIZE`, `MSI_TSAWARE_UNIMPLEMENTED` and `OTHER_MSI_ERROR`, from three errors. The first exact failed action remained `OTHER_ACTION`, `service_action_failures=[]`, and the new name-only hint was `SERVICE_TEXT_ONLY`.
+
+This **confirms a failure in a nonstandard action whose original name includes service-related text**, not that Microsoft's built-in MSI `InstallServices`/`StartServices` actions were called or failed. The precise underlying Windows API or Wine implementation remains unknown; the next test must capture bounded lower-level operation evidence or construct a source-backed reproduction before proposing any Wine patch.
