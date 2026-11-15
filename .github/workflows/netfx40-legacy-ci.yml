@@ -9,6 +9,9 @@ on:
       - 'tests/test_netfx40_msi_logging_policy.py'
       - 'docs/NETFX40_VERBOSE_MSI_POLICY.md'
       - 'scripts/netfx40_msi_evidence.py'
+      - 'scripts/netfx40_msi_inventory.py'
+      - 'tests/test_netfx40_msi_inventory.py'
+      - 'docs/NETFX40_RETAINED_MSI_CENSUS.md'
       - 'scripts/netfx40_wine_msi_errors.py'
       - 'scripts/netfx40_msi_custom_type.py'
       - 'tests/test_netfx40_msi_custom_type.py'
@@ -32,6 +35,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   absolute-path-regressions:
     name: Verify .NET 4.0 native CLR false-positive regressions on POSIX
@@ -46,6 +53,7 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_netfx40_legacy.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msi_evidence.py' -v
+          python -m unittest discover -s tests -p 'test_netfx40_msi_inventory.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_wine_msi_errors.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msi_custom_type.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msi_logging_policy.py' -v
@@ -66,6 +74,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Original Microsoft 4.0 safety tests failed" }
           python -m unittest discover -s tests -p 'test_netfx40_msi_evidence.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Nested MSI privacy and failure-action tests failed" }
+          python -m unittest discover -s tests -p 'test_netfx40_msi_inventory.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Retained MSI candidate census privacy test failed" }
           python -m unittest discover -s tests -p 'test_netfx40_wine_msi_errors.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Wine MSI error evidence regression failed" }
           python -m unittest discover -s tests -p 'test_netfx40_msi_logging_policy.py' -v
@@ -186,7 +196,8 @@ jobs:
             --timeout 210 --agree-disposable-prefix \
             --experiment-enable-verbose-msi \
             --experiment-restart-after-mono \
-            --experiment-trace-custom-action-type
+            --experiment-trace-custom-action-type \
+            --experiment-inventory-retained-msi
       - name: Publish only bounded .NET 4.0 status categories
         if: always()
         shell: bash
@@ -223,6 +234,9 @@ jobs:
                       f.write(f"custom_action_{field}: **{r['custom_action_type'][field]}**\n\n")
                   for field in ("activation", "restoration"):
                       f.write(f"msi_logging_{field}: **{r['msi_logging_policy'][field]}**\n\n")
+                  for field in ("status", "msi_candidates", "netfx_named_candidates",
+                                "directories_checked", "file_entries_checked"):
+                      f.write(f"retained_msi_{field}: **{r['msi_inventory'][field]}**\n\n")
                   for field in ("status", "files_scanned", "msi_files",
                                 "primary_source", "msi_result",
                                 "first_failed_action_class", "errors", "causality"):
@@ -250,6 +264,9 @@ jobs:
           assert r["installer_status"] == "EXIT_CAPTURED"
           from scripts.netfx40_msi_evidence import validate as validate_msi
           assert validate_msi(r["inner_msi"])
+          from scripts.netfx40_msi_inventory import validate as validate_inventory
+          assert validate_inventory(r["msi_inventory"])
+          assert r["msi_inventory"]["status"] != "NOT_REQUESTED"
           from scripts.netfx40_wine_msi_errors import validate as validate_wine_msi
           assert validate_wine_msi(r["wine_msi_errors"])
           from scripts.netfx40_msi_custom_type import validate as validate_custom_type
