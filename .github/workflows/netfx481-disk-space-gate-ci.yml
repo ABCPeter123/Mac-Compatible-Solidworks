@@ -1,0 +1,130 @@
+name: Check Windows disk-space prerequisites for original .NET 4.8.1
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/netfx481-disk-space-gate-ci.yml'
+      - 'probes/netfx481_disk_space_gate.c'
+      - 'scripts/netfx481_disk_space_gate.py'
+      - 'tests/test_netfx481_disk_space_gate.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-reference:
+    runs-on: windows-2025
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Unit-test safe capacity categories
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests -p 'test_netfx481_disk_space_gate.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Disk-capacity parser tests failed" }
+      - name: Build original self-authored x64 disk-space API probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force build | Out-Null
+          $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw 'MSVC x64 tools unavailable' }
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $lines = @('@echo off', ('call "' + $vcvars + '"'),
+            'cl /nologo /W4 /O2 /Fe:build\netfx481_disk_space_gate.exe probes\netfx481_disk_space_gate.c',
+            'exit /b %errorlevel%')
+          [System.IO.File]::WriteAllLines((Join-Path (Get-Location) 'build\compile-disk-space.cmd'), $lines, [System.Text.Encoding]::ASCII)
+          & cmd.exe /d /c build\compile-disk-space.cmd
+          if ($LASTEXITCODE -ne 0) { throw 'Disk probe compilation failed' }
+          $lines = @(& build\netfx481_disk_space_gate.exe)
+          if ($LASTEXITCODE -ne 0 -or $lines -notcontains 'SWCOMPAT_DISK_SCHEMA=1') {
+            throw 'Native Windows disk probe did not return schema'
+          }
+          $required = @('SWCOMPAT_DISK_C=', 'SWCOMPAT_DISK_TEMP=',
+                        'SWCOMPAT_DISK_LEGACY=', 'SWCOMPAT_DISK_TEMP_SAME_VOLUME=')
+          foreach ($field in $required) {
+            if (@($lines | Where-Object { $_.StartsWith($field) }).Count -ne 1) {
+              throw 'Native Windows disk API status missing or duplicate'
+            }
+          }
+          Write-Output 'Native Windows source-authored disk APIs measured'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: self-authored-original-netfx481-disk-check
+          path: build/netfx481_disk_space_gate.exe
+          retention-days: 1
+
+  apple-silicon-wine:
+    needs: windows-reference
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: self-authored-original-netfx481-disk-check
+          path: build
+      - name: Verify hash-pinned Apple Silicon Wine 11.21
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-staging-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-staging-11.21-osx64.tar.xz"
+          echo "d7bcd5abf4df27aae397a7898aef074fea4a2e0b51e0a55aa9659517bbf9d452  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/netfx481-disk-wine"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/netfx481-disk-wine"
+          WINE_BIN="$(find "$RUNNER_TEMP/netfx481-disk-wine" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Create one clean, marked disposable Wine x64 prefix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat \
+            --prefix "$RUNNER_TEMP/netfx481-disk-prefix" \
+            --logs-dir "$RUNNER_TEMP/netfx481-disk-logs" init
+          touch "$RUNNER_TEMP/netfx481-disk-prefix/.swcompat-netfx481-disposable"
+          python3 -m swcompat \
+            --prefix "$RUNNER_TEMP/netfx481-disk-prefix" \
+            --logs-dir "$RUNNER_TEMP/netfx481-disk-logs" set-winver win10
+      - name: Classify real Wine disk API return values, never filesystem content
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx481_disk_space_gate \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx481-disk-prefix" \
+            --fixture build/netfx481_disk_space_gate.exe \
+            --output build/netfx481-disk-categories.json \
+            --agree-disposable-prefix
+      - name: Assert finite report, no false .NET runtime success
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx481_disk_space_gate import valid
+          p = Path("build/netfx481-disk-categories.json")
+          assert p.is_file(), "The Wine disk test did not run"
+          r = json.loads(p.read_text(encoding="ascii"))
+          assert valid(r)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("## Read-only 4.8.1 Windows disk-space API differential\n\n")
+              for key, value in r.items():
+                  f.write(f"{key}: **{value}**\n\n")
+              f.write("Measures a clean Wine prefix, not the original Microsoft setup's private decisions or a CLR installation.\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netfx481-disk-only-categories
+          path: build/netfx481-disk-categories.json
+          if-no-files-found: warn
+          retention-days: 7
