@@ -54,3 +54,12 @@ The real Apple Silicon job [43665129268](https://github.com/ABCPeter123/Mac-Comp
 - The precise fix is `[A-Z0-9_]+` for the marker name, while preserving the four required fields, unique marker checks, strict enumerated output, and rejection of malformed extra service lines.
 
 This fixes a **test harness false negative**. It does not by itself demonstrate that the Wine service becomes visible through the SCM from a new process or that native Microsoft .NET Framework works. The same original MSI and independent service fixture must be rerun on Apple Silicon to measure the corrected service state.
+
+
+## Verified independent SCM recovery after Wine restart, corrected parser
+
+The [first parser-corrected Apple Silicon run 43665377780](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43665377780) installed the original harmless MSI with Windows Installer return ZERO and exact binary bytes `PRESENT_MATCH`. The independent service lookup before restart was **ABSENT**, while the service registry was **PRESENT**. After the same disposable Wine prefix underwent the bounded `wineboot --restart`, the subsequent independent Win32 controller observed **STOPPED** and the original service registry was still **PRESENT**. `service_visibility_recovered=True` was genuinely measured. This is **not** a running service or Microsoft CLR.
+
+That run's last CI gate failed because an old assertion required the `CreateServiceW`-based reconciliation trial to be `MEASURED`. The original script correctly chose `NOT_APPLICABLE` because no repair was needed once the service was visible. The gate is now conditional: when the real restart, original MSI success, exact installed binary, registry persistence and independent `STOPPED/RUNNING` result are all proved, it **requires** the repair, same-connection and holder trials to be `NOT_APPLICABLE`, not fake measured successes. If restart does not restore independent service visibility, it still requires the full API-reconciliation trial and its strict evidence gates.
+
+This result supports testing a controlled, bounded SCM refresh **between distinct prerequisite installers** in a disposable Wine prefix. It does **not** prove that Wine can complete a service's own `InstallServices`+`StartServices` actions within a single MSI transaction, or that Microsoft's .NET Framework or SOLIDWORKS can install.
