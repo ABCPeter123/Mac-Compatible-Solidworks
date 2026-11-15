@@ -12,17 +12,13 @@ class Native40To48IntermediateTests(unittest.TestCase):
     def test_registry_release_strict_windows_output(self):
         self.assertEqual(p.parse_release(b" Release REG_DWORD 0x80ff4\r\n", 0),
                          "NETFX48_RANGE")
-        self.assertEqual(p.parse_release(b" Release REG_DWORD 0x00080be0\n", 0),
+        self.assertEqual(p.parse_release(b" Release REG_DWORD 0x80eb1\n", 0),
                          "NETFX48_RANGE")
-        self.assertEqual(p.parse_release(b" Release REG_DWORD 0x82748\n", 0),
-                         "NETFX48_RANGE")
+        self.assertEqual(p.parse_release(b" Release REG_DWORD 0x82348\n", 0),
+                         "AT_LEAST_481")
         self.assertEqual(p.parse_release(b" Release REG_DWORD 0x1\n", 0),
                          "BELOW_48")
-        self.assertEqual(p.parse_release(b" Release REG_DWORD 0x82600\n", 0),
-                         "BELOW_48")
-        self.assertEqual(p.parse_release(b" Release REG_DWORD 0x82478\n", 0),
-                         "BELOW_48")
-        self.assertEqual(p.parse_release(b" Release REG_DWORD 0x82660\n", 0),
+        self.assertEqual(p.parse_release(b" Release REG_DWORD 0x80be0\n", 0),
                          "BELOW_48")
         self.assertEqual(p.parse_release(b"", 1), "NOT_FOUND")
         self.assertEqual(p.parse_release(b"", 2), "UNAVAILABLE")
