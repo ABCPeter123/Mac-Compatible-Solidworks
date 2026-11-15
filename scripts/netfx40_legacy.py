@@ -141,7 +141,7 @@ def _run_traced(wine: Path, prefix: Path, fixture: Path,
     env = _env(prefix, installation=True)
     env["WINEDEBUG"] = "-all,err+msi,fixme+msi,trace+msi"
     retained = bytearray()
-    state = {"overflow": False, "lines": 0}
+    state = {"overflow": False, "lines": 0, "reason": "NONE"}
     code, failed = 124, "PROCESS_FAILED"
     with tempfile.TemporaryFile() as output:
         try:
@@ -163,14 +163,22 @@ def _run_traced(wine: Path, prefix: Path, fixture: Path,
                                 return
                             if not relevant_custom_trace(line):
                                 continue
-                            if (state["lines"] >= MAX_RETAINED_LINES
-                                    or len(retained) + len(line) > MAX_RETAINED_BYTES):
+                            if state["lines"] >= MAX_RETAINED_LINES:
                                 state["overflow"] = True
+                                if state["reason"] == "NONE":
+                                    state["reason"] = "LINE_LIMIT"
+                                continue
+                            if len(retained) + len(line) > MAX_RETAINED_BYTES:
+                                state["overflow"] = True
+                                if state["reason"] == "NONE":
+                                    state["reason"] = "BYTE_LIMIT"
                                 continue
                             retained.extend(line)
                             state["lines"] += 1
                 except OSError:
                     state["overflow"] = True
+                    if state["reason"] == "NONE":
+                        state["reason"] = "READER_UNFINISHED"
 
             reader = threading.Thread(target=drain, daemon=True)
             reader.start()
@@ -190,11 +198,19 @@ def _run_traced(wine: Path, prefix: Path, fixture: Path,
             reader.join(timeout=5)
             if reader.is_alive():
                 state["overflow"] = True
+                if state["reason"] == "NONE":
+                    state["reason"] = "READER_UNFINISHED"
         output.seek(0)
         raw = output.read(4097)
     private = bytes(retained)
     errors = parse_wine_msi(private, oversized=state["overflow"])
-    action_type = parse_custom_type(private, truncated=state["overflow"] or failed is not None)
+    reason = state["reason"]
+    if failed is not None and reason == "NONE":
+        reason = "PROCESS_INCOMPLETE"
+    action_type = parse_custom_type(
+        private, truncated=state["overflow"] or failed is not None,
+        capture_reason=reason,
+    )
     if failed:
         return {"status": failed, "category": "NOT_AVAILABLE",
                 "exit_hex": "NOT_VERIFIED", "child_seen": "NOT_VERIFIED",
@@ -454,7 +470,7 @@ def main(argv: list[str] | None = None) -> int:
                 "nonstandard_name_hint"):
         print("Wine MSI narrow error channel", key, report["wine_msi_errors"][key])
     for key in ("status", "family", "base_type", "execution", "impersonation",
-                "asynchronous", "ts_aware"):
+                "asynchronous", "ts_aware", "capture_reason"):
         print("Microsoft MSI private action type", key, report["custom_action_type"][key])
     for key in ("activation", "restoration"):
         print("Microsoft MSI verbose logging policy", key, report["msi_logging_policy"][key])
