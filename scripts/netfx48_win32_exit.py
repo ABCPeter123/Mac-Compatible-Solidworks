@@ -17,7 +17,8 @@ MAX_OUTPUT = 4096
 
 
 def launch(wine: Path, prefix: Path, installer: Path,
-           fixture: Path, timeout: int = 245) -> dict:
+           fixture: Path, timeout: int = 245, *,
+           fusion_builtin: bool = False) -> dict:
     from scripts.netfx481_trial import validate_prefix
     from swcompat.wine_paths import windows_media_path
 
@@ -34,6 +35,10 @@ def launch(wine: Path, prefix: Path, installer: Path,
     env = os.environ.copy()
     env.pop("WINEDLLOVERRIDES", None)
     env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64", "WINEDEBUG": "-all"})
+    if type(fusion_builtin) is not bool:
+        raise ValueError("Only boolean Fusion compatibility option allowed")
+    if fusion_builtin:
+        env["WINEDLLOVERRIDES"] = "fusion=b"
     with tempfile.TemporaryFile() as output:
         try:
             process = subprocess.run(
