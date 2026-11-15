@@ -124,6 +124,8 @@ class SCMHolderTests(unittest.TestCase):
             b"SWCOMPAT_SERVICE_PHASE=status\n"
             b"SWCOMPAT_SERVICE_ERROR=1060\n"
             b"SWCOMPAT_SERVICE_STATE=0\n"
+            b"SWCOMPAT_SERVICE_PID=0\n"
+            b"SWCOMPAT_SERVICE_WIN32_EXIT=0\n"
             b"SWCOMPAT_SERVICE_CHECK=FAIL\n"
         )
         self.assertEqual(trial.protocol_detail(base, 1, "status"), "VALID")
