@@ -45,7 +45,8 @@ def parse(raw: bytes, code: int) -> dict:
         key = found.group(1).decode("ascii")
         value = found.group(2).decode("ascii")
         if key == "STAGE":
-            if value not in STAGES or value == "NOT_OBSERVED" or len(stages) >= 8:
+            if (value not in STAGES or value == "NOT_OBSERVED"
+                    or value in stages or len(stages) >= len(STAGES) - 1):
                 return r
             stages.append(value)
             stage = value
