@@ -34,7 +34,7 @@ class OriginalMsiCensusTests(unittest.TestCase):
             folder = root / "drive_c" / "Temp"
             folder.mkdir(parents=True)
             (folder / "netfx_tiny.msi").write_bytes(b"tiny")
-            (folder / "name?.msi").write_bytes(b"own" * 2000)
+            (folder / "nameé.msi").write_bytes(b"own" * 2000)
             with mock.patch.object(inv, "validate_prefix"):
                 result = inv.scan(root)
             self.assertEqual(result["status"], "ABSENT")
