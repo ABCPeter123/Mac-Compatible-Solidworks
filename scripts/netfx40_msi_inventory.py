@@ -73,7 +73,11 @@ def scan(prefix: Path) -> dict:
     # C:\\<random-hex> rather than %TEMP%. Include only strict immediate
     # hash-named directories inside this marked prefix, never drive roots
     # mounted elsewhere or arbitrary user-selected media directories.
-    if drive_c.is_symlink() or not drive_c.is_dir():
+    if drive_c.is_symlink():
+        return {**result, "status": "INVALID_ROOT"}
+    if not drive_c.exists():
+        return result
+    if not drive_c.is_dir():
         return {**result, "status": "INVALID_ROOT"}
     try:
         hash_dirs = [
