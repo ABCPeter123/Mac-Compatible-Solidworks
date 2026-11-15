@@ -8,6 +8,9 @@ on:
       - 'probes/msi_custom_action_fail.c'
       - 'scripts/msi_custom_action_type_control.py'
       - 'probes/msi_custom_action_table_probe.c'
+      - 'probes/msi_action_spawn_probe.c'
+      - 'scripts/msi_action_spawn_trial.py'
+      - 'tests/test_msi_action_spawn_trial.py'
       - 'scripts/msi_custom_action_table_type.py'
       - 'tests/test_msi_custom_action_table_type.py'
       - 'scripts/netfx40_msi_custom_type.py'
@@ -36,6 +39,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Unsafe self-authored MSI differential' }
           python -m unittest discover -s tests -p 'test_msi_custom_action_table_type.py' -v
           if ($LASTEXITCODE -ne 0) { throw 'Unsafe MSI Action Type lookup' }
+          python -m unittest discover -s tests -p 'test_msi_action_spawn_trial.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'Unsafe Win32 process-start observer' }
       - name: Compile original x64 DLL, WiX 5 MSI, and exact hash
         shell: pwsh
         run: |
@@ -52,10 +57,12 @@ jobs:
             'cl /nologo /W4 /O2 /LD /Fe:build\msi_custom_action_fail.dll probes\msi_custom_action_fail.c',
             'if errorlevel 1 exit /b %errorlevel%',
             'cl /nologo /W4 /O2 /MT /DUNICODE /D_UNICODE /Fe:build\msi_custom_action_table_probe.exe probes\msi_custom_action_table_probe.c',
+            'if errorlevel 1 exit /b %errorlevel%',
+            'cl /nologo /W4 /O2 /MT /DUNICODE /D_UNICODE /Fe:build\msi_action_spawn_probe.exe probes\msi_action_spawn_probe.c',
             'exit /b %errorlevel%')
           [System.IO.File]::WriteAllLines((Join-Path (Get-Location) 'build\compile-custom-control.cmd'), $lines, [System.Text.Encoding]::ASCII)
           & cmd.exe /d /c build\compile-custom-control.cmd
-          if ($LASTEXITCODE -ne 0 -or !(Test-Path build/msi_custom_action_fail.dll) -or !(Test-Path build/msi_custom_action_table_probe.exe)) { throw 'Original harmless DLL / MSI table probe compile failed' }
+          if ($LASTEXITCODE -ne 0 -or !(Test-Path build/msi_custom_action_fail.dll) -or !(Test-Path build/msi_custom_action_table_probe.exe) -or !(Test-Path build/msi_action_spawn_probe.exe)) { throw 'Original harmless DLL / MSI table probe compile failed' }
           dotnet tool install wix --tool-path build/wix --version 5.0.1
           if ($LASTEXITCODE -ne 0) { throw 'WiX 5 setup failed' }
           & build/wix/wix.exe build probes/msi_custom_action_type_control.wxs -arch x64 -o build/swcompat_custom_action_type_control.msi
@@ -69,6 +76,18 @@ jobs:
           $msi = (Resolve-Path build/swcompat_custom_action_type_control.msi).Path
           $marker = Join-Path $env:ProgramFiles 'SWCompatMsiCustomActionControl\msi_custom_action_control.txt'
           if (Test-Path $marker) { throw 'Preexisting control marker' }
+          $smokeFile = Join-Path $env:TEMP 'swcompat-ca-table-win-smoke.status'
+          $smoke = & build/msi_custom_action_table_probe.exe --selftest $smokeFile
+          if ($LASTEXITCODE -ne 0 -or $smoke -notcontains 'SWCOMPAT_CA_TABLE_STATUS=SELFTEST_OK') {
+            throw 'Native Windows MSI helper selftest did not reach process entry'
+          }
+          Remove-Item -LiteralPath $smokeFile -ErrorAction SilentlyContinue
+          $spawnFile = Join-Path $env:TEMP 'swcompat-ca-spawn-win-smoke.status'
+          $spawn = & build/msi_action_spawn_probe.exe (Resolve-Path build/msi_custom_action_table_probe.exe).Path $spawnFile
+          if ($LASTEXITCODE -ne 0 -or $spawn -notcontains 'SWCOMPAT_SPAWN_STATUS=STARTED' -or $spawn -notcontains 'SWCOMPAT_SPAWN_CHILD_EXIT=ZERO') {
+            throw 'Native Windows CreateProcessW MSI helper selftest failed'
+          }
+          Remove-Item -LiteralPath $spawnFile -ErrorAction SilentlyContinue
           $metadata = 'ServiceTypeControlSentinel' | & build/msi_custom_action_table_probe.exe $msi
           if ($LASTEXITCODE -ne 0 -or $metadata -notcontains 'SWCOMPAT_CA_TABLE_STATUS=ACTION_FOUND' -or $metadata -notcontains 'SWCOMPAT_CA_TABLE_TYPE=3073') {
             throw 'Windows read-only MSI CustomAction Type metadata mismatch'
@@ -84,6 +103,7 @@ jobs:
             build/swcompat_custom_action_type_control.msi
             build/msi-custom-control.sha256
             build/msi_custom_action_table_probe.exe
+            build/msi_action_spawn_probe.exe
           retention-days: 1
 
   apple-silicon-wine-control:
@@ -119,6 +139,33 @@ jobs:
           set -euo pipefail
           python3 -m swcompat --prefix "$RUNNER_TEMP/msi-custom-control-prefix" --logs-dir "$RUNNER_TEMP/msi-custom-control-logs" init
           touch "$RUNNER_TEMP/msi-custom-control-prefix/.swcompat-netfx481-disposable"
+      - name: Verify Win32 MSI helper startup independently of MSI APIs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.msi_custom_action_table_type import inspect_selftest, validate as validate_table
+          from scripts.msi_action_spawn_trial import inspect as inspect_spawn, validate as validate_spawn
+          w = Path(os.environ["SWCOMPAT_WINE"])
+          prefix = Path(os.environ["RUNNER_TEMP"]) / "msi-custom-control-prefix"
+          helper = Path("build/msi_custom_action_table_probe.exe")
+          selftest = inspect_selftest(w, prefix, helper)
+          startup = inspect_spawn(w, prefix, Path("build/msi_action_spawn_probe.exe"), helper)
+          assert validate_table(selftest) and validate_spawn(startup)
+          print("Win32 MSI helper selftest:", selftest["status"])
+          print("Win32 MSI helper selftest stage:", selftest["stage"])
+          print("Win32 CreateProcessW startup:", startup["status"])
+          print("Win32 CreateProcessW child exit:", startup["child_exit"])
+          print("Win32 CreateProcessW failure class:", startup["error"])
+          Path("build/msi-win32-startup-status.json").write_text(
+              json.dumps({"selftest": selftest, "spawn": startup}, sort_keys=True),
+              encoding="utf-8")
+          assert selftest["status"] == "SELFTEST_OK"
+          assert startup["status"] == "STARTED"
+          assert startup["child_exit"] == "ZERO"
+          PY
       - name: Inspect native Windows MSI CustomAction table metadata under Wine
         shell: bash
         run: |
@@ -192,6 +239,7 @@ jobs:
           path: |
             build/msi-custom-action-control.json
             build/msi-custom-table-control.json
+            build/msi-win32-startup-status.json
           if-no-files-found: warn
           retention-days: 7
       - name: Require real self-authored MSI failure and Wine DLL type match
