@@ -22,6 +22,12 @@ on:
 permissions:
   contents: read
 
+# Each original MSI reference run is independent. Obsolete PR revisions
+# should not occupy multiple Apple Silicon Wine runners concurrently.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   windows-msi-reference:
     name: Build and execute original harmless deferred DLL MSI on Windows
