@@ -1,0 +1,131 @@
+name: Inspect Wine OS version APIs for .NET 4.8.1 error 5100
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/netfx481-winver-gate-ci.yml'
+      - 'probes/winver_481_gate.c'
+      - 'probes/winver_481_win10.manifest'
+      - 'scripts/netfx481_version_gate.py'
+      - 'tests/test_netfx481_version_gate.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-reference:
+    runs-on: windows-2025
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test bounded private-safe version parser
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests -p 'test_netfx481_version_gate.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Windows version parser failed" }
+      - name: Compile unmanifested and Windows 10-manifested native probes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force build | Out-Null
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw "MSVC reference missing" }
+          $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+          $commands = 'call "' + $vcvars + '" && cl /nologo /W4 /O2 /Fe:build\winver_481_bare.exe probes\winver_481_gate.c && cl /nologo /W4 /O2 /Fe:build\winver_481_supported.exe probes\winver_481_gate.c && mt /nologo -manifest probes\winver_481_win10.manifest -outputresource:build\winver_481_supported.exe;#1'
+          & cmd.exe /d /s /c $commands
+          if ($LASTEXITCODE -ne 0) { throw "Native version diagnostic build failed" }
+          foreach ($name in @("winver_481_bare", "winver_481_supported")) {
+            $lines = & "build/$name.exe"
+            if ($LASTEXITCODE -ne 0 -or $lines -notcontains "SWCOMPAT_OS_SCHEMA=1") {
+              throw "Native Windows reference version probe failed"
+            }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: self-authored-481-version-probes
+          path: |
+            build/winver_481_bare.exe
+            build/winver_481_supported.exe
+          retention-days: 1
+
+  apple-silicon-wine:
+    needs: windows-reference
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: self-authored-481-version-probes
+          path: build
+      - name: Install pinned Apple Silicon Wine Staging 11.21
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-staging-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-staging-11.21-osx64.tar.xz"
+          echo "d7bcd5abf4df27aae397a7898aef074fea4a2e0b51e0a55aa9659517bbf9d452  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/winver-wine"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/winver-wine"
+          WINE_BIN="$(find "$RUNNER_TEMP/winver-wine" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Initialize marked Wine prefix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat --prefix "$RUNNER_TEMP/winver-5100-prefix" --logs-dir "$RUNNER_TEMP/winver-5100-logs" init
+          touch "$RUNNER_TEMP/winver-5100-prefix/.swcompat-netfx481-disposable"
+      - name: Check Windows 10 APIs with and without manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat --prefix "$RUNNER_TEMP/winver-5100-prefix" --logs-dir "$RUNNER_TEMP/winver-5100-logs" set-winver win10
+          python3 -m scripts.netfx481_version_gate --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/winver-5100-prefix" \
+            --bare build/winver_481_bare.exe --manifested build/winver_481_supported.exe \
+            --output build/winver-win10.json --agree-disposable-prefix
+      - name: Check Windows 11 APIs with and without manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat --prefix "$RUNNER_TEMP/winver-5100-prefix" --logs-dir "$RUNNER_TEMP/winver-5100-logs" set-winver win11
+          python3 -m scripts.netfx481_version_gate --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/winver-5100-prefix" \
+            --bare build/winver_481_bare.exe --manifested build/winver_481_supported.exe \
+            --output build/winver-win11.json --agree-disposable-prefix
+      - name: Report strictly finite real Windows version API results
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx481_version_gate import verify
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write("## Windows version reporting under Wine 11.21\n\n")
+              for win in ("win10", "win11"):
+                  path = Path(f"build/winver-{win}.json")
+                  assert path.is_file()
+                  data = json.loads(path.read_text())
+                  assert set(data) == {"bare", "manifested"}
+                  for kind, r in data.items():
+                      assert verify(r) and r["status"] == "MEASURED"
+                      for field in ("winapi", "ntdll", "registry", "arch"):
+                          out.write(f"{win}_{kind}_{field}: **{r[field]}**\n\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netfx481-winver-5100-allowlisted-results
+          path: |
+            build/winver-win10.json
+            build/winver-win11.json
+          if-no-files-found: warn
+          retention-days: 7
