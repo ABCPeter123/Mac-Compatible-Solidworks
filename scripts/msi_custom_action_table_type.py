@@ -85,9 +85,14 @@ def inspect(wine: Path, prefix: Path, probe: Path, msi: Path,
             action: str = "ServiceTypeControlSentinel") -> dict:
     if os.name == "nt":
         raise ValueError("Use native Windows probe directly")
+    if any(p.is_symlink() for p in (wine, prefix, probe, msi)):
+        raise ValueError("Do not follow linked MSI/probe/prefix")
+    # subprocess uses cwd=prefix. Always resolve the Win32 helper before
+    # changing the cwd, or Wine looks for build/probe.exe under the prefix.
+    wine, prefix, probe, msi = (
+        p.resolve(strict=True) for p in (wine, prefix, probe, msi)
+    )
     validate_prefix(prefix)
-    if any(p.is_symlink() for p in (wine, probe, msi)):
-        raise ValueError("Do not follow linked MSI/probe")
     if action not in ACTIONS:
         raise ValueError("Control only accepts known self-authored action")
     if probe.name != "msi_custom_action_table_probe.exe" or not probe.is_file():
