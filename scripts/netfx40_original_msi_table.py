@@ -17,6 +17,7 @@ from scripts.netfx40_offline_extract import (
     MAX_MSIS, MSI_NAME, OLE_SIGNATURE,
 )
 from scripts.netfx40_private_action import consume
+from scripts.msi_original_binary_imports import empty as empty_binary, inspect as inspect_binary, validate as validate_binary
 from scripts.msi_custom_action_table_type import inspect as query, validate_detailed as validate_query
 from scripts.netfx481_trial import validate_prefix
 
@@ -32,17 +33,23 @@ def blank() -> dict:
             "action_matches": 0, "family": "NOT_VERIFIED",
             "base_type": None, "execution": "NOT_VERIFIED",
             "impersonation": "NOT_VERIFIED", "asynchronous": "NOT_VERIFIED",
-            "ts_aware": False}
+            "ts_aware": False,
+            "binary_imports": empty_binary()}
 
 
 def validate(result: dict) -> bool:
     if type(result) is not dict or set(result) != {
         "status", "msis_queried", "action_matches", "family", "base_type",
-        "execution", "impersonation", "asynchronous", "ts_aware",
+        "execution", "impersonation", "asynchronous", "ts_aware", "binary_imports",
     } or result["status"] not in STATES:
         return False
     n, matches = result["msis_queried"], result["action_matches"]
-    if type(result["ts_aware"]) is not bool:
+    if (type(result["ts_aware"]) is not bool
+            or not validate_binary(result["binary_imports"])):
+        return False
+    if (result["binary_imports"]["status"] != "NOT_REQUESTED" and
+            (result["status"] not in {"ACTION_FOUND", "ACTION_FOUND_PARTIAL"}
+             or result["base_type"] != 1)):
         return False
     if type(n) is not int or type(matches) is not int or not 0 <= matches <= n <= MAX_MSIS:
         return False
@@ -125,7 +132,8 @@ def _is_wine_host() -> bool:
     return os.name != "nt"
 
 
-def inspect(wine: Path, prefix: Path, helper: Path, installer: Path) -> dict:
+def inspect(wine: Path, prefix: Path, helper: Path, installer: Path,
+            *, binary_helper: Path | None = None) -> dict:
     if not _is_wine_host() or any(p.is_symlink() for p in (wine, prefix, helper, installer)):
         raise ValueError("Original MSI table query runs only on isolated Wine")
     wine, prefix, helper, installer = (
@@ -142,6 +150,7 @@ def inspect(wine: Path, prefix: Path, helper: Path, installer: Path) -> dict:
     if not candidates:
         return {**blank(), "status": "QUERY_INCOMPLETE" if partial else "NO_EXTRACTED_MSI"}
     hits: list[dict] = []
+    matched_package: Path | None = None
     bad = partial
     for package in candidates:
         result = query(wine, prefix, helper, package, action,
@@ -150,13 +159,20 @@ def inspect(wine: Path, prefix: Path, helper: Path, installer: Path) -> dict:
             bad = True
         elif result["status"] == "ACTION_FOUND":
             hits.append(result)
+            matched_package = package
         elif result["status"] != "ACTION_ABSENT":
             bad = True
     if len(hits) > 1:
         return {**blank(), "status": "MULTIPLE_MATCHES",
                 "msis_queried": len(candidates), "action_matches": len(hits)}
     if len(hits) == 1:
-        return {"status": "ACTION_FOUND_PARTIAL" if bad else "ACTION_FOUND", "msis_queried": len(candidates),
+        binary = empty_binary()
+        if binary_helper is not None and hits[0]["base_type"] == 1:
+            assert matched_package is not None
+            binary = inspect_binary(wine, prefix, binary_helper, matched_package, action)
+            if not validate_binary(binary):
+                raise ValueError("Unsafe authenticated MSI Binary census")
+        return {"binary_imports": binary, "status": "ACTION_FOUND_PARTIAL" if bad else "ACTION_FOUND", "msis_queried": len(candidates),
                 "action_matches": 1, "family": hits[0]["family"],
                 "base_type": hits[0]["base_type"],
                 "execution": hits[0]["execution"],
@@ -173,10 +189,12 @@ def main(argv: list[str] | None = None) -> int:
     for field in ("wine", "prefix", "helper", "installer", "output"):
         p.add_argument("--" + field, type=Path, required=True)
     p.add_argument("--agree-disposable-prefix", action="store_true")
+    p.add_argument("--binary-helper", type=Path)
     args = p.parse_args(argv)
     if not args.agree_disposable_prefix:
         p.error("Disposable-prefix agreement required")
-    result = inspect(args.wine, args.prefix, args.helper, args.installer)
+    result = inspect(args.wine, args.prefix, args.helper, args.installer,
+                     binary_helper=args.binary_helper)
     if not validate(result):
         raise ValueError("Unsafe original Microsoft MSI metadata report")
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -184,6 +202,11 @@ def main(argv: list[str] | None = None) -> int:
     for field in ("status", "msis_queried", "action_matches", "family", "base_type",
                   "execution", "impersonation", "asynchronous", "ts_aware"):
         print("Original Microsoft MSI action table", field, result[field])
+    binary = result["binary_imports"]
+    print("Original Microsoft deferred DLL import census status", binary["status"])
+    print("Original Microsoft deferred DLL import census machine", binary["machine"])
+    for family, count in binary["imports"].items():
+        print("Original Microsoft deferred DLL imported", family, count)
     return 0
 
 
