@@ -31,7 +31,7 @@ class MSIServiceActionTests(unittest.TestCase):
         # must accept this extra diagnostic without weakening four required fields.
         self.assertEqual(service.service_result(running.replace(b"STATE=4", b"STATE=1"), 0, "status"),
                          "STOPPED")
-        self.assertEqual(service.service_result(running + b"SWCOMPAT_SERVICE_OTHER=invalid value\\n", 0, "status"),
+        self.assertEqual(service.service_result(running + b"SWCOMPAT_SERVICE_OTHER=invalid value\n", 0, "status"),
                          "UNKNOWN")
         self.assertEqual(service.service_result(running, 0, "absent"), "UNKNOWN")
         self.assertEqual(service.service_result(running + b"SWCOMPAT_SERVICE_STATE=4\n", 0, "status"),
