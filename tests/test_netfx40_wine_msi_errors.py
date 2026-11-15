@@ -86,7 +86,43 @@ class WineMsiErrorTests(unittest.TestCase):
         r2 = w.parse(injected)
         self.assertEqual(r2["first_failed_action"], "OTHER_ACTION")
         self.assertEqual(r2["service_action_failures"], [])
+        self.assertEqual(r2["nonstandard_name_hint"], "SERVICE_TEXT_ONLY")
+        self.assertNotIn("MSI_ACTION_SERVICE", r2["classes"])
         self.assertNotIn("Secret", str(r2))
+
+    def test_misleading_service_word_in_custom_action_is_not_installservices(self):
+        raw = (
+            b'01ac:err:msi:execute_script action L"InstallServiceVendorRegistration" returned 1603\n'
+            b'01ac:err:msi:ITERATE_Actions action L"InstallFinalize" returned 1603\n'
+        )
+        r = w.parse(raw)
+        self.assertTrue(w.validate(r))
+        self.assertEqual(r["first_failed_action"], "OTHER_ACTION")
+        self.assertEqual(r["nonstandard_name_hint"], "SERVICE_TEXT_ONLY")
+        self.assertEqual(r["service_action_failures"], [])
+        self.assertNotIn("MSI_ACTION_SERVICE", r["classes"])
+        self.assertIn("OTHER_MSI_ERROR", r["classes"])
+        self.assertNotIn("VendorRegistration", str(r))
+        self.assertFalse(w.validate(dict(r, nonstandard_name_hint="NOT_APPLICABLE")))
+        self.assertFalse(w.validate(dict(r, nonstandard_name_hint="C:\\Secret")))
+        self.assertEqual(
+            w.parse(raw.replace(b"InstallServiceVendorRegistration", b"Regtlb_Microsoft_amd64"))[
+                "nonstandard_name_hint"], "REGISTRY_TEXT_ONLY",
+        )
+        self.assertEqual(
+            w.parse(raw.replace(b"InstallServiceVendorRegistration", b"FusionAssemblyRegistration"))[
+                "nonstandard_name_hint"], "ASSEMBLY_TEXT_ONLY",
+        )
+        self.assertEqual(
+            w.parse(raw.replace(b"InstallServiceVendorRegistration", b"[PRIVATE_PATH]Registration"))[
+                "nonstandard_name_hint"], "MSI_PROPERTY_EXPANSION",
+        )
+        # A concrete standard MSI action still has no nonstandard name hint.
+        canonical = w.parse(raw.replace(b"InstallServiceVendorRegistration", b"StartServices"))
+        self.assertEqual(canonical["first_failed_action"], "START_SERVICES")
+        self.assertEqual(canonical["nonstandard_name_hint"], "NOT_APPLICABLE")
+        self.assertIn("MSI_ACTION_SERVICE", canonical["classes"])
+        self.assertTrue(w.validate(canonical))
 
     def test_script_failure_order_and_no_false_claim_without_action_name(self):
         raw = (
