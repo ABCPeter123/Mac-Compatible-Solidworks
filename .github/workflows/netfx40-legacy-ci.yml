@@ -3,13 +3,8 @@ name: Original Microsoft .NET 4.0 CLR on Wine Staging A/B
 # Signed Microsoft installers run only on explicit operator request.
 # Python regression tests are covered by compatibility-ci.yml on each PR.
 # Focused 5100 report on PR, full installer baselines remain manually dispatched.
+# Full signed-installer A/B tests require explicit dispatch after one targeted PR measurement.
 on:
-  pull_request:
-    paths:
-      - 'scripts/netfx481_prereq_diagnostic.py'
-      - 'scripts/netfx481_setup_evidence.py'
-      - 'scripts/netfx40_to_481_upgrade.py'
-      - '.github/workflows/netfx40-legacy-ci.yml'
   workflow_dispatch:
 
 permissions:
