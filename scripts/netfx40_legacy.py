@@ -67,7 +67,7 @@ def _env(prefix: Path, *, installation: bool = False) -> dict[str, str]:
         # Upstream Winetricks load_dotnet40 uses this override only for setup.
         env["WINEDLLOVERRIDES"] = "fusion=b"
         # Narrow Wine error channel, captured privately, never printed raw.
-        env["WINEDEBUG"] = "-all,err+msi"
+        env["WINEDEBUG"] = "-all,err+msi,fixme+msi"
     return env
 
 
