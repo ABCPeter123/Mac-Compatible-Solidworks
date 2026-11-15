@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <wchar.h>
 #include <stdlib.h>
+#pragma comment(lib, "advapi32.lib")
 typedef LONG (WINAPI *GET_NT_VERSION)(OSVERSIONINFOEXW *);
 static const char *cat(DWORD major,DWORD minor,DWORD build) {
     if (major==10 && minor==0 && build>=19042 && build<22000) return "WIN10_SUPPORTED";
