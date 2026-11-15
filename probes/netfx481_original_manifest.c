@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <wchar.h>
 #include <stdio.h>
+#include <string.h>
 
 #define MAX_MANIFEST_SIZE 65536u
 static const char win10_guid[] = "8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a";
