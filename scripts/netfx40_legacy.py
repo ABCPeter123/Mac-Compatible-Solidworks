@@ -194,7 +194,7 @@ def _run_traced(wine: Path, prefix: Path, fixture: Path,
         raw = output.read(4097)
     private = bytes(retained)
     errors = parse_wine_msi(private, oversized=state["overflow"])
-    action_type = parse_custom_type(private, truncated=state["overflow"])
+    action_type = parse_custom_type(private, truncated=state["overflow"] or failed is not None)
     if failed:
         return {"status": failed, "category": "NOT_AVAILABLE",
                 "exit_hex": "NOT_VERIFIED", "child_seen": "NOT_VERIFIED",
