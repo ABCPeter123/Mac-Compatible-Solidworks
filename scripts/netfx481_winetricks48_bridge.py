@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 from scripts.netfx481_trial import validate_prefix, verify_media, probe, wineboot_restart
@@ -24,11 +25,44 @@ CHANGE = {"NOT_VERIFIED", "CREATED", "REMOVED", "CHANGED", "UNCHANGED", "UNVERIF
 LOADER = LOAD_STATES | {"NOT_VERIFIED"}
 FAMILY = {"NOT_VERIFIED", "MONO", "UNKNOWN", "MICROSOFT_CLR_CANDIDATE"}
 REG = {"NOT_VERIFIED", "NOT_FOUND", "BELOW_481", "AT_LEAST_481", "UNAVAILABLE"}
+RELEASE48 = {"NOT_VERIFIED", "NOT_FOUND", "BELOW_48", "AT_LEAST_48"}
+MIN_RELEASE_48 = 528040
+RELEASE_LINE = re.compile(rb"(?im)^\s*Release\s+REG_DWORD\s+0x([0-9a-f]{1,8})\s*$")
+
+
+def classify_release_48(raw: bytes, code: int) -> str:
+    """Parse only the original 4.8 Release DWORD; never return raw registry output."""
+    if code != 0 or len(raw) > 4096 or b"\x00" in raw:
+        return "NOT_VERIFIED"
+    found = RELEASE_LINE.findall(raw)
+    if len(found) != 1:
+        return "NOT_FOUND" if not found else "NOT_VERIFIED"
+    release = int(found[0], 16)
+    return "AT_LEAST_48" if release >= MIN_RELEASE_48 else "BELOW_48"
+
+
+def probe_release_48(wine: Path, prefix: Path) -> str:
+    env = os.environ.copy()
+    env.pop("WINEDLLOVERRIDES", None)
+    env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64", "WINEDEBUG": "-all"})
+    try:
+        r = subprocess.run(
+            [str(wine), "reg.exe", "query",
+             r"HKLM\Software\Microsoft\NET Framework Setup\NDP\v4\Full",
+             "/v", "Release", "/reg:64"], cwd=prefix, env=env,
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, timeout=30, check=False)
+        if r.returncode == 1:
+            return "NOT_FOUND"
+        return classify_release_48(r.stdout, r.returncode)
+    except (OSError, subprocess.TimeoutExpired):
+        return "NOT_VERIFIED"
 
 
 def blank(status: str = "VERB_START_FAILED") -> dict:
     return {"status": status, "winetricks48_exit": "NOT_VERIFIED",
-            "native48_candidate": False, "clr64_before481": "NOT_VERIFIED",
+            "native48_candidate": False, "native48_release": "NOT_VERIFIED",
+            "verb_reboot": "NOT_RUN", "clr64_before481": "NOT_VERIFIED",
             "clr64_after481": "NOT_VERIFIED", "clr64_change": "UNVERIFIED",
             "native_loader": "NOT_VERIFIED", "native_only_managed": "NOT_VERIFIED",
             "runtime_family": "NOT_VERIFIED", "framework481_registry": "NOT_VERIFIED",
@@ -42,6 +76,8 @@ def validate(r: dict) -> bool:
     if (r["status"] not in STATES or
             r["winetricks48_exit"] not in {"NOT_VERIFIED", "ZERO", "NONZERO", "TIMEOUT", "START_FAILED"}
             or type(r["native48_candidate"]) is not bool
+            or r["native48_release"] not in RELEASE48
+            or r["verb_reboot"] not in UPGRADE
             or r["clr64_before481"] not in FILE_STATES
             or r["clr64_after481"] not in FILE_STATES
             or r["clr64_change"] not in CHANGE
@@ -56,9 +92,12 @@ def validate(r: dict) -> bool:
         return False
     if r["status"] != "MEASURED":
         if r["status"] == "PREREQUISITE_NOT_READY":
-            return r["winetricks48_exit"] == "ZERO" and not r["native48_candidate"] and not r["native481_confirmed"]
+            return (r["winetricks48_exit"] in {"ZERO", "NONZERO", "TIMEOUT"}
+                    and not r["native48_candidate"] and not r["native481_confirmed"]
+                    and r["setup"] == blank_launch())
         return not r["native48_candidate"] and not r["native481_confirmed"]
-    if not r["native48_candidate"] or r["clr64_before481"] != "PE_AMD64":
+    if (not r["native48_candidate"] or r["native48_release"] != "AT_LEAST_48"
+            or r["clr64_before481"] != "PE_AMD64"):
         return False
     candidate = (r["setup"]["status"] == "EXIT_CAPTURED"
                  and r["setup"]["category"] in {"SUCCESS", "REBOOT_REQUIRED"}
@@ -99,35 +138,56 @@ def inspect(wine: Path, prefix: Path, tricks: Path, installer481: Path,
                 "WINETRICKS_LATEST_VERSION_CHECK": "disabled"})
     if (wine.parent / "wineserver").is_file():
         env["WINESERVER"] = str(wine.parent / "wineserver")
+    verb_exit = "START_FAILED"
     try:
-        p = subprocess.run([str(tricks), "-q", "dotnet48"], cwd=prefix,
-                           env=env, stdin=subprocess.DEVNULL,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           check=False, timeout=timeout)
+        process = subprocess.run([str(tricks), "-q", "dotnet48"], cwd=prefix,
+                                 env=env, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 check=False, timeout=timeout)
+        verb_exit = "ZERO" if process.returncode == 0 else "NONZERO"
     except subprocess.TimeoutExpired:
-        return {**blank("VERB_TIMED_OUT"), "winetricks48_exit": "TIMEOUT"}
+        verb_exit = "TIMEOUT"
     except OSError:
         return {**blank(), "winetricks48_exit": "START_FAILED"}
-    if p.returncode != 0:
-        return {**blank("VERB_FAILED"), "winetricks48_exit": "NONZERO"}
+    verb_reboot = "NOT_RUN"
+    if verb_exit in {"TIMEOUT", "NONZERO"}:
+        # A timed-out bootstrapper can have installed a functioning CLR.
+        # Quiesce the disposable prefix before native CLR inspection.
+        verb_reboot = wineboot_restart(wine, prefix, timeout=120)
+        if verb_reboot != "COMPLETED":
+            result = {**blank("VERB_TIMED_OUT" if verb_exit == "TIMEOUT" else "VERB_FAILED"),
+                      "winetricks48_exit": verb_exit, "verb_reboot": verb_reboot}
+            assert validate(result)
+            return result
     before = snapshot(prefix)
     runtime = probe(wine, prefix, managed, override="native_only")
+    load_before = load_clr(wine, prefix, loader)
+    release48 = probe_release_48(wine, prefix)
     native48 = (before["CLR64"][0] == "PE_AMD64"
                 and before["MSCORLIB64"][0] == "PE_AMD64"
-                and load_clr(wine, prefix, loader) == "LOADED"
+                and load_before == "LOADED"
                 and runtime["clr_family"] == "MICROSOFT_CLR_CANDIDATE"
-                and runtime["managed"] == "PASS")
+                and runtime["managed"] == "PASS"
+                and release48 == "AT_LEAST_48")
     if not native48:
-        return {**blank("PREREQUISITE_NOT_READY"), "winetricks48_exit": "ZERO"}
+        result = {**blank("PREREQUISITE_NOT_READY"),
+                  "winetricks48_exit": verb_exit, "verb_reboot": verb_reboot,
+                  "native48_release": release48,
+                  "clr64_before481": before["CLR64"][0],
+                  "native_loader": load_before,
+                  "native_only_managed": runtime["managed"],
+                  "runtime_family": runtime["clr_family"]}
+        assert validate(result)
+        return result
     try:
         winver = subprocess.run([str(wine), "winecfg.exe", "-v", "win10"],
                                 cwd=prefix, env=env,
                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL, timeout=45, check=False)
     except (OSError, subprocess.TimeoutExpired):
-        return {**blank("WINVER_FAILED"), "winetricks48_exit": "ZERO"}
+        return {**blank("WINVER_FAILED"), "winetricks48_exit": verb_exit}
     if winver.returncode:
-        return {**blank("WINVER_FAILED"), "winetricks48_exit": "ZERO"}
+        return {**blank("WINVER_FAILED"), "winetricks48_exit": verb_exit}
     setup = launch(wine, prefix, installer481, launcher481,
                    timeout=245, fusion_builtin=True)
     assert valid_launch(setup)
@@ -139,7 +199,8 @@ def inspect(wine: Path, prefix: Path, tricks: Path, installer481: Path,
             restart = wineboot_restart(wine, prefix, timeout=120)
     changes = compare(before, snapshot(prefix))
     after = probe(wine, prefix, managed, override="native_only")
-    result = {**blank("MEASURED"), "winetricks48_exit": "ZERO",
+    result = {**blank("MEASURED"), "winetricks48_exit": verb_exit,
+              "verb_reboot": verb_reboot, "native48_release": release48,
               "native48_candidate": True,
               "clr64_before481": changes["before"]["CLR64"],
               "clr64_after481": changes["after"]["CLR64"],
@@ -179,7 +240,7 @@ def main() -> int:
         raise ValueError("Linked output refused")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, sort_keys=True), encoding="ascii")
-    for key in ("status", "winetricks48_exit", "native48_candidate",
+    for key in ("status", "winetricks48_exit", "verb_reboot", "native48_release", "native48_candidate",
                 "clr64_before481", "clr64_after481", "clr64_change",
                 "native_loader", "native_only_managed", "runtime_family",
                 "framework481_registry", "restart", "native481_confirmed"):
