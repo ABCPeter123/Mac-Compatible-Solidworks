@@ -21,3 +21,12 @@ A successful control must produce `TRACE_MATCHED`, `DLL_BINARY`, `base_type=1`, 
 - If the original self-authored control succeeds under Wine, the original Microsoft `TRACE_MISSING` is more likely related to that action's execution path, deferred action identifier, or metadata, rather than an entirely broken trace channel. The next step is a private read-only MSI CustomAction table lookup using native MSI database APIs and the failure name, if the extracted original MSI remains accessible.
 - If the original control fails, fix the Wine/debug collector or narrow line parsing using the actual self-authored fixture. Do **not** change CLR setup registry fields or implement a guessed service API shim.
 - Neither case establishes Microsoft .NET Framework installation, SOLIDWORKS CAD compatibility or licensing readiness.
+
+
+## Measured native Windows and Apple Silicon result
+
+[CI run 43671644298](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43671644298) has **passed both jobs**. The original self-authored native Windows x64 MSI deliberately returned 1603 and rolled back its marker. The identical checksum-verified MSI was then run under Wine Staging 11.21 in a fresh Apple Silicon Wine prefix; Wine's MSI process returned NONZERO, and the private bounded trace correctly correlated the failed action to `TRACE_MATCHED`, `family=DLL_BINARY`, `base_type=1`, `execution=DEFERRED`, `capture_reason=NONE`. Cross-platform compatibility foundation tests also passed.
+
+This establishes that the exact `trace:msi:ACTION_CustomAction` channel, service-word filter, and failed-action correlation **work on Apple Silicon Wine for a real deferred DLL Type 1**. It narrows the authentic Microsoft `TRACE_MISSING` from PR #83: the failure is specific to that original action's identifiers, CustomAction table execution path, or original media context, rather than a universally broken Wine trace channel. It **does not** establish that original Microsoft .NET's action itself is a DLL, nor that the underlying service API is broken.
+
+**Next decisive step:** private, read-only Windows Installer database metadata lookup for the first original failed nonstandard action, with fixed enum output only. It should distinguish (1) an actual `CustomAction` row and Type, (2) a standard `InstallExecuteSequence` action, and (3) no accessible original MSI database. Validate this lookup first on the known self-authored reference. Avoid adding more unactionable Wine restart or registry workarounds.
