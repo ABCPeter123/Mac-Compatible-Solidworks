@@ -1,0 +1,145 @@
+name: Differential deferred MSI DLL Service Control Manager access
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/msi-deferred-scm-access-ci.yml'
+      - 'probes/msi_deferred_scm_access.c'
+      - 'probes/msi_deferred_scm_access.wxs'
+      - 'scripts/msi_deferred_scm_access.py'
+      - 'tests/test_msi_deferred_scm_access.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-reference:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify standalone strict evidence parser
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests -p 'test_msi_deferred_scm_access.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Strict deferred SCM fixtures failed" }
+      - name: Compile original source-authored x64 DLL and WiX package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force build/wix | Out-Null
+          Set-Content build/msi_deferred_scm_marker.txt 'SWCOMPAT_DEFERRED_SCM_PROBE' -Encoding ascii -NoNewline
+          $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw "MSVC x64 unavailable" }
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $lines = @('@echo off', ('call "' + $vcvars + '"'),
+            'cl /nologo /W4 /O2 /LD /Fe:build\msi_deferred_scm_access.dll probes\msi_deferred_scm_access.c',
+            'exit /b %errorlevel%')
+          [System.IO.File]::WriteAllLines((Join-Path (Get-Location) 'build\compile-scm.cmd'), $lines, [System.Text.Encoding]::ASCII)
+          & cmd.exe /d /c build\compile-scm.cmd
+          if ($LASTEXITCODE -ne 0) { throw "Original deferred SCM DLL build failed" }
+          dotnet tool install wix --tool-path build/wix --version 5.0.1
+          if ($LASTEXITCODE -ne 0) { throw "WiX install failed" }
+          & build/wix/wix.exe build probes/msi_deferred_scm_access.wxs -arch x64 -o build/swcompat_deferred_scm_probe.msi
+          if ($LASTEXITCODE -ne 0) { throw "Self-authored deferred SCM MSI build failed" }
+          (Get-FileHash build/swcompat_deferred_scm_probe.msi -Algorithm SHA256).Hash.ToLowerInvariant() |
+            Set-Content build/msi-deferred-scm.sha256 -NoNewline -Encoding ascii
+      - name: Test native deferred read-only SCM action and exact payload
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $status = Join-Path $env:windir 'Temp\swcompat-deferred-scm.status'
+          $marker = Join-Path $env:ProgramFiles 'SWCompatDeferredScmProbe\msi_deferred_scm_marker.txt'
+          if ((Test-Path $status) -or (Test-Path $marker)) { throw "Contaminated native control" }
+          $msi = (Resolve-Path build/swcompat_deferred_scm_probe.msi).Path
+          try {
+            $p = Start-Process msiexec.exe -ArgumentList @('/i', ('"' + $msi + '"'), '/qn', '/norestart') -Wait -PassThru -NoNewWindow
+            if ($p.ExitCode -ne 0) { throw "Native deferred SCM action did not complete" }
+            if (!(Test-Path $status) -or (Get-Content $status -Raw) -ne 'PASS') { throw "Native deferred SCM query did not PASS" }
+            if (!(Test-Path $marker) -or (Get-Content $marker -Raw) -ne 'SWCOMPAT_DEFERRED_SCM_PROBE') { throw "Native MSI byte marker missing" }
+            Write-Output 'Native deferred DLL opens SCM, msiserver and queries its status'
+          } finally {
+            Remove-Item -LiteralPath $status -Force -ErrorAction SilentlyContinue
+            $p = Start-Process msiexec.exe -ArgumentList @('/x', ('"' + $msi + '"'), '/qn', '/norestart') -Wait -PassThru -NoNewWindow
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: self-authored-deferred-scm-control
+          path: |
+            build/swcompat_deferred_scm_probe.msi
+            build/msi-deferred-scm.sha256
+          retention-days: 1
+
+  apple-silicon-wine:
+    needs: windows-reference
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: self-authored-deferred-scm-control
+          path: build
+      - name: Acquire pinned Apple Silicon Wine Staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-staging-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-staging-11.21-osx64.tar.xz"
+          echo "d7bcd5abf4df27aae397a7898aef074fea4a2e0b51e0a55aa9659517bbf9d452  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-scm"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-scm"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-scm" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Create a fresh marked disposable prefix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat --prefix "$RUNNER_TEMP/msi-deferred-scm-prefix" \
+            --logs-dir "$RUNNER_TEMP/msi-deferred-scm-logs" init
+          touch "$RUNNER_TEMP/msi-deferred-scm-prefix/.swcompat-netfx481-disposable"
+      - name: Run identical original deferred DLL and inspect exact result
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.msi_deferred_scm_access \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/msi-deferred-scm-prefix" \
+            --msi build/swcompat_deferred_scm_probe.msi \
+            --sha build/msi-deferred-scm.sha256 \
+            --output build/msi-deferred-scm-result.json \
+            --timeout 120 --agree-disposable-prefix
+      - name: Validate evidence and prevent framework false positive
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.msi_deferred_scm_access import valid
+          p = Path("build/msi-deferred-scm-result.json")
+          assert p.is_file(), "No original source-authored MSI result"
+          r = json.loads(p.read_text(encoding="ascii"))
+          assert valid(r)
+          assert r["native_microsoft_clr"] is False
+          assert r["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write("## Deferred MSI native DLL SCM access differential\n\n")
+              for name, value in r.items():
+                  out.write(f"{name}: **{value}**\n\n")
+              out.write("Positive control establishes only harmless MSI SCM API operation, not .NET or CAD.\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: self-authored-deferred-scm-status-only
+          path: build/msi-deferred-scm-result.json
+          if-no-files-found: warn
+          retention-days: 7
