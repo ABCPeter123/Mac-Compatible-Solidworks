@@ -10,6 +10,9 @@ on:
       - 'docs/NETFX40_VERBOSE_MSI_POLICY.md'
       - 'scripts/netfx40_msi_evidence.py'
       - 'scripts/netfx40_wine_msi_errors.py'
+      - 'scripts/netfx40_msi_custom_type.py'
+      - 'tests/test_netfx40_msi_custom_type.py'
+      - 'docs/NETFX40_CUSTOM_ACTION_TYPE_TRACE.md'
       - 'tests/test_netfx40_wine_msi_errors.py'
       - 'tests/test_netfx40_msi_evidence.py'
       - 'docs/NETFX40_INNER_MSI.md'
@@ -44,6 +47,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx40_legacy.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msi_evidence.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_wine_msi_errors.py' -v
+          python -m unittest discover -s tests -p 'test_netfx40_msi_custom_type.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msi_logging_policy.py' -v
 
   authentic-netfx40-windows:
@@ -181,7 +185,8 @@ jobs:
             --output build/netfx40-baseline.json \
             --timeout 210 --agree-disposable-prefix \
             --experiment-enable-verbose-msi \
-            --experiment-restart-after-mono
+            --experiment-restart-after-mono \
+            --experiment-trace-custom-action-type
       - name: Publish only bounded .NET 4.0 status categories
         if: always()
         shell: bash
@@ -212,6 +217,9 @@ jobs:
                                 "first_failed_action", "service_action_failures",
                                 "nonstandard_name_hint"):
                       f.write(f"wine_msi_{field}: **{r['wine_msi_errors'][field]}**\n\n")
+                  for field in ("status", "family", "base_type", "execution",
+                                "impersonation", "asynchronous", "ts_aware"):
+                      f.write(f"custom_action_{field}: **{r['custom_action_type'][field]}**\n\n")
                   for field in ("activation", "restoration"):
                       f.write(f"msi_logging_{field}: **{r['msi_logging_policy'][field]}**\n\n")
                   for field in ("status", "files_scanned", "msi_files",
@@ -243,6 +251,9 @@ jobs:
           assert validate_msi(r["inner_msi"])
           from scripts.netfx40_wine_msi_errors import validate as validate_wine_msi
           assert validate_wine_msi(r["wine_msi_errors"])
+          from scripts.netfx40_msi_custom_type import validate as validate_custom_type
+          assert validate_custom_type(r["custom_action_type"])
+          assert r["custom_action_type"]["status"] != "NOT_REQUESTED"
           from scripts.netfx40_msi_logging_policy import validate as validate_policy
           assert validate_policy(r["msi_logging_policy"])
           assert r["msi_logging_policy"] == {"activation": "APPLIED", "restoration": "REMOVED"}
