@@ -22,3 +22,14 @@ Both builds are x86-64 Windows Wine bundles running on the hosted Apple Silicon 
 CI must show the same fixed, privacy-safe fields: Microsoft installer full Windows result, MSI inner action classification, independent `clr.dll`/`mscorlib.dll` file presence, native loader and non-Mono managed execution. A green workflow means the experiment completed. The native CLR readiness flag must remain false unless all previously established evidence gates actually pass.
 
 **Decision:** A genuine CLR success on Staging while Development fails would justify tracing which Staging patches affect Wine's MSI, service or WOW64 compatibility. If Staging also fails with 1603 and no CLR, this falsifies the simple distribution-switch hypothesis, and effort should return to the specific first failed nested MSI action and Win32 service/COM/Fusion semantics. Never claim SOLIDWORKS readiness from this test.
+
+
+## Actual Apple Silicon result: Wine Staging 11.21
+
+[Authenticated Microsoft .NET 4.0 A/B run 43665180811](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43665180811) completed with success as an **evidence collection job**, not as a framework installation. Signed Microsoft media and the native Windows process monitor were verified on Windows before staging. The original Microsoft setup executed in the disposable Wine Staging prefix and returned **MSI_FATAL_ERROR (1603)**. Its immediate child was observed, all children exited and at least one exited nonzero.
+
+Neither `Framework64\v4.0.30319\clr.dll` nor the 32-bit counterpart was present. The expected native `mscorlib.dll` was absent, and native CLR loader result was `NOT_FOUND`. The independent native candidate remains `False`.
+
+The bounded private nested installer evidence scanned four setup logs including one MSI log but returned `NO_FAILURE_MARKER`, `first_failed_action_class=UNKNOWN` and `causality=NOT_ESTABLISHED`. The Wine error classification included `MSI_ACTION_SERVICE`, `MSI_ACTION_FINALIZE`, `MSI_TSAWARE_UNIMPLEMENTED`, and `OTHER_MSI_ERROR`; only three error lines were observed. Neither a service action nor a Wine `fixme` warning establishes the earliest causal failure.
+
+**Conclusion:** Swapping the Wine distribution alone is insufficient. A native CLR is still not installed, and no SOLIDWORKS capability is established. Further work should focus on reproducing the first non-cascade Microsoft MSI failure, especially its service/custom-action behavior, with original Windows installer evidence and minimal independent regression fixtures. Do not forge framework registry values or suppress MSI errors.
