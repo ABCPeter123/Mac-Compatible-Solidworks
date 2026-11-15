@@ -4,8 +4,17 @@ name: Original Microsoft .NET 4.0 CLR on Wine Staging A/B
 # Python regression tests are covered by compatibility-ci.yml on each PR.
 # Focused 5100 report on PR, full installer baselines remain manually dispatched.
 # Full signed-installer A/B tests require explicit dispatch after one targeted PR measurement.
+# One scoped PR test for the first native 4.0 -> 4.8 -> 4.8.1 path.
+# Restore manual-only triggering after the result is recorded.
+# Signed Microsoft installation experiments remain explicit manual actions.
 on:
   workflow_dispatch:
+    inputs:
+      try_48_intermediate:
+        description: 'Try verified native .NET 4.8 after 4.0 before attempting 4.8.1'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -420,6 +429,8 @@ jobs:
     needs: [authentic-netfx40-windows, absolute-path-regressions]
     runs-on: macos-15
     timeout-minutes: 35
+    env:
+      SWCOMPAT_TRY_48_INTERMEDIATE: ${{ inputs.try_48_intermediate }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -526,49 +537,48 @@ jobs:
                   f.write("SWCOMPAT_NATIVE40_READY=yes\n")
           print("Original native .NET 4.0 prerequisites passed:", r["persistent_native_managed"])
           PY
+      - name: Test pinned Winetricks dotnet48 on existing verified Microsoft 4.0 prefix
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_48_intermediate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx40_to_48_intermediate \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --winetricks "$SWCOMPAT_WINETRICKS" \
+            --loader build/netfx481_clr_load.exe \
+            --managed build/netfx481_runtime_probe.exe \
+            --native40-report build/netfx40-msxml3-restart.json \
+            --output build/netfx40-to-48-intermediate.json \
+            --timeout 840 --agree-disposable-prefix
+      - name: Gate signed 4.8.1 upgrade on verified native 4.8 intermediate
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_48_intermediate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx40_to_48_intermediate import validate
+          file = Path("build/netfx40-to-48-intermediate.json")
+          assert file.is_file()
+          r = json.loads(file.read_text(encoding="ascii"))
+          assert validate(r)
+          if r["native48_candidate"]:
+              with open(os.environ["GITHUB_ENV"], "a") as out:
+                  out.write("SWCOMPAT_NATIVE48_READY=yes\n")
+          print("Real native Microsoft 4.8 intermediate candidate verified:", r["native48_candidate"])
+          PY
       - name: Select Windows 10 reported version for original Microsoft 4.8.1 upgrade
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes'
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && (!inputs.try_48_intermediate || env.SWCOMPAT_NATIVE48_READY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
           python3 -m swcompat \
             --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
             --logs-dir "$RUNNER_TEMP/netfx40-msxml3-logs" set-winver win10
-      - name: Apply tested Windows 10 external manifest to unchanged Microsoft 4.8.1 media
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          from scripts.netfx481_trial import verify_media
-          from scripts.netfx481_trial import validate_prefix
-          prefix = Path(__import__("os").environ["RUNNER_TEMP"]) / "netfx40-msxml3-prefix"
-          validate_prefix(prefix)
-          original = Path("build/NDP481-x86-x64-AllOS-ENU.exe")
-          digest = Path("build/netfx481.sha256")
-          manifest = Path("probes/winver_481_win10.manifest")
-          sidecar = original.with_name(original.name + ".manifest")
-          assert not original.is_symlink() and not sidecar.exists() and not sidecar.is_symlink()
-          assert not manifest.is_symlink() and manifest.is_file()
-          m = manifest.read_text(encoding="utf-8")
-          assert "8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a" in m
-          assert "<supportedOS" in m and len(m) < 2048
-          assert verify_media(original, digest)
-          with sidecar.open("x", encoding="utf-8") as out:
-              out.write(m)
-          assert verify_media(original, digest)
-          report = {"external_manifest": "WRITTEN", "signed_media_unchanged": True}
-          Path("build/netfx481-sidecar-setup.json").write_text(
-              json.dumps(report, sort_keys=True), encoding="ascii")
-          print("Original Microsoft .NET 4.8.1 executable unchanged; external Windows 10 compatibility manifest installed")
-          PY
-          WINEPREFIX="$RUNNER_TEMP/netfx40-msxml3-prefix" WINEARCH=win64 WINEDEBUG=-all \
-            "$SWCOMPAT_WINE" reg.exe add 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\SideBySide' \
-            /v PreferExternalManifest /t REG_DWORD /d 1 /f >/dev/null 2>&1
-      - name: Upgrade the functioning Microsoft .NET 4.0 CLR with original Microsoft 4.8.1
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes'
+      - name: Upgrade functioning Microsoft .NET 4.x CLR with original Microsoft 4.8.1
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && (!inputs.try_48_intermediate || env.SWCOMPAT_NATIVE48_READY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
@@ -584,34 +594,8 @@ jobs:
             --output build/netfx40-to-481-upgrade.json \
             --experiment-private-setup-evidence \
             --agree-disposable-prefix
-      - name: Remove external compatibility manifest and restore original signed media
-        if: always() && env.SWCOMPAT_NATIVE40_READY == 'yes'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          from scripts.netfx481_trial import verify_media
-          original = Path("build/NDP481-x86-x64-AllOS-ENU.exe")
-          digest = Path("build/netfx481.sha256")
-          sidecar = original.with_name(original.name + ".manifest")
-          expected = Path("probes/winver_481_win10.manifest").read_bytes()
-          if sidecar.is_file() and not sidecar.is_symlink():
-              assert sidecar.read_bytes() == expected, "Unexpected vendor sidecar content"
-              sidecar.unlink()
-          assert not sidecar.exists()
-          assert verify_media(original, digest)
-          report = {"external_manifest": "REMOVED", "signed_media_unchanged": True}
-          Path("build/netfx481-sidecar-cleanup.json").write_text(
-              json.dumps(report, sort_keys=True), encoding="ascii")
-          print("Original Microsoft installer SHA256 unchanged after manifest experiment")
-          PY
-          WINEPREFIX="$RUNNER_TEMP/netfx40-msxml3-prefix" WINEARCH=win64 WINEDEBUG=-all \
-            "$SWCOMPAT_WINE" reg.exe delete 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\SideBySide' \
-            /v PreferExternalManifest /f >/dev/null 2>&1 || true
       - name: Restore Windows 11 profile and verify native-only managed CLR
-        if: always() && env.SWCOMPAT_NATIVE40_READY == 'yes'
+        if: always() && env.SWCOMPAT_NATIVE40_READY == 'yes' && (!inputs.try_48_intermediate || env.SWCOMPAT_NATIVE48_READY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
@@ -653,77 +637,6 @@ jobs:
               for key, value in report.items():
                   print("Original .NET 4.8.1 post-upgrade Windows 11", key, value)
           PY
-      - name: Retry original Microsoft .NET 4.8.1 under Windows 11 only after genuine 5100
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          from scripts.netfx40_to_481_upgrade import validate
-          first = Path("build/netfx40-to-481-upgrade.json")
-          assert first.is_file()
-          r = json.loads(first.read_text(encoding="utf-8"))
-          assert validate(r)
-          if (r["setup"]["status"] == "EXIT_CAPTURED"
-                  and r["setup"]["exit_hex"] == "000013EC"
-                  and r["clr64_change"] == "UNCHANGED"
-                  and r["native_clr_load"] == "LOADED"
-                  and r["native_only_managed"] == "PASS"):
-              with open(os.environ["GITHUB_ENV"], "a") as out:
-                  out.write("SWCOMPAT_RETRY_481_WIN11=yes\n")
-          print("Original 4.8.1 Win10 returned system-requirements code 5100:",
-                r["setup"]["exit_hex"] == "000013EC")
-          PY
-      - name: Run original Microsoft .NET 4.8.1 on same native CLR with Windows 11 profile
-        if: github.event_name == 'workflow_dispatch' && env.SWCOMPAT_RETRY_481_WIN11 == 'yes'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 -m scripts.netfx40_to_481_upgrade \
-            --wine "$SWCOMPAT_WINE" \
-            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
-            --installer build/NDP481-x86-x64-AllOS-ENU.exe \
-            --sha256-file build/netfx481.sha256 \
-            --launcher build/netfx481_win32_launch.exe \
-            --loader build/netfx481_clr_load.exe \
-            --managed build/netfx481_runtime_probe.exe \
-            --native40-report build/netfx40-msxml3-restart.json \
-            --output build/netfx40-to-481-win11retry.json \
-            --experiment-private-setup-evidence \
-            --agree-disposable-prefix
-      - name: Compare actual OS profile retry without claiming success from 5100
-        if: always()
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          from scripts.netfx40_to_481_upgrade import validate
-          after = Path("build/netfx40-to-481-win11retry.json")
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
-              out.write("## Real .NET 4.8.1 OS profile retry\n\n")
-              if not after.is_file():
-                  out.write("Windows 11 retry: **NOT_RUN**\n\n")
-              else:
-                  result = json.loads(after.read_text(encoding="utf-8"))
-                  assert validate(result)
-                  out.write("Windows 11 original installer result: **"
-                            + result["setup"]["category"] + "**\n\n")
-                  out.write("Windows 11 original installer code: **"
-                            + result["setup"]["exit_hex"] + "**\n\n")
-                  out.write("Windows 11 private setup phase: **"
-                            + result["setup_evidence"]["phase"] + "**\n\n")
-                  for key in ("status", "5100_in_log"):
-                      out.write(f"Windows 11 authentic setup {key}: **{result['original_prerequisite'][key]}**\n\n")
-                  for key in ("os_versions", "blockers"):
-                      out.write(f"Windows 11 authentic setup {key}: **{','.join(result['original_prerequisite'][key])}**\n\n")
-                  out.write("Windows 11 native CLR changed: **"
-                            + result["clr64_change"] + "**\n\n")
-                  out.write("Windows 11 genuine 4.8.1 confirmed: **"
-                            + str(result["framework481_confirmed"]) + "**\n\n")
-          PY
       - name: Report only prerequisite and independently verified CLR categories
         if: always()
         shell: bash
@@ -755,6 +668,15 @@ jobs:
                             "runtime_family", "managed_functionality",
                             "candidate_native40", "solidworks_compatibility"):
                       out.write(f"msxml3_trial_{k}: **{r[k]}**\n\n")
+              intermediate = Path("build/netfx40-to-48-intermediate.json")
+              if intermediate.is_file():
+                  from scripts.netfx40_to_48_intermediate import validate as valid_intermediate
+                  step = json.loads(intermediate.read_text(encoding="ascii"))
+                  assert valid_intermediate(step)
+                  for name in ("status", "verb", "win7", "win10", "restart",
+                               "clr64_changed", "release", "loader",
+                               "native_only_managed", "native48_candidate"):
+                      out.write(f"intermediate_48_{name}: **{step[name]}**\n\n")
               upgrade_path = Path("build/netfx40-to-481-upgrade.json")
               if upgrade_path.is_file():
                   from scripts.netfx40_to_481_upgrade import validate as valid_upgrade
@@ -811,11 +733,9 @@ jobs:
             build/netfx40-msxml3-prerequisite.json
             build/netfx40-msxml3-runtime.json
             build/netfx40-msxml3-restart.json
+            build/netfx40-to-48-intermediate.json
             build/netfx40-to-481-upgrade.json
-            build/netfx40-to-481-win11retry.json
             build/netfx40-to-481-win11.json
-            build/netfx481-sidecar-setup.json
-            build/netfx481-sidecar-cleanup.json
           if-no-files-found: warn
           retention-days: 7
       - name: Validate that msxml3 cannot fabricate a CLR install
@@ -848,46 +768,39 @@ jobs:
               rr = json.loads(restart_path.read_text())
               assert validate_restart(rr)
               if rr["persistent_native_managed"]:
-                  for name, expected in (("setup", "WRITTEN"), ("cleanup", "REMOVED")):
-                      policy = Path(f"build/netfx481-sidecar-{name}.json")
-                      assert policy.is_file(), "Signed installer external manifest policy unverified"
-                      p = json.loads(policy.read_text())
-                      assert p == {"external_manifest": expected, "signed_media_unchanged": True}
                   assert rr["restart"] == "COMPLETED"
                   assert rr["native_loader"] == "LOADED"
                   assert rr["native_only_managed"] == "PASS"
                   from scripts.netfx40_to_481_upgrade import validate as upgrade_valid
+                  intermediate_path = Path("build/netfx40-to-48-intermediate.json")
+                  intermediate_required = os.environ.get("SWCOMPAT_TRY_48_INTERMEDIATE") == "true"
+                  assert intermediate_path.is_file() == intermediate_required, (
+                      "Requested intermediate 4.8 experiment was not measured")
+                  intermediate_ready = False
+                  if intermediate_path.is_file():
+                      from scripts.netfx40_to_48_intermediate import validate as valid_intermediate
+                      intermediate = json.loads(intermediate_path.read_text(encoding="ascii"))
+                      assert valid_intermediate(intermediate)
+                      intermediate_ready = intermediate["native48_candidate"]
                   upgrade_path = Path("build/netfx40-to-481-upgrade.json")
-                  assert upgrade_path.is_file(), "Confirmed native 4.0 but upgrade not attempted"
-                  upgraded = json.loads(upgrade_path.read_text(encoding="utf-8"))
-                  assert upgrade_valid(upgraded)
-                  assert upgraded["original_native40_persistent"]
-                  assert upgraded["solidworks_compatibility"] == "NOT_DEMONSTRATED"
-                  retry = Path("build/netfx40-to-481-win11retry.json")
-                  if (os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
-                          and upgraded["setup"]["exit_hex"] == "000013EC"
-                          and upgraded["clr64_change"] == "UNCHANGED"
-                          and upgraded["native_clr_load"] == "LOADED"
-                          and upgraded["native_only_managed"] == "PASS"):
-                      assert retry.is_file(), "Windows 11 original setup after 5100 not measured"
-                  if retry.is_file():
-                      second = json.loads(retry.read_text(encoding="utf-8"))
-                      assert upgrade_valid(second)
-                      assert second["original_native40_persistent"]
-                      assert second["solidworks_compatibility"] == "NOT_DEMONSTRATED"
-                      if second["framework481_confirmed"]:
-                          assert second["setup"]["category"] in {"SUCCESS", "REBOOT_REQUIRED"}
-                          assert second["clr64_change"] == "CHANGED"
-                          assert second["native_only_managed"] == "PASS"
+                  assert upgrade_path.is_file() == (
+                      not intermediate_required or intermediate_ready), (
+                      "4.8.1 must only run after requested 4.8 prerequisite passes")
+                  if upgrade_path.is_file():
+                      upgraded = json.loads(upgrade_path.read_text(encoding="utf-8"))
+                      assert upgrade_valid(upgraded)
+                      assert upgraded["original_native40_persistent"]
+                      assert upgraded["solidworks_compatibility"] == "NOT_DEMONSTRATED"
                   win11_path = Path("build/netfx40-to-481-win11.json")
-                  assert win11_path.is_file(), "Upgrade not tested after returning to Windows 11"
-                  after = json.loads(win11_path.read_text(encoding="utf-8"))
-                  assert set(after) == {"win11_native_only_registry",
-                                        "win11_native_only_family",
-                                        "win11_native_only_managed",
-                                        "win11_native481_ready"}
-                  assert type(after["win11_native481_ready"]) is bool
-                  if after["win11_native481_ready"]:
-                      assert upgraded["framework481_confirmed"]
-                      assert after["win11_native_only_managed"] == "PASS"
+                  if upgrade_path.is_file():
+                      assert win11_path.is_file()
+                      after = json.loads(win11_path.read_text(encoding="utf-8"))
+                      assert set(after) == {"win11_native_only_registry",
+                                            "win11_native_only_family",
+                                            "win11_native_only_managed",
+                                            "win11_native481_ready"}
+                      assert type(after["win11_native481_ready"]) is bool
+                      if after["win11_native481_ready"]:
+                          assert upgraded["framework481_confirmed"]
+                          assert after["win11_native_only_managed"] == "PASS"
           PY
