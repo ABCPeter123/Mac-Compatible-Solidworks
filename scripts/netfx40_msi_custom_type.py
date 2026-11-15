@@ -67,7 +67,7 @@ def _private_failed_action(raw: bytes) -> bytes | None:
                 candidates.append((_failed_action_type(line), match.group(1)))
     for kind, name in candidates:
         if kind not in {"FINALIZE_ONLY"}:
-            return name if kind == "OTHER_ACTION" else None
+            return name if kind in {"OTHER_ACTION", "CUSTOM_ACTION"} else None
     return None
 
 
