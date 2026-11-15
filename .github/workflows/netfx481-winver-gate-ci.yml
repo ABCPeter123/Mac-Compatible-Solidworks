@@ -100,6 +100,27 @@ jobs:
             --prefix "$RUNNER_TEMP/winver-5100-prefix" \
             --bare build/winver_481_bare.exe --manifested build/winver_481_supported.exe \
             --output build/winver-win11.json --agree-disposable-prefix
+      - name: Test external Windows 10 manifest without altering any signed executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat --prefix "$RUNNER_TEMP/winver-5100-prefix" --logs-dir "$RUNNER_TEMP/winver-5100-logs" set-winver win10
+          cp probes/winver_481_win10.manifest build/winver_481_bare.exe.manifest
+          python3 -m scripts.netfx481_version_gate --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/winver-5100-prefix" \
+            --bare build/winver_481_bare.exe --manifested build/winver_481_supported.exe \
+            --output build/winver-sidecar-default.json --agree-disposable-prefix
+      - name: Test PreferExternalManifest only inside disposable Wine prefix
+        shell: bash
+        run: |
+          set -euo pipefail
+          WINEPREFIX="$RUNNER_TEMP/winver-5100-prefix" WINEARCH=win64 WINEDEBUG=-all \
+            "$SWCOMPAT_WINE" reg.exe add 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\SideBySide' \
+            /v PreferExternalManifest /t REG_DWORD /d 1 /f >/dev/null 2>&1
+          python3 -m scripts.netfx481_version_gate --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/winver-5100-prefix" \
+            --bare build/winver_481_bare.exe --manifested build/winver_481_supported.exe \
+            --output build/winver-sidecar-preferred.json --agree-disposable-prefix
       - name: Report strictly finite real Windows version API results
         if: always()
         shell: bash
@@ -110,7 +131,7 @@ jobs:
           from scripts.netfx481_version_gate import verify
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
               out.write("## Windows version reporting under Wine 11.21\n\n")
-              for win in ("win10", "win11"):
+              for win in ("win10", "win11", "sidecar-default", "sidecar-preferred"):
                   path = Path(f"build/winver-{win}.json")
                   assert path.is_file()
                   data = json.loads(path.read_text())
@@ -127,5 +148,7 @@ jobs:
           path: |
             build/winver-win10.json
             build/winver-win11.json
+            build/winver-sidecar-default.json
+            build/winver-sidecar-preferred.json
           if-no-files-found: warn
           retention-days: 7
