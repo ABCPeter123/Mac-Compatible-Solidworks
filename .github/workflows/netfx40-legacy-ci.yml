@@ -14,6 +14,7 @@ on:
       - 'tests/test_netfx40_msi_evidence.py'
       - 'docs/NETFX40_INNER_MSI.md'
       - 'docs/NETFX40_WINE_STAGING_AB.md'
+      - 'docs/NETFX40_SCM_PREINSTALL_RESTART.md'
       - 'probes/netfx481_win32_launch.c'
       - 'tests/test_netfx40_legacy.py'
       - 'scripts/netfx481_trial.py'
@@ -178,7 +179,8 @@ jobs:
             --launcher build/netfx40_win32_launch.exe \
             --output build/netfx40-baseline.json \
             --timeout 210 --agree-disposable-prefix \
-            --experiment-enable-verbose-msi
+            --experiment-enable-verbose-msi \
+            --experiment-restart-after-mono
       - name: Publish only bounded .NET 4.0 status categories
         if: always()
         shell: bash
@@ -199,7 +201,8 @@ jobs:
                   for field in ("status", "winver", "registry64", "registry32", "mono",
                                 "selftest", "installer_status", "installer_exit",
                                 "installer_child_seen", "installer_child_lifecycle",
-                                "installer_child_exit", "reboot", "clr64_before", "clr64_after", "clr32_after",
+                                "installer_child_exit", "pre_setup_scm_restart", "reboot",
+                                "clr64_before", "clr64_after", "clr32_after",
                                 "mscorlib64_after", "native_loader", "runtime_family",
                                 "managed_functionality", "candidate_native40",
                                 "netfx481_ready", "solidworks_compatibility"):
@@ -231,6 +234,7 @@ jobs:
           assert validate(r)
           assert r["status"] == "MEASURED"
           assert r["selftest"] == "PASS"
+          assert r["pre_setup_scm_restart"] == "COMPLETED"
           assert r["installer_status"] == "EXIT_CAPTURED"
           from scripts.netfx40_msi_evidence import validate as validate_msi
           assert validate_msi(r["inner_msi"])
