@@ -109,9 +109,12 @@ def operation(wine: Path, prefix: Path, executable: Path, action: str,
 def inspect(wine: Path, prefix: Path, executable: Path, prior: Path) -> dict:
     if os.name == "nt" or any(p.is_symlink() for p in (wine, prefix, executable, prior)):
         raise ValueError("Disposable Wine original-service experiment only")
-    wine, prefix, executable, prior = (
-        p.resolve(strict=True) for p in (wine, prefix, executable, prior)
-    )
+    try:
+        wine, prefix, executable, prior = (
+            p.resolve(strict=True) for p in (wine, prefix, executable, prior)
+        )
+    except OSError as exc:
+        raise ValueError("Original isolated Wine inputs missing") from exc
     validate_prefix(prefix)
     if not wine.is_file() or not os.access(wine, os.X_OK):
         raise ValueError("Missing original Wine binary")
