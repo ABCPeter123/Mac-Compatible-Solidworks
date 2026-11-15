@@ -174,7 +174,65 @@ def _is_481_log_name(name: str) -> bool:
             or lower.startswith(("dd_ndp481", "dd_netfx481", "dd_dotnetfx481")))
 
 
-def scan_secondary_logs(prefix: Path) -> dict[str, object]:
+def _secondary_roots(prefix: Path) -> list[Path]:
+    drive_c = prefix / "drive_c"
+    return [
+        drive_c / "users",
+        drive_c / "windows" / "temp",
+        drive_c / "windows" / "Temp",
+        drive_c / "Temp",
+        drive_c / "windows" / "logs" / "CBS",
+    ]
+
+
+def _metadata(file: Path) -> tuple[int, int, int]:
+    """Private identity and modification fields, never copied into evidence."""
+    import os
+    stat = file.stat(follow_symlinks=False)
+    return (stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+
+def snapshot_secondary_logs(prefix: Path) -> dict[Path, tuple[int, int, int]]:
+    """Capture bounded pre-upgrade file metadata, without reading log content.
+
+    If enumeration is incomplete, refuse attribution rather than treating old
+    files outside the inventory as if they were created by .NET 4.8.1.
+    """
+    import os
+    from scripts.netfx481_trial import validate_prefix
+
+    validate_prefix(prefix)
+    baseline: dict[Path, tuple[int, int, int]] = {}
+    directories = 0
+    for root in _secondary_roots(prefix):
+        if not root.exists():
+            continue
+        if root.is_symlink() or not root.is_dir():
+            raise ValueError("Unsafe secondary setup root")
+        for current, subdirs, names in os.walk(root, topdown=True, followlinks=False):
+            directories += 1
+            if directories > SECONDARY_MAX_DIRS:
+                raise ValueError("Secondary setup metadata directory limit")
+            base = Path(current)
+            if len(base.relative_to(root).parts) >= 7:
+                subdirs.clear()
+            else:
+                subdirs[:] = sorted(x for x in subdirs
+                                   if not (base / x).is_symlink())[:24]
+            for name in sorted(names):
+                if not _SECONDARY_FILENAME.fullmatch(name):
+                    continue
+                file = base / name
+                if file.is_symlink() or not file.is_file() or file in baseline:
+                    continue
+                if len(baseline) >= SECONDARY_MAX_FILES:
+                    raise ValueError("Secondary setup metadata file limit")
+                baseline[file] = _metadata(file)
+    return baseline
+
+
+def scan_secondary_logs(prefix: Path, *,
+                        baseline: dict[Path, tuple[int, int, int]] | None = None) -> dict[str, object]:
     """Bounded local classification of Microsoft logs in a disposable prefix.
 
     Never returns any source filename or raw log content. Directory enumeration
@@ -189,20 +247,22 @@ def scan_secondary_logs(prefix: Path) -> dict[str, object]:
 
     from scripts.netfx481_trial import validate_prefix
     validate_prefix(prefix)
-    drive_c = prefix / "drive_c"
-    roots = [
-        drive_c / "users",
-        drive_c / "windows" / "temp",
-        drive_c / "windows" / "Temp",
-        drive_c / "Temp",
-        drive_c / "windows" / "logs" / "CBS",
-    ]
+    roots = _secondary_roots(prefix)
+    if baseline is not None and (type(baseline) is not dict
+            or any(not isinstance(k, Path) or type(v) is not tuple
+                   or len(v) != 3 or any(type(n) is not int for n in v)
+                   for k, v in baseline.items())):
+        raise ValueError("Untrusted pre-upgrade log metadata")
     seen_files: set[Path] = set()
     totals = {name: 0 for name in sorted(SECONDARY_SOURCE_NAMES)}
     errors: set[str] = set()
     phases = {name: 0 for name in sorted(KNOWN_PHASES)}
     scanned = 0
     prerequisite_files = 0
+    stage_files = 0
+    stage_os: set[str] = set()
+    stage_blockers: set[str] = set()
+    stage_5100 = False
     prereq_os: set[str] = set()
     prereq_blockers: set[str] = set()
     prereq_5100 = False
@@ -248,15 +308,23 @@ def scan_secondary_logs(prefix: Path) -> dict[str, object]:
                 if len(raw) > SECONDARY_MAX_PER_FILE:
                     partial = True
                     continue
-                if _is_481_log_name(name):
+                new_or_changed = baseline is not None and (
+                    file not in baseline or _metadata(file) != baseline[file])
+                if _is_481_log_name(name) or new_or_changed:
                     prereq = classify_prerequisite_text(raw)
-                    if prereq["status"] == "CLASSIFIED":
-                        prerequisite_files += 1
-                        prereq_os.update(prereq["os_versions"])
-                        prereq_blockers.update(prereq["blockers"])
-                        prereq_5100 = prereq_5100 or prereq["5100_in_log"]
-                    else:
+                    if prereq["status"] != "CLASSIFIED":
                         partial = True
+                    else:
+                        if _is_481_log_name(name):
+                            prerequisite_files += 1
+                            prereq_os.update(prereq["os_versions"])
+                            prereq_blockers.update(prereq["blockers"])
+                            prereq_5100 = prereq_5100 or prereq["5100_in_log"]
+                        if new_or_changed:
+                            stage_files += 1
+                            stage_os.update(prereq["os_versions"])
+                            stage_blockers.update(prereq["blockers"])
+                            stage_5100 = stage_5100 or prereq["5100_in_log"]
                 result = classify_text(raw)
                 if result["status"] != "CLASSIFIED":
                     partial = True
@@ -279,6 +347,8 @@ def scan_secondary_logs(prefix: Path) -> dict[str, object]:
         "status": status,
         "files_scanned": scanned,
         "prerequisite_files": prerequisite_files,
+        "stage_files": stage_files,
+        "stage_scope": "CAPTURED" if baseline is not None else "NOT_REQUESTED",
         "sources": totals,
         "phase": phase,
         "codes": sorted(errors),
@@ -286,6 +356,12 @@ def scan_secondary_logs(prefix: Path) -> dict[str, object]:
             {"status": "CLASSIFIED", "os_versions": sorted(prereq_os),
              "blockers": sorted(prereq_blockers), "5100_in_log": prereq_5100}
             if prerequisite_files else empty_prerequisite("NOT_FOUND")
+        ),
+        "stage_prerequisite": (
+            {"status": "CLASSIFIED", "os_versions": sorted(stage_os),
+             "blockers": sorted(stage_blockers), "5100_in_log": stage_5100}
+            if stage_files else empty_prerequisite(
+                "NOT_FOUND" if baseline is not None else "NOT_REQUESTED")
         ),
     }
 
@@ -295,9 +371,12 @@ def validate_secondary_report(report: dict) -> bool:
         validate as validate_prerequisite, empty as empty_prerequisite,
     )
     if type(report) is not dict or set(report) != {
-            "status", "files_scanned", "prerequisite_files", "sources", "phase", "codes", "prerequisite"}:
+            "status", "files_scanned", "prerequisite_files", "stage_files",
+            "stage_scope", "sources", "phase", "codes", "prerequisite",
+            "stage_prerequisite"}:
         return False
-    if not validate_prerequisite(report["prerequisite"]):
+    if (not validate_prerequisite(report["prerequisite"])
+            or not validate_prerequisite(report["stage_prerequisite"])):
         return False
     sources = report.get("sources")
     codes = report.get("codes")
@@ -305,6 +384,15 @@ def validate_secondary_report(report: dict) -> bool:
         report.get("status") in SECONDARY_STATUSES
         and type(report["prerequisite_files"]) is int
         and 0 <= report["prerequisite_files"] <= report["files_scanned"]
+        and report["stage_scope"] in {"NOT_REQUESTED", "CAPTURED"}
+        and type(report["stage_files"]) is int
+        and 0 <= report["stage_files"] <= report["files_scanned"]
+        and (report["stage_files"] > 0 or report["stage_prerequisite"]
+             == empty_prerequisite("NOT_FOUND" if
+                report["stage_scope"] == "CAPTURED" else "NOT_REQUESTED"))
+        and (report["stage_files"] == 0 or
+             (report["stage_scope"] == "CAPTURED" and
+              report["stage_prerequisite"]["status"] == "CLASSIFIED"))
         and (report["prerequisite_files"] > 0 or
              report["prerequisite"] == empty_prerequisite("NOT_FOUND"))
         and (report["prerequisite_files"] == 0 or

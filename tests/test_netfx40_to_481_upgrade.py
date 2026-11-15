@@ -140,12 +140,15 @@ class NativeUpgradeTests(unittest.TestCase):
                                     return_value=Path(td) / "private-report") as private,
                   mock.patch.object(upgrade, "classify_log", return_value=evidence),
                   mock.patch.object(upgrade, "discard_log") as discard,
-                  mock.patch.object(upgrade, "scan_secondary_logs", return_value=None)):
+                  mock.patch.object(upgrade, "snapshot_secondary_logs", return_value={}) as snapshot_logs,
+                  mock.patch.object(upgrade, "scan_secondary_logs", return_value=None) as scan_logs):
                 result = upgrade.inspect(*args, {"persistent_native_managed": True},
                                          capture_setup_evidence=True)
             self.assertTrue(upgrade.validate(result))
             self.assertFalse(result["framework481_confirmed"])
             self.assertEqual(result["setup"]["exit_hex"], "000013EC")
+            snapshot_logs.assert_called_once()
+            self.assertEqual(scan_logs.call_args.kwargs["baseline"], {})
             self.assertEqual(result["setup_evidence"]["phase"], "PREREQUISITE")
             self.assertEqual(result["clr64_change"], "UNCHANGED")
             private.assert_called_once()

@@ -781,6 +781,12 @@ jobs:
                       out.write(f"secondary_481_prerequisite_5100: **{classified['5100_in_log']}**\n\n")
                       out.write(f"secondary_481_prerequisite_blockers: **{','.join(classified['blockers'])}**\n\n")
                       out.write(f"secondary_481_prerequisite_os: **{','.join(classified['os_versions'])}**\n\n")
+                      stage = upgraded["secondary_evidence"]["stage_prerequisite"]
+                      out.write(f"secondary_stage_scope: **{upgraded['secondary_evidence']['stage_scope']}**\n\n")
+                      out.write(f"secondary_stage_changed_files: **{upgraded['secondary_evidence']['stage_files']}**\n\n")
+                      out.write(f"secondary_stage_status: **{stage['status']}**\n\n")
+                      out.write(f"secondary_stage_blockers: **{','.join(stage['blockers'])}**\n\n")
+                      out.write(f"secondary_stage_os: **{','.join(stage['os_versions'])}**\n\n")
               win11_path = Path("build/netfx40-to-481-win11.json")
               if win11_path.is_file():
                   resumed = json.loads(win11_path.read_text(encoding="utf-8"))
