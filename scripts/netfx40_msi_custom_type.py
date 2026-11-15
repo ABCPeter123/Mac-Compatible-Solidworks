@@ -58,6 +58,8 @@ def relevant(line: bytes) -> bool:
 def empty(status: str = "NOT_REQUESTED", *, reason: str = "NONE") -> dict:
     if status not in STATUSES or reason not in CAPTURE_REASONS:
         raise ValueError("Invalid custom-action trace state")
+    if status == "CAPTURE_TRUNCATED" and reason == "NONE":
+        reason = "UNKNOWN"
     if (status == "CAPTURE_TRUNCATED") != (reason != "NONE"):
         raise ValueError("Capture reason must match truncated status")
     return {
