@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="SWCompat Deferred SCM Read Only Probe"
+           Manufacturer="SWCompat Open Compatibility Research"
+           Version="1.0.0" Scope="perMachine"
+           UpgradeCode="{1CB750B1-E7BA-4D49-B815-8057355C2031}">
+    <MediaTemplate EmbedCab="yes"/>
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="SWCompatDeferredScmDir" Name="SWCompatDeferredScmProbe">
+        <Component Id="ScmMarkerComponent" Guid="{A5C54297-4013-4211-B699-8882D07E23B8}">
+          <File Id="ScmMarkerFile" Source="build/msi_deferred_scm_marker.txt" KeyPath="yes"/>
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="MainFeature" Level="1">
+      <ComponentRef Id="ScmMarkerComponent"/>
+    </Feature>
+    <Binary Id="SelfAuthoredScmDll" SourceFile="build/msi_deferred_scm_access.dll"/>
+    <CustomAction Id="ServiceScmReadOnlyProbe"
+                  BinaryRef="SelfAuthoredScmDll"
+                  DllEntry="SWCompatReadOnlyScmAccess"
+                  Execute="deferred" Return="check" Impersonate="no"/>
+    <InstallExecuteSequence>
+      <Custom Action="ServiceScmReadOnlyProbe" After="InstallFiles" Condition="NOT Installed"/>
+    </InstallExecuteSequence>
+  </Package>
+</Wix>
