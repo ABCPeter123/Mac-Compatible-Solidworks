@@ -12,6 +12,7 @@ import re
 import subprocess
 
 from scripts.netfx481_trial import validate_prefix
+from scripts.netfx40_private_action import ACTION_RE
 from scripts.netfx40_msi_custom_type import FAMILIES
 from swcompat.wine_paths import windows_media_path
 
@@ -84,7 +85,8 @@ def validate(report: dict) -> bool:
 
 
 def inspect(wine: Path, prefix: Path, probe: Path, msi: Path,
-            action: str = "ServiceTypeControlSentinel") -> dict:
+            action: str = "ServiceTypeControlSentinel", *,
+            allow_original_action: bool = False) -> dict:
     if os.name == "nt":
         raise ValueError("Use native Windows probe directly")
     if any(p.is_symlink() for p in (wine, prefix, probe, msi)):
@@ -95,8 +97,10 @@ def inspect(wine: Path, prefix: Path, probe: Path, msi: Path,
         p.resolve(strict=True) for p in (wine, prefix, probe, msi)
     )
     validate_prefix(prefix)
-    if action not in ACTIONS:
-        raise ValueError("Control only accepts known self-authored action")
+    if action not in ACTIONS and not (
+            allow_original_action and isinstance(action, str) and action.isascii()
+            and ACTION_RE.fullmatch(action.encode("ascii"))):
+        raise ValueError("Private original action must be a strict MSI identifier")
     if probe.name != "msi_custom_action_table_probe.exe" or not probe.is_file():
         raise ValueError("Expected original Win32 metadata probe")
     if not msi.is_file():
