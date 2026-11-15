@@ -15,6 +15,7 @@ on:
       - 'docs/NETFX40_INNER_MSI.md'
       - 'docs/NETFX40_WINE_STAGING_AB.md'
       - 'docs/NETFX40_SCM_PREINSTALL_RESTART.md'
+      - 'docs/NETFX40_FIRST_SERVICE_ACTION.md'
       - 'probes/netfx481_win32_launch.c'
       - 'tests/test_netfx40_legacy.py'
       - 'scripts/netfx481_trial.py'
