@@ -31,3 +31,9 @@ Wine source context: `programs/services/rpc.c` checks the `scmdatabase_find_serv
 Sources: [upstream Wine rpc.c](https://github.com/wine-mirror/wine/blob/master/programs/services/rpc.c), [upstream Wine services.c](https://github.com/wine-mirror/wine/blob/master/programs/services/services.c), [prior independent API experiment](MSI_SERVICE_SCM_API_DIFFERENTIAL.md).
 
 A passing diagnostic workflow alone does not establish working Microsoft .NET or real SOLIDWORKS.
+
+## Nondeterminism documented by first PR run
+
+The first PR #72 Apple Silicon run completed successfully as a CI workflow but produced a new independent SCM behavior: the original direct `CreateServiceW` returned `CREATED`, not `ALREADY_EXISTS`, while the original MSI service registry key was already present. An independently executed `OpenServiceW` returned `UNKNOWN` afterward. This is **not** proof of repair, even though the `CreateServiceW` call succeeded.
+
+The initial eligibility rule incorrectly skipped the single-SCM-handle test for `CREATED`. It now accepts both observed values, `CREATED` and `ALREADY_EXISTS`, when the previous Win32 read-only service status has not been verified as `RUNNING` or `STOPPED`. The Python regression includes this exact sequence. A passing CI workflow still requires `trial=MEASURED` only if the real prior evidence satisfies the strict safety gates.
