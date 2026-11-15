@@ -18,6 +18,7 @@ class CbsOperationPreflightTests(unittest.TestCase):
         self.assertEqual(report["target_arch"], "amd64")
         self.assertEqual(report["root_identity_arch"], "amd64")
         self.assertEqual(report["updates"], 1)
+        self.assertEqual(report["installer_assembly"], 0)
         self.assertEqual(report["parents"], 1)
         self.assertEqual(report["dependencies"], 1)
         self.assertFalse(report["safe_to_apply"])
@@ -40,6 +41,8 @@ class CbsOperationPreflightTests(unittest.TestCase):
     def test_unsupported_actions_remain_non_installable(self):
         report = preflight(mum("amd64", "<customInformation/><serviceData/>"))
         self.assertEqual(report["unsupported_operations"], 2)
+        self.assertEqual(report["custom_information"], 1)
+        self.assertEqual(report["other_unsupported"], 1)
         self.assertFalse(report["safe_to_apply"])
 
     def test_aggregate_no_identifiers(self):
@@ -48,6 +51,15 @@ class CbsOperationPreflightTests(unittest.TestCase):
         self.assertEqual(report["amd64_only"], 1)
         self.assertEqual(report["root_amd64"], 1)
         self.assertEqual(report["root_x86"], 1)
+        self.assertEqual(report["root_amd64_updates"], 0)
+        self.assertEqual(report["installer_assembly"], 0)
+        self.assertEqual(report["unsupported_operations"], 0)
+        scoped = summarize_many([mum("amd64", "<package><update/><installerAssembly/></package>"),
+                                 mum("arm64", "<package><update/><update/></package>")])
+        self.assertEqual(scoped["updates"], 3)
+        self.assertEqual(scoped["root_amd64_updates"], 1)
+        self.assertEqual(scoped["root_amd64_unsupported"], 1)
+        self.assertEqual(scoped["installer_assembly"], 1)
         self.assertFalse(report["safe_to_apply"])
         self.assertNotIn("PRIVATE", str(report))
 
