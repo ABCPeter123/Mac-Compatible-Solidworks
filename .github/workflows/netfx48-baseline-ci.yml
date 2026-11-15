@@ -1,20 +1,7 @@
 name: Genuine Microsoft .NET Framework 4.8 Apple Silicon CLR baseline
 
+# Historical authentic .NET 4.8 baseline: explicit dispatch only. Native 4.8.1 prerequisite investigation is active.
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/netfx48-baseline-ci.yml'
-      - 'scripts/netfx48_baseline.py'
-      - 'scripts/netfx48_win32_exit.py'
-      - 'probes/netfx481_win32_launch.c'
-      - 'tests/test_netfx48_win32_exit.py'
-      - 'tests/test_netfx48_baseline.py'
-      - 'scripts/netfx481_trial.py'
-      - 'scripts/wine_mono_removal.py'
-      - 'scripts/netfx481_clr_load.py'
-      - 'scripts/netfx481_payload_audit.py'
-      - 'probes/netfx481_runtime_probe.cs'
-      - 'probes/netfx481_clr_load.c'
   workflow_dispatch:
 
 permissions:

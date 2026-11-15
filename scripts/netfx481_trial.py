@@ -324,10 +324,12 @@ def combine(before: dict, after: dict, termination: str, code: int | None,
     from scripts.netfx481_setup_evidence import (
         validate_secondary_report, SECONDARY_SOURCE_NAMES
     )
+    from scripts.netfx481_prereq_diagnostic import empty as empty_prerequisite
     secondary_evidence = secondary_evidence or {
         "status": "NOT_REQUESTED", "files_scanned": 0,
         "sources": {key: 0 for key in sorted(SECONDARY_SOURCE_NAMES)},
         "phase": "UNKNOWN", "codes": [],
+        "prerequisite": empty_prerequisite("NOT_FOUND"),
     }
     if not validate_secondary_report(secondary_evidence):
         raise ValueError("Unsafe or unexpected secondary log report")

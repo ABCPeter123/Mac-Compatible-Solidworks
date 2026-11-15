@@ -125,9 +125,38 @@ class NetFxSetupEvidenceTests(unittest.TestCase):
                 "FILE_NOT_FOUND", "MSI_FATAL_ERROR", "SERVICING_SOURCE_MISSING"
             ])
             self.assertTrue(evidence.validate_secondary_report(report))
+            self.assertEqual(report["prerequisite"]["status"], "CLASSIFIED")
+            self.assertFalse(report["prerequisite"]["5100_in_log"])
             payload = json.dumps(report)
             for forbidden in ("runner", "private", "password", "dd_ndp", "AppData", "CBS.log"):
                 self.assertNotIn(forbidden, payload)
+
+    def test_secondary_html_stopblock_private_and_causally_discriminating(self):
+        with tempfile.TemporaryDirectory() as temp:
+            prefix = Path(temp)
+            (prefix / "drive_c").mkdir()
+            (prefix / "system.reg").write_text("")
+            (prefix / trial.SENTINEL).write_text("")
+            local = prefix / "drive_c" / "users" / "tester" / "AppData" / "Local" / "Temp"
+            local.mkdir(parents=True)
+            (local / "Microsoft .NET Framework 4.8.1 Setup_20261115.html").write_text(
+                "Installation Blockers:\n"
+                "Not enough disk space available to download files and/or install\n"
+                "Final Result: Installation failed with error code: (0x000013EC), "
+                "A StopBlock was hit or a System Requirement was not met.\n"
+                "OS Version = 10.0.19045\n"
+                "Original account C:\\Users\\tester\\private\\important.txt\n"
+            )
+            outcome = evidence.scan_secondary_logs(prefix)
+            self.assertTrue(evidence.validate_secondary_report(outcome))
+            self.assertEqual(outcome["prerequisite"]["blockers"], ["DISK_SPACE_BLOCK"])
+            self.assertEqual(outcome["prerequisite"]["os_versions"], ["WINDOWS_10_SUPPORTED"])
+            self.assertTrue(outcome["prerequisite"]["5100_in_log"])
+            for secret in ("tester", "private", "important.txt", "Microsoft .NET"):
+                self.assertNotIn(secret, json.dumps(outcome))
+            forged = dict(outcome)
+            forged["prerequisite"] = dict(outcome["prerequisite"], original_html="LEAK")
+            self.assertFalse(evidence.validate_secondary_report(forged))
 
     def test_secondary_scan_limits_symlinks_and_missing_source(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -137,6 +166,7 @@ class NetFxSetupEvidenceTests(unittest.TestCase):
             (prefix / trial.SENTINEL).write_text("")
             no_files = evidence.scan_secondary_logs(prefix)
             self.assertEqual(no_files["status"], "NOT_FOUND")
+            self.assertEqual(no_files["prerequisite"]["status"], "NOT_FOUND")
             self.assertTrue(evidence.validate_secondary_report(no_files))
             tempdir = prefix / "drive_c" / "users" / "runner" / "Temp"
             tempdir.mkdir(parents=True)
@@ -158,6 +188,8 @@ class NetFxSetupEvidenceTests(unittest.TestCase):
             "sources": {"BOOTSTRAPPER_TEMP": 1, "FRAMEWORK_SETUP": 0,
                         "SETUP_EVENTS": 0, "SERVICING_CBS": 0},
             "phase": "MSI_INSTALL", "codes": ["MSI_FATAL_ERROR"],
+            "prerequisite": {"status": "CLASSIFIED", "os_versions": [],
+                             "blockers": [], "5100_in_log": False},
         }
         result = trial.combine(before, before, "EXIT_NONZERO", 194,
                                secondary_evidence=legit)

@@ -17,16 +17,37 @@ OS_CLASSES = {"BELOW_WINDOWS_10", "WINDOWS_10_TOO_OLD", "WINDOWS_10_SUPPORTED",
 CAUSES = {
     "OS_VERSION_BLOCK", "OS_EDITION_BLOCK", "WINDOWS_SERVICING_BLOCK",
     "MISSING_UPDATE_BLOCK", "PENDING_REBOOT_BLOCK", "ADMIN_RIGHTS_BLOCK",
-    "PROCESSOR_BLOCK", "EXISTING_FRAMEWORK_BLOCK", "UNKNOWN_PREREQUISITE",
+    "PROCESSOR_BLOCK", "EXISTING_FRAMEWORK_BLOCK",
+    "DISK_SPACE_BLOCK", "COMPATIBILITY_MODE_BLOCK", "WINDOWS_UPDATE_BLOCK",
+    "UNKNOWN_PREREQUISITE",
 }
 STATES = {"NOT_REQUESTED", "NOT_FOUND", "READ_FAILED", "TOO_LARGE",
           "INVALID_ENCODING", "CLASSIFIED"}
 OS_LINE = re.compile(r"(?i)\bOS\s+Version\s*[=:]\s*(\d{1,2})\.(\d{1,2})\.(\d{1,6})\b")
 FAIL_LINE = re.compile(
     r"(?i)\b(block(?:ed|ing)?|fail(?:ed|ure)?|unsupported|not supported|not applicable|"
-    r"prerequisite|requirement|minimum|cannot (?:install|continue)|5100)\b"
+    r"prerequisite|requirement|minimum|cannot (?:install|continue)|5100|stopblock|"
+    r"compatibility mode|not enough disk space|insufficient disk space|"
+    r"bytes needed|windows update service|bits is not available)\b"
+)
+DISK_ESTIMATE = re.compile(
+    r"(?i)Bytes\s+Needed:\s*\[(\d{1,18})\].{0,150}?"
+    r"Bytes\s+Available:\s*\[(\d{1,18})\]?"
 )
 CAUSE_REGEX = (
+    ("DISK_SPACE_BLOCK", re.compile(
+        r"(?i)(?:not enough|insufficient)\s+(?:free\s+)?disk\s+space"
+        r"|(?:unable to|cannot)\s+(?:download|install).{0,70}disk\s+space")),
+    ("COMPATIBILITY_MODE_BLOCK", re.compile(
+        r"(?i)(?:cannot|can not|must not|not supported|blocked).{0,75}"
+        r"(?:program\s+)?compatibility\s+mode"
+        r"|(?:program\s+)?compatibility\s+mode.{0,75}"
+        r"(?:cannot|not supported|blocked|prevents)")),
+    ("WINDOWS_UPDATE_BLOCK", re.compile(
+        r"(?i)(?:windows\s+update\s+service|bits).{0,80}"
+        r"(?:not available|unavailable|disabled|not running)"
+        r"|(?:not available|unavailable|disabled).{0,80}"
+        r"(?:windows\s+update\s+service|bits)")),
     ("OS_VERSION_BLOCK", re.compile(r"(?i)(?:operating system|os version|windows version).{0,90}"
                                    r"(?:not supported|unsupported|too old|requires|minimum|blocking|blocked)"
                                    r"|(?:not supported|unsupported|requires|minimum).{0,90}"
@@ -87,6 +108,7 @@ def classify_text(raw: bytes) -> dict:
     versions: set[str] = set()
     blockers: set[str] = set()
     return_code = False
+    unclassified_stopblock = False
     for line in content.splitlines()[:30000]:
         if len(line) > 8192:
             continue
@@ -97,12 +119,21 @@ def classify_text(raw: bytes) -> dict:
             continue
         if re.search(r"(?i)(?<!\d)5100(?!\d)|0x000013ec\b", line):
             return_code = True
+        specific = False
         for category, regex in CAUSE_REGEX:
             if regex.search(line):
                 blockers.add(category)
-        if (not any(regex.search(line) for _, regex in CAUSE_REGEX)
-                and re.search(r"(?i)\b(?:block(?:ed|ing)?|prerequisite|system requirement)\b", line)):
-            blockers.add("UNKNOWN_PREREQUISITE")
+                specific = True
+        estimate = DISK_ESTIMATE.search(line)
+        if estimate and int(estimate.group(1)) > int(estimate.group(2)):
+            blockers.add("DISK_SPACE_BLOCK")
+            specific = True
+        if (not specific and re.search(
+                r"(?i)\b(?:stopblock|block(?:ed|ing)?|prerequisite|system requirement)\b",
+                line)):
+            unclassified_stopblock = True
+    if unclassified_stopblock and not blockers:
+        blockers.add("UNKNOWN_PREREQUISITE")
     result = {"status": "CLASSIFIED", "os_versions": sorted(versions),
               "blockers": sorted(blockers), "5100_in_log": return_code}
     assert validate(result)

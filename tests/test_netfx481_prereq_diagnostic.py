@@ -49,6 +49,57 @@ class OriginalPrerequisiteTests(unittest.TestCase):
             self.assertTrue(report["5100_in_log"])
             self.assertNotIn("secret", str(report))
 
+    def test_real_5100_stopblock_distinguishes_disk_deficit(self):
+        raw = (
+            b"OS Version = 10.0.22000, SP = 0.0, Platform 2\n"
+            b"Drive:[C:\\] Bytes Needed:[1476239375] Bytes Available:[741433344]\n"
+            b"Not enough disk space available to download files and/or install"
+            b" - unable to complete install.\n"
+            b"Final Result: Installation failed with error code: (0x000013EC), "
+            b"A StopBlock was hit or a System Requirement was not met.\n"
+            b"Private path=C:\\Users\\secret\\vendor.bin\n"
+        )
+        actual = classify_text(raw)
+        self.assertEqual(actual["os_versions"], ["WINDOWS_11_21H2_INSTALLABLE"])
+        self.assertEqual(actual["blockers"], ["DISK_SPACE_BLOCK"])
+        self.assertTrue(actual["5100_in_log"])
+        self.assertTrue(validate(actual))
+        self.assertNotIn("741433344", str(actual))
+        self.assertNotIn("secret", str(actual))
+
+    def test_actual_setup_html_blocker_lines(self):
+        raw = (
+            b"Installation Blockers:\n"
+            b"1.The setup cannot run in compatibility mode.\n"
+            b"2.The .NET Framework 4.8.1 is not supported on this operating system.\n"
+            b"Final Result: Installation failed with error code: (0x000013EC), "
+            b"A StopBlock was hit.\n"
+        )
+        result = classify_text(raw)
+        self.assertIn("COMPATIBILITY_MODE_BLOCK", result["blockers"])
+        self.assertIn("OS_VERSION_BLOCK", result["blockers"])
+        self.assertNotIn("UNKNOWN_PREREQUISITE", result["blockers"])
+
+    def test_low_disk_free_bytes_without_explicit_message(self):
+        below = classify_text(
+            b"Drive:[C:\\] Bytes Needed:[5000000000] Bytes Available:[1000000000]\n"
+            b"Final Result: failed 5100 StopBlock\n"
+        )
+        above = classify_text(
+            b"Drive:[C:\\] Bytes Needed:[1000000] Bytes Available:[2000000]\n"
+            b"Final Result: failed 5100 StopBlock\n"
+        )
+        self.assertEqual(below["blockers"], ["DISK_SPACE_BLOCK"])
+        self.assertEqual(above["blockers"], ["UNKNOWN_PREREQUISITE"])
+
+    def test_windows_update_service_unavailable(self):
+        report = classify_text(
+            b"Setup may not run because the Windows Update Service is not available\n"
+            b"Final Result: failed 5100\n"
+        )
+        self.assertIn("WINDOWS_UPDATE_BLOCK", report["blockers"])
+        self.assertNotIn("UNKNOWN_PREREQUISITE", report["blockers"])
+
     def test_prerequisite_taxonomy_has_no_log_text(self):
         report = classify_text(
             b"Error: servicing component store blocked setup\n"
