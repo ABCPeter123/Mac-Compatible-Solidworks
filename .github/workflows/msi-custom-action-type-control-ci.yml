@@ -1,0 +1,167 @@
+name: Original self-authored MSI deferred DLL trace vs Apple Silicon Wine
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/msi-custom-action-type-control-ci.yml'
+      - 'probes/msi_custom_action_type_control.wxs'
+      - 'probes/msi_custom_action_fail.c'
+      - 'scripts/msi_custom_action_type_control.py'
+      - 'scripts/netfx40_msi_custom_type.py'
+      - 'tests/test_msi_custom_action_type_control.py'
+      - 'docs/MSI_CUSTOM_ACTION_TRACE_CONTROL.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-msi-reference:
+    name: Build and execute original harmless deferred DLL MSI on Windows
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test bounded custom action reporting and private capture
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests -p 'test_msi_custom_action_type_control.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'Unsafe self-authored MSI differential' }
+      - name: Compile original x64 DLL, WiX 5 MSI, and exact hash
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force build/wix | Out-Null
+          Set-Content -Path build/msi_custom_action_control.txt -Value 'SWCOMPAT_ORIGINAL_CUSTOM_ACTION_CONTROL' -NoNewline -Encoding ascii
+          $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (!(Test-Path $vswhere)) { throw 'MSVC locator absent' }
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw 'MSVC tools missing' }
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          if (!(Test-Path $vcvars)) { throw 'MSVC environment absent' }
+          $lines = @('@echo off', ('call "' + $vcvars + '"'),
+            'cl /nologo /W4 /O2 /LD /Fe:build\msi_custom_action_fail.dll probes\msi_custom_action_fail.c',
+            'exit /b %errorlevel%')
+          [System.IO.File]::WriteAllLines((Join-Path (Get-Location) 'build\compile-custom-control.cmd'), $lines, [System.Text.Encoding]::ASCII)
+          & cmd.exe /d /c build\compile-custom-control.cmd
+          if ($LASTEXITCODE -ne 0 -or !(Test-Path build/msi_custom_action_fail.dll)) { throw 'Original harmless DLL compile failed' }
+          dotnet tool install wix --tool-path build/wix --version 5.0.1
+          if ($LASTEXITCODE -ne 0) { throw 'WiX 5 setup failed' }
+          & build/wix/wix.exe build probes/msi_custom_action_type_control.wxs -arch x64 -o build/swcompat_custom_action_type_control.msi
+          if ($LASTEXITCODE -ne 0) { throw 'Self-authored MSI build failed' }
+          (Get-FileHash -LiteralPath build/swcompat_custom_action_type_control.msi -Algorithm SHA256).Hash.ToLowerInvariant() |
+            Set-Content -LiteralPath build/msi-custom-control.sha256 -NoNewline -Encoding ascii
+      - name: Verify deliberately failing original deferred action on native Windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msi = (Resolve-Path build/swcompat_custom_action_type_control.msi).Path
+          $marker = Join-Path $env:ProgramFiles 'SWCompatMsiCustomActionControl\msi_custom_action_control.txt'
+          if (Test-Path $marker) { throw 'Preexisting control marker' }
+          $p = Start-Process msiexec.exe -ArgumentList @('/i', ('"' + $msi + '"'), '/qn', '/norestart') -PassThru -Wait -NoNewWindow
+          if ($p.ExitCode -ne 1603) { throw "Expected native Windows MSI 1603 from deliberate custom action, got $($p.ExitCode)" }
+          if (Test-Path $marker) { throw 'Expected MSI rollback failed to remove marker' }
+          Write-Output 'Self-authored native Windows deferred custom action 1603 and rollback verified'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: self-authored-deferred-custom-action-control
+          path: |
+            build/swcompat_custom_action_type_control.msi
+            build/msi-custom-control.sha256
+          retention-days: 1
+
+  apple-silicon-wine-control:
+    name: Verify source-authored MSI custom action trace under Apple Silicon Wine
+    needs: windows-msi-reference
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: self-authored-deferred-custom-action-control
+          path: build
+      - name: Download and verify identical Wine Staging 11.21
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-staging-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-staging-11.21-osx64.tar.xz"
+          echo "d7bcd5abf4df27aae397a7898aef074fea4a2e0b51e0a55aa9659517bbf9d452  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-build"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-build"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Initialize isolated marked Wine prefix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat --prefix "$RUNNER_TEMP/msi-custom-control-prefix" --logs-dir "$RUNNER_TEMP/msi-custom-control-logs" init
+          touch "$RUNNER_TEMP/msi-custom-control-prefix/.swcompat-netfx481-disposable"
+      - name: Run original self-authored MSI and inspect strict Wine action type
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.msi_custom_action_type_control \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/msi-custom-control-prefix" \
+            --msi build/swcompat_custom_action_type_control.msi \
+            --sha256 build/msi-custom-control.sha256 \
+            --output build/msi-custom-action-control.json \
+            --timeout 120 --agree-disposable-prefix
+      - name: Summarize source-authored MSI custom action metadata only
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.msi_custom_action_type_control import validate
+          p = Path("build/msi-custom-action-control.json")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("## Original harmless deferred MSI custom action trace\n\n")
+              if not p.is_file():
+                  f.write("No verified result. Native Microsoft CLR NOT DEMONSTRATED.\n")
+              else:
+                  r = json.loads(p.read_text())
+                  if not validate(r):
+                      raise ValueError("Unsafe original MSI control report")
+                  f.write(f"msi_process: **{r['msi_process']}**\n\n")
+                  for field in ("status", "family", "base_type", "execution",
+                                "impersonation", "asynchronous", "capture_reason"):
+                      f.write(f"custom_action_{field}: **{r['custom_action_type'][field]}**\n\n")
+                  f.write("native_microsoft_clr: **False**\n\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: self-authored-msi-action-type-status-only
+          path: build/msi-custom-action-control.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Require real self-authored MSI failure and Wine DLL type match
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.msi_custom_action_type_control import validate
+          r = json.loads(Path("build/msi-custom-action-control.json").read_text())
+          assert validate(r)
+          assert r["status"] == "MEASURED"
+          assert r["msi_process"] == "NONZERO"
+          assert r["custom_action_type"]["status"] == "TRACE_MATCHED"
+          assert r["custom_action_type"]["family"] == "DLL_BINARY"
+          assert r["custom_action_type"]["base_type"] == 1
+          assert r["custom_action_type"]["execution"] == "DEFERRED"
+          assert r["native_microsoft_clr"] is False
+          assert r["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+          PY
