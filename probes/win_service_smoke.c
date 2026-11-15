@@ -256,7 +256,10 @@ static int single_process_roundtrip(void) {
                    (unsigned long)lock->dwLockDuration);
         }
         fflush(stdout);
-        for (int attempt = 1; attempt <= 5 && !started; attempt++) {
+        /* Error 1055 on hosted Wine can persist beyond the previous 4.5s
+         * window. Retry only this exact lock error for at most 14.4s;
+         * still require real RUNNING, STOPPED, PID and deletion evidence. */
+        for (int attempt = 1; attempt <= 16 && !started; attempt++) {
             Sleep(900);
             started = StartServiceW(handle, 0, NULL);
             start_error = started ? 0 : GetLastError();
