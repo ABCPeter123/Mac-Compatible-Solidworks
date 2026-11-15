@@ -12,6 +12,9 @@ on:
       - 'tests/test_msi_service_registry_observation.py'
       - 'scripts/msi_service_restart_refresh.py'
       - 'scripts/msi_service_scm_api_reconcile.py'
+      - 'scripts/msi_service_scm_coherence.py'
+      - 'tests/test_msi_service_scm_coherence.py'
+      - 'docs/MSI_SERVICE_SCM_COHERENCE.md'
       - 'tests/test_msi_service_scm_api_reconcile.py'
       - 'docs/MSI_SERVICE_SCM_API_DIFFERENTIAL.md'
       - 'tests/test_msi_service_restart_refresh.py'
@@ -42,6 +45,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Service registry test failed' }
           python -m unittest discover -s tests -p 'test_msi_service_restart_refresh.py' -v
           python -m unittest discover -s tests -p 'test_msi_service_scm_api_reconcile.py' -v
+          python -m unittest discover -s tests -p 'test_msi_service_scm_coherence.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Unsafe MSI transaction test gate" }
       - name: Compile original x64 SCM service and MSI using MSVC and pinned WiX 5
         shell: pwsh
@@ -174,6 +178,39 @@ jobs:
             --prior build/msi-service-restart.json \
             --output build/msi-scm-api-reconcile.json \
             --agree-disposable-prefix
+      - name: Test OpenServiceW/CreateServiceW on one retained SCM connection
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p 'test_msi_service_scm_coherence.py' -v
+          python3 -m scripts.msi_service_scm_coherence \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/self-msi-prefix" \
+            --exe build/service_smoke.exe \
+            --prior build/msi-scm-api-reconcile.json \
+            --output build/msi-scm-coherence.json \
+            --agree-disposable-prefix
+      - name: Report original MSI same-handle SCM coherence
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.msi_service_scm_coherence import validate
+          path = Path("build/msi-scm-coherence.json")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("## Original MSI single-connection SCM probe\n\n")
+              if not path.is_file():
+                  f.write("Original single-handle API test not measured.\n")
+              else:
+                  r = json.loads(path.read_text())
+                  if not validate(r):
+                      raise ValueError("Invalid original SCM coherence report")
+                  for field in ("trial", "first_lookup", "create", "second_lookup",
+                                "registry_after", "outcome", "native_microsoft_clr"):
+                      f.write(f"{field}: **{r[field]}**\n\n")
+          PY
       - name: Report finite SCM API registration and service start evidence
         if: always()
         shell: bash
@@ -274,6 +311,7 @@ jobs:
             build/msi-service-registry-vs-scm.json
             build/msi-service-restart.json
             build/msi-scm-api-reconcile.json
+            build/msi-scm-coherence.json
           if-no-files-found: warn
           retention-days: 7
       - name: Require actual bounded MSI attempt and prohibit false compatibility
@@ -304,6 +342,19 @@ jobs:
           assert api["trial"] == "MEASURED"
           assert api["native_microsoft_clr"] is False
           assert api["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+          from scripts.msi_service_scm_coherence import validate as validate_coherence
+          coherence = json.loads(Path("build/msi-scm-coherence.json").read_text())
+          assert validate_coherence(coherence)
+          assert coherence["trial"] in {"MEASURED", "NOT_APPLICABLE"}
+          if (api["trial"] == "MEASURED"
+              and api["installed_binary"] == "PRESENT_MATCH"
+              and api["api_register"] in {"ALREADY_EXISTS", "CREATED"}
+              and api["scm_after_register"] in {"ABSENT", "UNKNOWN"}
+              and api["scm_final"] in {"ABSENT", "UNKNOWN"}
+              and api["registry_final"] == "PRESENT"):
+              assert coherence["trial"] == "MEASURED"
+          assert coherence["native_microsoft_clr"] is False
+          assert coherence["solidworks_compatibility"] == "NOT_DEMONSTRATED"
           assert report["status"] == "MEASURED"
           assert report["service_before"] == "ABSENT"
           assert report["winver"] == "APPLIED"
