@@ -22,8 +22,12 @@ class NativeWindowsExtractReferenceTests(unittest.TestCase):
             root = base / reference.ROOT_NAME
 
             def fake_run(argv, **kwargs):
-                self.assertEqual(argv[0], str(installer))
-                self.assertEqual(argv[1:], ["/x:" + str(root), "/q"])
+                # Temp roots may use /var vs /private/var on macOS and
+                # long vs 8.3 short paths on Windows. Compare actual files.
+                self.assertTrue(Path(argv[0]).samefile(installer))
+                self.assertEqual(argv[2], "/q")
+                self.assertTrue(argv[1].startswith("/x:"))
+                self.assertTrue(Path(argv[1][3:]).samefile(root))
                 self.assertIs(kwargs["stdout"], subprocess.DEVNULL)
                 self.assertIs(kwargs["stderr"], subprocess.DEVNULL)
                 self.assertTrue(root.is_dir())
