@@ -85,7 +85,7 @@ def _private_failed_action(raw: bytes) -> bytes | None:
                 phase = ("ROLLBACK" if script and script.group(1) == b"2" else
                          "INSTALL" if script and script.group(1) == b"0" else
                          "UNDETERMINED")
-                candidates.append((_failed_action_type(line), match.group(1), phase)
+                candidates.append((_failed_action_type(line), match.group(1), phase))
     for preferred in ("INSTALL", "UNDETERMINED"):
         for kind, name, phase in candidates:
             if phase == preferred and kind != "FINALIZE_ONLY":
