@@ -1,0 +1,24 @@
+name: Validate authentic .NET 4.8.1 prerequisite OS bands
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/netfx481-prereq-band-ci.yml'
+      - 'scripts/netfx481_prereq_diagnostic.py'
+      - 'tests/test_netfx481_prereq_diagnostic.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-prerequisite-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate fixed privacy-safe native setup OS build classifications
+        run: python -m unittest discover -s tests -p 'test_netfx481_prereq_diagnostic.py' -v
