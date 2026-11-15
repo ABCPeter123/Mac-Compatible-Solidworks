@@ -3,10 +3,9 @@
  * Emits only fixed status and Type, never names, paths or MSI contents.
  * Source-authored for comparing native Windows and Apple Silicon Wine.
  */
-#define UNICODE
-#define _UNICODE
 #include <windows.h>
 #include <msi.h>
+#include <msiquery.h>
 #include <stdio.h>
 
 static int result(const char *status, unsigned int type)
