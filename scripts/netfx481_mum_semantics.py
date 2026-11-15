@@ -52,7 +52,8 @@ def valid(r: object) -> bool:
                    for k, v in ops.items() if k != "safe_to_apply")
             or ops["parsed"] + ops["invalid"] != ops["documents"]
             or ops["documents"] != r["mums_parsed"]
-            or ops["amd64_only"] + ops["mixed_arch"] + ops["other_arch"] != ops["parsed"]):
+            or ops["amd64_only"] + ops["mixed_arch"] + ops["other_arch"] != ops["parsed"]
+            or sum(ops["root_" + x] for x in ("amd64", "x86", "arm64", "neutral", "unknown")) != ops["parsed"]):
         return False
     for key in ("mums_seen", "mums_parsed", "mum_with_update",
                 "mum_with_package", "mum_with_dependency"):
@@ -160,6 +161,8 @@ def inspect_cab_mums(sevenzip: Path, archive: Path, destination: Path) -> dict:
                 op = result["operation_preflight"]
                 op["documents"] += 1
                 op["parsed"] += 1
+                root_arch = operation["root_identity_arch"]
+                op["root_" + root_arch if root_arch in ("amd64", "x86", "arm64", "neutral") else "root_unknown"] += 1
                 if operation["target_arch"] == "amd64":
                     op["amd64_only"] += 1
                 elif operation["target_arch"] == "MIXED":
