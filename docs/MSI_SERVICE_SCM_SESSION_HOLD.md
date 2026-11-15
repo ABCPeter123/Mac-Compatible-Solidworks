@@ -43,3 +43,14 @@ No arbitrary stdout or stderr, Win32 code, user path, or service registry conten
 The source-backed Apple Silicon run [43664513342](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43664513342) measured `SERVICE_OPEN` in the holder and `MALFORMED` for all three independent Win32 status queries (before, during and after retaining the service handle). This rules out classifying those three reports as process launch errors or timeouts. It still cannot determine whether the Win32 status API or our marker protocol produced the malformed response.
 
 The next controlled test takes the **same** bounded stdout buffer already used by the original strict `service_result` parser and reports why validation failed using only fixed categories: `NUL_BYTE`, `INVALID_MARKER`, `DUPLICATE_MARKER`, `MISSING_MARKER`, `WRONG_PHASE`, `UNRECOGNIZED_STATUS`, `OVERSIZED`, `BAD_EXIT`, and `NO_HEADER`. A valid status becomes `VALID`. The actual raw buffer, service names, process IDs and paths are never persisted. Existing strict status semantics remain unchanged. Any candidate fix must respond to the observed category, not invent a missing Wine API.
+
+
+## Concrete parser defect found in PR #76
+
+The real Apple Silicon job [43665129268](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43665129268) reported `INVALID_MARKER` for all three independent status queries, although the Wine child process exited within the allowed status-controller protocol. This pointed to a mismatch between our **own** original C probe output and Python parser:
+
+- `probes/win_service_smoke.c` emits `SWCOMPAT_SERVICE_WIN32_EXIT=<bounded number>` whenever a service status query succeeds. This is a legitimate diagnostic marker in addition to four required service status fields.
+- `scripts/msi_service_action_trial.py` used `[A-Z_]+` for the marker **name**, which excludes the digits `32` in `WIN32_EXIT`. The entire response was therefore rejected as `UNKNOWN`, even if all required fields were otherwise valid.
+- The precise fix is `[A-Z0-9_]+` for the marker name, while preserving the four required fields, unique marker checks, strict enumerated output, and rejection of malformed extra service lines.
+
+This fixes a **test harness false negative**. It does not by itself demonstrate that the Wine service becomes visible through the SCM from a new process or that native Microsoft .NET Framework works. The same original MSI and independent service fixture must be rerun on Apple Silicon to measure the corrected service state.
