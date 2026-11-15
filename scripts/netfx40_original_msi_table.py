@@ -110,8 +110,12 @@ def _candidates(root: Path) -> tuple[list[Path], bool]:
     return found, incomplete
 
 
+def _is_wine_host() -> bool:
+    return os.name != "nt"
+
+
 def inspect(wine: Path, prefix: Path, helper: Path, installer: Path) -> dict:
-    if os.name == "nt" or any(p.is_symlink() for p in (wine, prefix, helper, installer)):
+    if not _is_wine_host() or any(p.is_symlink() for p in (wine, prefix, helper, installer)):
         raise ValueError("Original MSI table query runs only on isolated Wine")
     wine, prefix, helper, installer = (
         p.resolve(strict=True) for p in (wine, prefix, helper, installer)
