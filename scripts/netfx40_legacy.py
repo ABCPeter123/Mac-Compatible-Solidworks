@@ -139,8 +139,8 @@ def _may_store_incomplete_action(store_private: bool, state: dict, result: dict)
     return (store_private is True
             and result.get("status") == "EXIT_CAPTURED"
             and result.get("category") == "MSI_FATAL_ERROR"
-            and (state == {"overflow": False, "lines": state.get("lines"),
-                           "reason": "NONE"} or
+            and type(state.get("lines")) is int
+            and (not state.get("overflow") and state.get("reason") == "NONE" or
                  (state.get("overflow") is True
                   and state.get("reason") == "READER_UNFINISHED"
                   and type(state.get("lines")) is int
