@@ -225,8 +225,9 @@ jobs:
                       raise ValueError("Invalid SCM lifetime report")
                   for field in ("trial", "binary", "registry", "scm_before",
                                 "diagnostic_before", "holder", "scm_while_held",
-                                "diagnostic_while_held", "scm_after",
-                                "diagnostic_after", "outcome", "native_microsoft_clr"):
+                                "diagnostic_while_held", "detail_before",
+                                "detail_while_held", "scm_after",
+                                "diagnostic_after", "detail_after", "outcome", "native_microsoft_clr"):
                       f.write(f"{field}: **{r[field]}**\n\n")
           PY
       - name: Report original MSI same-handle SCM coherence

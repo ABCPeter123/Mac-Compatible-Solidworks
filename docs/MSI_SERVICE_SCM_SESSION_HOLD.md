@@ -36,3 +36,10 @@ The follow-up uses the original source-built Windows status controller and check
 - `NOT_EXECUTED`: the holder did not become ready or exited before a legitimate concurrent query.
  
 No arbitrary stdout or stderr, Win32 code, user path, or service registry contents enter the result. Only successful actual Windows API status markers may justify service visibility. Once these three categories are measured on Apple Silicon, the next fix can target service RPC/SCM lookup if `PARSED`, or the Wine process/probe boundary if another error occurs. No .NET or SOLIDWORKS compatibility claim changes.
+
+
+## Reproducible malformed-marker evidence, PR #75
+
+The source-backed Apple Silicon run [43664513342](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43664513342) measured `SERVICE_OPEN` in the holder and `MALFORMED` for all three independent Win32 status queries (before, during and after retaining the service handle). This rules out classifying those three reports as process launch errors or timeouts. It still cannot determine whether the Win32 status API or our marker protocol produced the malformed response.
+
+The next controlled test takes the **same** bounded stdout buffer already used by the original strict `service_result` parser and reports why validation failed using only fixed categories: `NUL_BYTE`, `INVALID_MARKER`, `DUPLICATE_MARKER`, `MISSING_MARKER`, `WRONG_PHASE`, `UNRECOGNIZED_STATUS`, `OVERSIZED`, `BAD_EXIT`, and `NO_HEADER`. A valid status becomes `VALID`. The actual raw buffer, service names, process IDs and paths are never persisted. Existing strict status semantics remain unchanged. Any candidate fix must respond to the observed category, not invent a missing Wine API.
