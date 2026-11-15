@@ -50,19 +50,43 @@ static int exact_target(const wchar_t *s)
     return s[n - m - 1] == L'\\' && _wcsicmp(s + n - m, expected) == 0;
 }
 
+static int exact_msi(const wchar_t *s)
+{
+    static const wchar_t expected[] = L"swcompat_custom_action_type_control.msi";
+    size_t n, m, i;
+    if (!s) return 0;
+    n = wcslen(s); m = wcslen(expected);
+    if (n <= m + 3 || n > 1700 || s[1] != L':' || s[2] != L'\\')
+        return 0;
+    for (i = 0; i < n; ++i)
+        if (s[i] == L'"' || s[i] == L'\r' || s[i] == L'\n')
+            return 0;
+    return s[n - m - 1] == L'\\' && _wcsicmp(s + n - m, expected) == 0;
+}
+
 int wmain(int argc, wchar_t **argv)
 {
     STARTUPINFOW si = {0};
     PROCESS_INFORMATION pi = {0};
-    wchar_t command[2304];
+    wchar_t command[4096];
     DWORD state, code = 0, error;
     const char *error_type;
-    if (argc == 3)
+    if (argc == 3 || argc == 4)
         status_file = CreateFileW(argv[2], GENERIC_WRITE, FILE_SHARE_READ,
                                   NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (argc != 3 || !exact_target(argv[1]))
+    if ((argc != 3 && argc != 4) || !exact_target(argv[1]))
         return done("INVALID_ARGUMENT", "NOT_VERIFIED", "NONE");
-    if (swprintf_s(command, 2304, L"\"%ls\" --selftest C:\\windows\\temp\\swcompat_ca_table_probe.status", argv[1]) < 0)
+    if (argc == 4)
+    {
+        if (!exact_msi(argv[3]) ||
+            swprintf_s(command, 4096,
+                L"\"%ls\" \"%ls\" C:\\windows\\temp\\swcompat_ca_table_probe.status --private-file",
+                argv[1], argv[3]) < 0)
+            return done("INVALID_ARGUMENT", "NOT_VERIFIED", "NONE");
+    }
+    else if (swprintf_s(command, 4096,
+            L"\"%ls\" --selftest C:\\windows\\temp\\swcompat_ca_table_probe.status",
+            argv[1]) < 0)
         return done("INVALID_ARGUMENT", "NOT_VERIFIED", "NONE");
     si.cb = sizeof(si);
     if (!CreateProcessW(argv[1], command, NULL, NULL, FALSE,
