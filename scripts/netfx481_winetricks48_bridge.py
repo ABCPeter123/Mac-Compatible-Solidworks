@@ -15,7 +15,7 @@ from scripts.netfx481_clr_load import run as load_clr, STATUSES as LOAD_STATES
 from scripts.netfx481_win32_exit import launch, blank as blank_launch, validate as valid_launch
 
 STATES = {"VERB_FAILED", "VERB_TIMED_OUT", "VERB_START_FAILED",
-          "PREREQUISITE_NOT_READY", "MEASURED"}
+          "PREREQUISITE_NOT_READY", "WINVER_FAILED", "MEASURED"}
 UPGRADE = {"NOT_RUN", "COMPLETED", "TIMED_OUT", "START_FAILED", "EXIT_NONZERO",
            "SKIPPED_CHILD_UNVERIFIED", "WINEBOOT_MISSING"}
 FILE_STATES = {"NOT_VERIFIED", "ABSENT", "PE_AMD64", "PE_I386",
@@ -119,6 +119,15 @@ def inspect(wine: Path, prefix: Path, tricks: Path, installer481: Path,
                 and runtime["managed"] == "PASS")
     if not native48:
         return {**blank("PREREQUISITE_NOT_READY"), "winetricks48_exit": "ZERO"}
+    try:
+        winver = subprocess.run([str(wine), "winecfg.exe", "-v", "win10"],
+                                cwd=prefix, env=env,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, timeout=45, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return {**blank("WINVER_FAILED"), "winetricks48_exit": "ZERO"}
+    if winver.returncode:
+        return {**blank("WINVER_FAILED"), "winetricks48_exit": "ZERO"}
     setup = launch(wine, prefix, installer481, launcher481,
                    timeout=245, fusion_builtin=True)
     assert valid_launch(setup)
