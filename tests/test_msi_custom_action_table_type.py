@@ -37,6 +37,14 @@ class OriginalMsiActionTableTests(unittest.TestCase):
         self.assertEqual(dll_missing["status"], "MSI_DLL_UNAVAILABLE")
         self.assertEqual(dll_missing["stage"], "INPUT_OK")
         self.assertTrue(table.validate(dll_missing))
+        selftest = table.parse(
+            b"SWCOMPAT_CA_TABLE_STAGE=ENTRY\n"
+            b"SWCOMPAT_CA_TABLE_STAGE=SELFTEST\n"
+            b"SWCOMPAT_CA_TABLE_STATUS=SELFTEST_OK\n"
+            b"SWCOMPAT_CA_TABLE_TYPE=0\n", 0)
+        self.assertTrue(table.validate(selftest))
+        self.assertEqual(selftest["status"], "SELFTEST_OK")
+        self.assertEqual(selftest["stage"], "SELFTEST")
 
         self.assertFalse(table.validate(dict(stopped, stage="PRIVATE_PATH")))
 
@@ -77,6 +85,37 @@ class OriginalMsiActionTableTests(unittest.TestCase):
             self.assertEqual(report["stage"], "INPUT_OK")
             self.assertEqual(report["family"], "DLL_BINARY")
             self.assertFalse(report_path.exists())
+
+    @unittest.skipIf(os.name == "nt", "Wine-only selftest")
+    def test_pre_msi_win32_selftest_cleans_fixed_wine_prefix_report(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            wine = root / "wine"
+            wine.write_bytes(b"fake")
+            probe = root / "msi_custom_action_table_probe.exe"
+            probe.write_bytes(b"fake")
+            status_file = root / "drive_c" / "windows" / "temp" / "swcompat_ca_table_probe.status"
+
+            def run_fixture(*_args, **_kwargs):
+                status_file.write_bytes(
+                    b"SWCOMPAT_CA_TABLE_STAGE=ENTRY\n"
+                    b"SWCOMPAT_CA_TABLE_STAGE=SELFTEST\n"
+                    b"SWCOMPAT_CA_TABLE_STATUS=SELFTEST_OK\n"
+                    b"SWCOMPAT_CA_TABLE_TYPE=0\n"
+                )
+                return mock.Mock(stdout=b"", returncode=0)
+
+            with (
+                mock.patch.object(table, "validate_prefix"),
+                mock.patch.object(table.subprocess, "run", side_effect=run_fixture) as runner,
+            ):
+                result = table.inspect_selftest(wine, root, probe)
+            self.assertEqual(result["status"], "SELFTEST_OK")
+            self.assertEqual(result["stage"], "SELFTEST")
+            self.assertTrue(table.validate(result))
+            self.assertFalse(status_file.exists())
+            self.assertEqual(runner.call_args.args[0][1], str(probe.resolve()))
+            self.assertNotIn("ServiceTypeControlSentinel", str(result))
 
     @unittest.skipIf(os.name == "nt", "Wine-only guarded wrapper")
     def test_metadata_probe_receives_action_through_stdin_only(self):
