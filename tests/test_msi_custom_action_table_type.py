@@ -51,6 +51,8 @@ class OriginalMsiActionTableTests(unittest.TestCase):
             root = Path(td)
             probe = root / "msi_custom_action_table_probe.exe"
             probe.write_bytes(b"fixture")
+            wine = root / "wine"
+            wine.write_bytes(b"fixture")
             msi = root / "self-authored.msi"
             msi.write_bytes(b"fixture")
             completed = mock.Mock()
@@ -64,15 +66,21 @@ class OriginalMsiActionTableTests(unittest.TestCase):
                 mock.patch.object(table, "windows_media_path", return_value="Z:\\control.msi"),
                 mock.patch.object(table.subprocess, "run", return_value=completed) as run,
             ):
-                r = table.inspect(root / "wine", root, probe, msi)
+                # Intentionally pass a relative helper. The Wine subprocess
+                # must receive an absolute executable even with cwd=prefix.
+                relative_probe = Path(os.path.relpath(probe, Path.cwd()))
+                relative_msi = Path(os.path.relpath(msi, Path.cwd()))
+                r = table.inspect(wine, root, relative_probe, relative_msi)
             self.assertEqual(r["family"], "DLL_BINARY")
             args = run.call_args.args[0]
+            self.assertEqual(args[1], str(probe.resolve()))
+            self.assertTrue(Path(args[1]).is_absolute())
             self.assertNotIn("ServiceTypeControlSentinel", str(args))
             self.assertEqual(run.call_args.kwargs["input"], b"ServiceTypeControlSentinel")
             self.assertEqual(run.call_args.kwargs["stderr"], table.subprocess.DEVNULL)
             self.assertTrue(table.validate(r))
             with self.assertRaises(ValueError):
-                table.inspect(root / "wine", root, probe, msi, action="PRIVATE_SECRET")
+                table.inspect(wine, root, probe, msi, action="PRIVATE_SECRET")
 
 
 if __name__ == "__main__":
