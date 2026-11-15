@@ -402,7 +402,7 @@ jobs:
           command -v cabextract >/dev/null
           command -v winetricks >/dev/null
           winetricks --version | grep -F '20260125'
-          echo "SWCOMPAT_WINETRICKS=$(command -v winetricks)" >> "$GITHUB_ENV"
+          echo "SWCOMPAT_WINETRICKS=$(realpath "$(command -v winetricks)")" >> "$GITHUB_ENV"
       - name: Download the same hash-pinned Wine Staging 11.21 baseline
         shell: bash
         run: |
