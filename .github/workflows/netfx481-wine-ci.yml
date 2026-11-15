@@ -1,28 +1,8 @@
 name: Genuine Microsoft .NET Framework 4.8.1 on Apple Silicon Wine
 
+# Signed Microsoft installers run only on explicit operator request.
+# Python regression tests are covered by compatibility-ci.yml on each PR.
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/netfx481-wine-ci.yml'
-      - 'probes/netfx481_runtime_probe.cs'
-      - 'scripts/netfx481_trial.py'
-      - 'scripts/netfx481_winetricks48_bridge.py'
-      - 'tests/test_netfx481_winetricks48_bridge.py'
-      - 'scripts/netfx40_msxml3_prerequisite.py'
-      - 'tests/test_netfx40_msxml3_prerequisite.py'
-      - 'tests/test_netfx481_trial.py'
-      - 'scripts/wine_mono_removal.py'
-      - 'tests/test_wine_mono_removal.py'
-      - 'scripts/netfx481_setup_evidence.py'
-      - 'tests/test_netfx481_setup_evidence.py'
-      - 'probes/netfx481_win32_launch.c'
-      - 'scripts/netfx481_win32_exit.py'
-      - 'tests/test_netfx481_win32_exit.py'
-      - 'scripts/netfx481_payload_audit.py'
-      - 'tests/test_netfx481_payload_audit.py'
-      - 'scripts/netfx481_clr_load.py'
-      - 'tests/test_netfx481_clr_load.py'
-      - 'probes/netfx481_clr_load.c'
   workflow_dispatch:
 
 permissions:

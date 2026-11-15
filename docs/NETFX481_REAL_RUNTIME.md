@@ -1,5 +1,8 @@
 # Genuine Microsoft .NET Framework 4.8.1 on Apple Silicon Wine
 
+> **Current status (November 15, 2026):** This document retains historical experiment results. The authoritative current work and acceptance criteria are in [ROADMAP](ROADMAP.md) and [Issue #115](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/issues/115). Original Microsoft .NET 4.0 native CLR and managed execution persisted after restart in two Apple Silicon runs; original .NET 4.8.1 still fails the installer with prerequisite code 5100 on supported Wine-reported Windows 10/11 21H2 OS builds. **Do not treat earlier paragraphs claiming the Microsoft CLR was absent in all trials, or exit-zero under Mono, as the current runtime result.** No original 4.8.1 install or SOLIDWORKS CAD success is verified.
+
+
 SOLIDWORKS Design 2026 requires .NET Framework 4.8.1. Earlier Wine managed-code tests passed with Wine Mono, which is not proof of Microsoft's runtime compatibility.
 
 ## Authentic components and provenance

@@ -12,6 +12,14 @@ The opt-in [licensed installer trial](.github/workflows/solidworks-bootstrap-tri
 
 **The authentic SOLIDWORKS installer has now been downloaded, digitally verified and executed under hosted Apple Silicon Wine** ([CI run 43494158179](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43494158179)). Its process started and remained running until the bounded 120-second timeout. Installation Manager visibility, completed installation, activation and working CAD remain **NOT VERIFIED**. Later diagnostic runs detected one visible, responsive installer-associated Win32 window, but client-area pixel readback failed. The current probe also checks visible child HWNDs, owned popup windows and composition styles on the next manually dispatched trial, without collecting screenshots or licenses.
 
+## Current compatibility blocker: .NET Framework 4.8.1
+
+**November 15, 2026:** Native Microsoft .NET Framework 4.0 has now loaded, completed native-only managed execution, and survived a Wine restart in two authenticated Apple Silicon runs ([first](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43743135426), [repeat](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43744752248)). Other runs still fail, and neither a timeout nor an infrastructure-green job proves that the installer finished correctly.
+
+The original Microsoft **4.8.1 upgrade** still returns **5100 (system requirements)** on the persistent 4.0 prefix under both Wine's Windows 10 and Windows 11 21H2 reported profiles. The failing prerequisite remains unidentified. The 4.8.1 CLR update and Release registration have not been verified. SOLIDWORKS installation, activation and CAD operation remain unverified.
+
+The single active workstream is [Issue #115](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/issues/115), with decision gates in the [roadmap](docs/ROADMAP.md). Repeating generic MSI, SCM or graphics tests does not advance this blocker. Signed Microsoft installer workflows are [manual-only](docs/CI_SCOPING.md) to avoid redundant cloud runs.
+
 ## Real Microsoft .NET Framework 4.8.1 experiment on Apple Silicon Wine
 
 Earlier managed-code tests could run on Wine Mono, which is not Microsoft's .NET Framework 4.8.1. The new [real .NET 4.8.1 experiment](docs/NETFX481_REAL_RUNTIME.md) runs the original Microsoft-signed offline installer in disposable Apple Silicon Wine and checks the registry Release version, managed CLR identity and functional C# operations using an independently compiled Windows probe. The sanitized outcome separately reports whether the framework is READY and whether the installer actually succeeded. An experiment finishing successfully does not prove SOLIDWORKS runs.
