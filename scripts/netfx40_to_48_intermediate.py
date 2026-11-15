@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 
 from scripts.netfx40_msxml3_restart import validate as validate_native40
-from scripts.netfx481_clr_load import run as load_clr
+from scripts.netfx481_clr_load import run as load_clr, STATUSES as LOADER_STATES
 from scripts.netfx481_payload_audit import snapshot
 from scripts.netfx481_trial import validate_prefix, probe, wineboot_restart
 
@@ -43,9 +43,7 @@ def validate(result: object) -> bool:
             or result["verb"] not in VERB or result["restart"] not in BOOT
             or result["win7"] not in WINVER or result["win10"] not in WINVER
             or result["release"] not in RELEASE
-            or result["loader"] not in {"NOT_VERIFIED", "LOADED", "NOT_FOUND",
-                                       "START_FAILED", "TIMEOUT", "BAD_OUTPUT",
-                                       "LOAD_FAILED", "PROCESS_FAILED"}
+            or result["loader"] not in LOADER_STATES
             or result["native_only_managed"] not in {"NOT_VERIFIED", "PASS", "FAIL"}
             or result["framework481_confirmed"] is not False
             or result["solidworks_compatibility"] != "NOT_DEMONSTRATED"
