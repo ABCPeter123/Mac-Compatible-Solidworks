@@ -1,5 +1,6 @@
-/* Self-authored x64 deferred MSI DLL custom action. Read-only SCM checks.
- * It never starts, creates, reconfigures or deletes a service.
+/* Self-authored x64 deferred MSI DLL custom actions.
+ * One action queries SCM. The second creates, configures and deletes a
+ * transient fixed-name service, but never starts or executes it.
  * No Microsoft installer binaries or SOLIDWORKS code are embedded.
  */
 #define WIN32_LEAN_AND_MEAN
