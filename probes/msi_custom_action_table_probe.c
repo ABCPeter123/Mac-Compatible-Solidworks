@@ -17,17 +17,40 @@ typedef int (WINAPI *P_GET_INTEGER)(MSIHANDLE, UINT);
 typedef UINT (WINAPI *P_CLOSE_VIEW)(MSIHANDLE);
 typedef UINT (WINAPI *P_CLOSE_HANDLE)(MSIHANDLE);
 
+static HANDLE diagnostic_file = INVALID_HANDLE_VALUE;
+
+static void emit(const char *line)
+{
+    DWORD written = 0;
+    printf("%s\n", line);
+    fflush(stdout);
+    if (diagnostic_file != INVALID_HANDLE_VALUE)
+    {
+        WriteFile(diagnostic_file, line, lstrlenA(line), &written, NULL);
+        WriteFile(diagnostic_file, "\r\n", 2, &written, NULL);
+        FlushFileBuffers(diagnostic_file);
+    }
+}
+
 static void stage(const char *phase)
 {
-    printf("SWCOMPAT_CA_TABLE_STAGE=%s\n", phase);
-    fflush(stdout);
+    char line[128];
+    wsprintfA(line, "SWCOMPAT_CA_TABLE_STAGE=%s", phase);
+    emit(line);
 }
 
 static int result(const char *status, unsigned int type)
 {
-    printf("SWCOMPAT_CA_TABLE_STATUS=%s\n", status);
-    printf("SWCOMPAT_CA_TABLE_TYPE=%u\n", type);
-    fflush(stdout);
+    char line[128];
+    wsprintfA(line, "SWCOMPAT_CA_TABLE_STATUS=%s", status);
+    emit(line);
+    wsprintfA(line, "SWCOMPAT_CA_TABLE_TYPE=%u", type);
+    emit(line);
+    if (diagnostic_file != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(diagnostic_file);
+        diagnostic_file = INVALID_HANDLE_VALUE;
+    }
     return 0;
 }
 
@@ -51,8 +74,11 @@ int wmain(int argc, wchar_t **argv)
     P_CLOSE_VIEW close_view;
     P_CLOSE_HANDLE close_handle;
 
+    if (argc == 3 && argv[2] && argv[2][0])
+        diagnostic_file = CreateFileW(argv[2], GENERIC_WRITE,
+                FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     stage("ENTRY");
-    if (argc != 2 || !argv[1] || !argv[1][0])
+    if ((argc != 2 && argc != 3) || !argv[1] || !argv[1][0])
         return result("INVALID_ARGUMENT", 0);
     if (!ReadFile(GetStdHandle(STD_INPUT_HANDLE), utf8,
                   sizeof(utf8) - 1, &read, NULL) || !read)
