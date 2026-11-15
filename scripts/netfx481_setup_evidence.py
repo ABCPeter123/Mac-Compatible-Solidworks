@@ -171,6 +171,10 @@ def scan_secondary_logs(prefix: Path) -> dict[str, object]:
     skipped or classified as incomplete rather than leaking context.
     """
     import os
+    from scripts.netfx481_prereq_diagnostic import (
+        classify_text as classify_prerequisite_text,
+        empty as empty_prerequisite, validate as validate_prerequisite,
+    )
 
     from scripts.netfx481_trial import validate_prefix
     validate_prefix(prefix)
@@ -187,6 +191,9 @@ def scan_secondary_logs(prefix: Path) -> dict[str, object]:
     errors: set[str] = set()
     phases = {name: 0 for name in sorted(KNOWN_PHASES)}
     scanned = 0
+    prereq_os: set[str] = set()
+    prereq_blockers: set[str] = set()
+    prereq_5100 = False
     directories = 0
     partial = False
     invalid = False
@@ -229,6 +236,13 @@ def scan_secondary_logs(prefix: Path) -> dict[str, object]:
                 if len(raw) > SECONDARY_MAX_PER_FILE:
                     partial = True
                     continue
+                prereq = classify_prerequisite_text(raw)
+                if prereq["status"] == "CLASSIFIED":
+                    prereq_os.update(prereq["os_versions"])
+                    prereq_blockers.update(prereq["blockers"])
+                    prereq_5100 = prereq_5100 or prereq["5100_in_log"]
+                else:
+                    partial = True
                 result = classify_text(raw)
                 if result["status"] != "CLASSIFIED":
                     partial = True
@@ -253,16 +267,29 @@ def scan_secondary_logs(prefix: Path) -> dict[str, object]:
         "sources": totals,
         "phase": phase,
         "codes": sorted(errors),
+        "prerequisite": (
+            {"status": "CLASSIFIED", "os_versions": sorted(prereq_os),
+             "blockers": sorted(prereq_blockers), "5100_in_log": prereq_5100}
+            if scanned else empty_prerequisite("NOT_FOUND")
+        ),
     }
 
 
 def validate_secondary_report(report: dict) -> bool:
-    if not isinstance(report, dict):
+    from scripts.netfx481_prereq_diagnostic import validate as validate_prerequisite
+    if type(report) is not dict or set(report) != {
+            "status", "files_scanned", "sources", "phase", "codes", "prerequisite"}:
+        return False
+    if not validate_prerequisite(report["prerequisite"]):
         return False
     sources = report.get("sources")
     codes = report.get("codes")
     return (
         report.get("status") in SECONDARY_STATUSES
+        and (report["files_scanned"] > 0 or
+             report["prerequisite"]["status"] == "NOT_FOUND")
+        and (report["files_scanned"] == 0 or
+             report["prerequisite"]["status"] == "CLASSIFIED")
         and report.get("phase") in KNOWN_PHASES
         and isinstance(report.get("files_scanned"), int)
         and not isinstance(report["files_scanned"], bool)
