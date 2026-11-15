@@ -21,7 +21,7 @@ from scripts.msi_custom_action_table_type import inspect as query, validate as v
 from scripts.netfx481_trial import validate_prefix
 
 STATES = {
-    "ACTION_FOUND", "ACTION_NOT_CAPTURED", "NO_EXTRACTED_MSI",
+    "ACTION_FOUND", "ACTION_FOUND_PARTIAL", "ACTION_NOT_CAPTURED", "NO_EXTRACTED_MSI",
     "NOT_FOUND_IN_SCANNED_PACKAGES", "MULTIPLE_MATCHES",
     "QUERY_INCOMPLETE",
 }
@@ -41,7 +41,7 @@ def validate(result: dict) -> bool:
     n, matches = result["msis_queried"], result["action_matches"]
     if type(n) is not int or type(matches) is not int or not 0 <= matches <= n <= MAX_MSIS:
         return False
-    if result["status"] == "ACTION_FOUND":
+    if result["status"] in {"ACTION_FOUND", "ACTION_FOUND_PARTIAL"}:
         return (matches == 1 and type(result["base_type"]) is int
                 and 0 <= result["base_type"] <= 63
                 and type(result["family"]) is str
@@ -140,8 +140,8 @@ def inspect(wine: Path, prefix: Path, helper: Path, installer: Path) -> dict:
     if len(hits) > 1:
         return {**blank(), "status": "MULTIPLE_MATCHES",
                 "msis_queried": len(candidates), "action_matches": len(hits)}
-    if len(hits) == 1 and not bad:
-        return {"status": "ACTION_FOUND", "msis_queried": len(candidates),
+    if len(hits) == 1:
+        return {"status": "ACTION_FOUND_PARTIAL" if bad else "ACTION_FOUND", "msis_queried": len(candidates),
                 "action_matches": 1, "family": hits[0]["family"],
                 "base_type": hits[0]["base_type"]}
     return {**blank(), "status": "QUERY_INCOMPLETE" if bad else
