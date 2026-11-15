@@ -20,43 +20,58 @@ STATUSES = {
     "QUERY_FAILED", "INVALID_ARGUMENT", "PROCESS_FAILED", "TIMED_OUT",
     "MALFORMED", "BAD_EXIT",
 }
-LINE = re.compile(rb"SWCOMPAT_CA_TABLE_(STATUS|TYPE)=([A-Z_]+|[0-9]{1,10})\Z")
+LINE = re.compile(rb"SWCOMPAT_CA_TABLE_(STATUS|TYPE|STAGE)=([A-Z_]+|[0-9]{1,10})\\Z")
+STAGES = {
+    "NOT_OBSERVED", "ENTRY", "INPUT_OK", "DATABASE_OPEN", "VIEW_OPEN",
+    "PARAMETER_SET", "VIEW_EXECUTED", "ROW_FETCHED",
+}
 ACTIONS = {"ServiceTypeControlSentinel"}
 
 
 def parse(raw: bytes, code: int) -> dict:
-    r = {"status": "MALFORMED", "base_type": None, "family": "NOT_VERIFIED"}
-    if not isinstance(raw, bytes) or len(raw) > 2048 or code != 0:
-        r["status"] = "BAD_EXIT" if code != 0 else "MALFORMED"
+    r = {"status": "MALFORMED", "base_type": None,
+         "family": "NOT_VERIFIED", "stage": "NOT_OBSERVED"}
+    if not isinstance(raw, bytes) or len(raw) > 2048:
         return r
     fields: dict[str, str] = {}
+    stage = "NOT_OBSERVED"
+    stages = []
     for line in raw.splitlines():
         found = LINE.fullmatch(line.strip())
         if not found:
             return r
         key = found.group(1).decode("ascii")
-        if key in fields:
-            return r
-        fields[key] = found.group(2).decode("ascii")
+        value = found.group(2).decode("ascii")
+        if key == "STAGE":
+            if value not in STAGES or value == "NOT_OBSERVED" or len(stages) >= 8:
+                return r
+            stages.append(value)
+            stage = value
+        else:
+            if key in fields:
+                return r
+            fields[key] = value
+    if code != 0:
+        return {**r, "status": "BAD_EXIT", "stage": stage}
     if set(fields) != {"STATUS", "TYPE"} or fields["STATUS"] not in STATUSES:
-        return r
+        return {**r, "stage": stage}
     value = int(fields["TYPE"]) if fields["TYPE"].isdigit() else -1
     if fields["STATUS"] == "ACTION_FOUND":
         if not 0 <= value <= 65535:
-            return r
+            return {**r, "stage": stage}
         base = value & 0x3F
         return {"status": "ACTION_FOUND", "base_type": base,
-                "family": FAMILIES.get(base, "OTHER_TYPE")}
+                "family": FAMILIES.get(base, "OTHER_TYPE"), "stage": stage}
     if value == 0:
         return {"status": fields["STATUS"], "base_type": None,
-                "family": "NOT_VERIFIED"}
-    return r
+                "family": "NOT_VERIFIED", "stage": stage}
+    return {**r, "stage": stage}
 
 
 def validate(report: dict) -> bool:
-    if type(report) is not dict or set(report) != {"status", "base_type", "family"}:
+    if type(report) is not dict or set(report) != {"status", "base_type", "family", "stage"}:
         return False
-    if report["status"] not in STATUSES:
+    if report["status"] not in STATUSES or report["stage"] not in STAGES:
         return False
     if report["status"] != "ACTION_FOUND":
         return report["base_type"] is None and report["family"] == "NOT_VERIFIED"
@@ -88,7 +103,7 @@ def inspect(wine: Path, prefix: Path, probe: Path, msi: Path,
             env=env, cwd=prefix, timeout=25, check=False,
         )
     except subprocess.TimeoutExpired:
-        return {"status": "TIMED_OUT", "base_type": None, "family": "NOT_VERIFIED"}
+        return {"status": "TIMED_OUT", "base_type": None, "family": "NOT_VERIFIED", "stage": "NOT_OBSERVED"}
     except OSError:
-        return {"status": "PROCESS_FAILED", "base_type": None, "family": "NOT_VERIFIED"}
+        return {"status": "PROCESS_FAILED", "base_type": None, "family": "NOT_VERIFIED", "stage": "NOT_OBSERVED"}
     return parse(result.stdout, result.returncode)
