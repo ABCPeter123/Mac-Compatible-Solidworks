@@ -313,11 +313,67 @@ static int single_process_roundtrip(void) {
     return pass ? 0 : 1;
 }
 
+/* Keep one SCM connection across the exact sequence used by the MSI
+ * differential. This distinguishes a stale database from client-session
+ * churn, without modifying any Microsoft installer or user service. */
+static const char *coherence_open(SC_HANDLE scm) {
+    SC_HANDLE svc = OpenServiceW(scm, SERVICE_NAME, SERVICE_QUERY_STATUS);
+    if (svc) {
+        CloseServiceHandle(svc);
+        return "PRESENT";
+    }
+    return GetLastError() == ERROR_SERVICE_DOES_NOT_EXIST ? "ABSENT" : "OTHER";
+}
+
+static int scm_coherence(const wchar_t *exe) {
+    const char *before = "OTHER", *creation = "NOT_RUN", *after = "OTHER";
+    SC_HANDLE scm, service;
+    DWORD error;
+    if (!exe || !*exe || wcslen(exe) > 2500)
+        return 2;
+    scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CREATE_SERVICE | SC_MANAGER_CONNECT);
+    if (!scm) {
+        puts("SWCOMPAT_COHERENCE_BEFORE=OTHER");
+        puts("SWCOMPAT_COHERENCE_CREATE=NOT_RUN");
+        puts("SWCOMPAT_COHERENCE_AFTER=OTHER");
+        puts("SWCOMPAT_COHERENCE_COMPLETE=YES");
+        return 0;
+    }
+    before = coherence_open(scm);
+    if (!strcmp(before, "ABSENT")) {
+        wchar_t command[2600] = {0};
+        swprintf(command, 2600, L"\"%ls\" run", exe);
+        service = CreateServiceW(scm, SERVICE_NAME,
+            L"SWCompat Independent Test Service", SERVICE_QUERY_STATUS,
+            SERVICE_WIN32_OWN_PROCESS, SERVICE_DEMAND_START,
+            SERVICE_ERROR_NORMAL, command, NULL, NULL, NULL, NULL, NULL);
+        if (service) {
+            creation = "CREATED";
+            CloseServiceHandle(service);
+        } else {
+            error = GetLastError();
+            creation = error == ERROR_SERVICE_EXISTS ? "ALREADY_EXISTS" :
+                error == ERROR_SERVICE_DATABASE_LOCKED ? "DATABASE_LOCKED" :
+                error == ERROR_ACCESS_DENIED ? "ACCESS_DENIED" : "OTHER";
+        }
+    }
+    after = coherence_open(scm);
+    CloseServiceHandle(scm);
+    printf("SWCOMPAT_COHERENCE_BEFORE=%s\n", before);
+    printf("SWCOMPAT_COHERENCE_CREATE=%s\n", creation);
+    printf("SWCOMPAT_COHERENCE_AFTER=%s\n", after);
+    puts("SWCOMPAT_COHERENCE_COMPLETE=YES");
+    fflush(stdout);
+    return 0;
+}
+
 int wmain(int argc, wchar_t **argv) {
     if (argc < 2) {
-        fputs("Usage: service_smoke.exe single-roundtrip|run|hold|absent|install <path>|status|access|start|stop|delete\n",stderr);
+        fputs("Usage: service_smoke.exe single-roundtrip|coherence <path>|run|hold|absent|install <path>|status|access|start|stop|delete\n",stderr);
         return 2;
     }
+    if (!wcscmp(argv[1], L"coherence"))
+        return scm_coherence(argc > 2 ? argv[2] : NULL);
     if (!wcscmp(argv[1], L"single-roundtrip"))
         return single_process_roundtrip();
     if (!wcscmp(argv[1], L"hold")) {
