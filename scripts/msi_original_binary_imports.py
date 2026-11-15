@@ -17,6 +17,9 @@ from swcompat.wine_paths import windows_media_path
 
 FAMILIES = ("ADVAPI32", "MSI", "KERNEL32", "FUSION", "MSCOREE",
             "OLE32", "RPCRT4", "NTDLL", "OTHER")
+API_FAMILIES = ("SCM_READ", "SCM_MODIFY", "SCM_START",
+                "REGISTRY_READ", "REGISTRY_WRITE", "MSI_READ",
+                "MSI_WRITE", "PROCESS_LOADER", "OTHER_API")
 STATUSES = {"PARSED", "NOT_PE", "INVALID_PE", "ACTION_ABSENT", "NOT_DLL_BINARY",
             "BINARY_ABSENT", "INPUT_FAILED", "INVALID_ARGUMENT", "REPORT_FAILED",
             "DATABASE_FAILED", "QUERY_FAILED", "MEMORY_FAILED",
@@ -32,6 +35,7 @@ def empty(status: str = "NOT_REQUESTED") -> dict:
         raise ValueError("Unexpected original MSI import probe state")
     return {"status": status, "machine": "UNKNOWN",
             "imports": {name: 0 for name in FAMILIES},
+            "api_imports": {name: 0 for name in API_FAMILIES},
             "native_microsoft_clr": False}
 
 
@@ -46,6 +50,11 @@ def validate(r: object) -> bool:
             any(type(v) is not int or not 0 <= v <= 256 for v in counts.values()) or
             sum(counts.values()) > 256):
         return False
+    api = r["api_imports"]
+    if (type(api) is not dict or set(api) != set(API_FAMILIES)
+            or any(type(v) is not int or not 0 <= v <= 4096 for v in api.values())
+            or sum(api.values()) > 4096):
+        return False
     if r["status"] != "PARSED":
         return r == empty(r["status"])
     return r["machine"] != "UNKNOWN"
@@ -55,7 +64,7 @@ def parse(raw: bytes, code: int) -> dict:
     if not isinstance(raw, bytes) or len(raw) > MAX_OUTPUT:
         return empty("MALFORMED")
     fields: dict[str, str] = {}
-    expected = {"STATUS", "MACHINE", *FAMILIES}
+    expected = {"STATUS", "MACHINE", *FAMILIES, *(f"API_{k}" for k in API_FAMILIES)}
     for line in raw.splitlines():
         item = LINE.fullmatch(line.strip())
         if not item:
@@ -73,10 +82,12 @@ def parse(raw: bytes, code: int) -> dict:
         return empty(status)
     if fields["MACHINE"] not in MACHINES - {"UNKNOWN"}:
         return empty("MALFORMED")
-    if any(not fields[k].isdigit() for k in FAMILIES):
+    if any(not fields[k].isdigit() for k in FAMILIES) or any(
+            not fields[f"API_{k}"].isdigit() for k in API_FAMILIES):
         return empty("MALFORMED")
     result = {"status": status, "machine": fields["MACHINE"],
               "imports": {k: int(fields[k]) for k in FAMILIES},
+              "api_imports": {k: int(fields[f"API_{k}"]) for k in API_FAMILIES},
               "native_microsoft_clr": False}
     return result if validate(result) else empty("MALFORMED")
 

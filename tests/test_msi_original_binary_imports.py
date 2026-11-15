@@ -7,10 +7,12 @@ from unittest import mock
 from scripts import msi_original_binary_imports as p
 
 
-def markers(machine="AMD64", status="PARSED", imports=None):
+def markers(machine="AMD64", status="PARSED", imports=None, apis=None):
     counts = {name: 0 for name in p.FAMILIES}
     counts.update(imports or {})
-    lines = {"STATUS": status, "MACHINE": machine, **counts}
+    api_counts = {f"API_{key}": 0 for key in p.API_FAMILIES}
+    api_counts.update({f"API_{key}": value for key, value in (apis or {}).items()})
+    lines = {"STATUS": status, "MACHINE": machine, **counts, **api_counts}
     return "".join(f"SWCOMPAT_BINARY_{k}={v}\r\n" for k, v in lines.items()).encode()
 
 
@@ -22,6 +24,13 @@ class OriginalBinaryImportTests(unittest.TestCase):
         self.assertEqual(report["machine"], "AMD64")
         self.assertEqual(report["imports"]["MSCOREE"], 1)
         self.assertFalse(report["native_microsoft_clr"])
+        self.assertEqual(report["api_imports"]["SCM_MODIFY"], 0)
+        classified = p.parse(markers(imports={"ADVAPI32": 1},
+                                     apis={"SCM_MODIFY": 2, "MSI_READ": 4,
+                                           "OTHER_API": 7}), 0)
+        self.assertTrue(p.validate(classified))
+        self.assertEqual(classified["api_imports"]["SCM_MODIFY"], 2)
+        self.assertEqual(classified["api_imports"]["MSI_READ"], 4)
         self.assertTrue(p.validate(report))
 
     def test_reject_bad_protocol_and_unbounded_counts(self):
@@ -29,6 +38,8 @@ class OriginalBinaryImportTests(unittest.TestCase):
         for candidate in (raw + b"SECRET=HIDDEN\n", raw + raw,
                           raw.replace(b"AMD64", b"USER_PRIVATE"),
                           raw.replace(b"ADVAPI32=0", b"ADVAPI32=999999"),
+                          raw.replace(b"API_SCM_READ=0", b"API_SCM_READ=4097"),
+                          raw.replace(b"API_SCM_READ=0", b"API_SCM_READ=USER"),
                           raw[:-20], b""):
             self.assertEqual(p.parse(candidate, 0)["status"], "MALFORMED")
         self.assertEqual(p.parse(raw, 1)["status"], "PROCESS_FAILED")
@@ -40,6 +51,7 @@ class OriginalBinaryImportTests(unittest.TestCase):
         self.assertEqual(r, p.empty("STREAM_FAILED"))
         self.assertFalse(p.validate(dict(r, native_microsoft_clr=True)))
         self.assertFalse(p.validate(dict(r, original_dll_bytes="PRIVATE")))
+        self.assertFalse(p.validate(dict(r, api_imports={"DYNAMIC_PRIVATE_API": 1})))
 
     @unittest.skipIf(os.name == "nt", "POSIX Wine wrapper")
     def test_private_identifier_always_deleted(self):

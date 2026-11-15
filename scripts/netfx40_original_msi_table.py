@@ -207,6 +207,8 @@ def main(argv: list[str] | None = None) -> int:
     print("Original Microsoft deferred DLL import census machine", binary["machine"])
     for family, count in binary["imports"].items():
         print("Original Microsoft deferred DLL imported", family, count)
+    for family, count in binary["api_imports"].items():
+        print("Original Microsoft deferred DLL Windows API import", family, count)
     return 0
 
 

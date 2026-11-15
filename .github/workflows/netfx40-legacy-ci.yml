@@ -397,6 +397,8 @@ jobs:
                       f.write(f"original_action_binary_{field}: **{binary[field]}**\n\n")
                   for family, count in binary["imports"].items():
                       f.write(f"original_action_import_{family}: **{count}**\n\n")
+                  for family, count in binary["api_imports"].items():
+                      f.write(f"original_action_api_{family}: **{count}**\n\n")
                   original_extract = Path("build/netfx40-original-extract.json")
                   if original_extract.is_file():
                       from scripts.netfx40_offline_extract import validate as validate_extract
