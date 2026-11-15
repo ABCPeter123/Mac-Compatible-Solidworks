@@ -36,3 +36,23 @@ The next controlled variation removes static `msi.lib` imports entirely. The hel
 [Run 43672620175](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43672620175), even after removing all static MSI imports and linking the C runtime statically, returned `BAD_EXIT`, `stage=NOT_OBSERVED` on Apple Silicon. Source review then found a concrete **test-harness bug**: `scripts/msi_custom_action_table_type.py` invoked Wine with `str(probe)` set to the repository-relative `build/msi_custom_action_table_probe.exe`, but set `cwd=prefix`. This made Wine look for `build/...exe` **under the disposable prefix**, where the helper was not present. No native Windows Installer API was called. The earlier `BAD_EXIT` results therefore cannot support any claim of a Wine loader/MSI API defect.
 
 The corrected wrapper rejects symlinks and resolves the Wine binary, prefix, probe executable and self-authored MSI to absolute paths **before changing subprocess cwd**. POSIX regression tests intentionally pass a relative executable and assert that the actual Wine child receives an absolute original helper path. The original read-only database query, private standard-input action name and exact MSI hash/expected Type validation remain unchanged. Native Windows reference success is preserved.
+
+
+## Verified Windows and Apple Silicon result, November 15, 2026
+
+The complete [source-authored Windows/Wine CI run 43675250677](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43675250677) **passed both jobs**. Windows compiled the original native x64 DLL custom action, read-only MSI metadata query and independent Win32 process monitor. It verified the original harmless MSI intentionally fails with Windows 1603 and rolls back its synthetic file.
+
+On Wine Staging 11.21 under Apple Silicon, all these strictly bounded checks now pass:
+
+- Original helper **self-test**: `SELFTEST_OK`, exact entry and fixed status channel verified.
+- Independent `CreateProcessW` smoke: `STARTED`, child exit `ZERO`.
+- Direct original MSI `CustomAction` table lookup: `ACTION_FOUND`, last stage `ROW_FETCHED`.
+- Same original table lookup through independent `CreateProcessW`: `ACTION_FOUND`, `family=DLL_BINARY`, low-six-bit `base_type=1`, last stage `ROW_FETCHED`.
+- Separate actual, intentionally failing deferred DLL action under Wine: `TRACE_MATCHED`, `DLL_BINARY`, `base_type=1`, `DEFERRED`. The actual MSI process returned nonzero, as intended.
+- Original .NET compatibility remains **false/unverified** and SOLIDWORKS readiness is **not demonstrated**.
+
+The earlier Apple Silicon `MALFORMED`/ `NOT_OBSERVED` **did not establish a defect in Wine's `MsiOpenDatabaseW` or query APIs**. The decisive diagnostic harness defect was a strict parser allowing only eight stage markers while a fully successful MSI database query emits nine. The full nine-stage path now has a regression test and emits `ACTION_FOUND`; malformed or duplicate stages remain rejected.
+
+The source-authored action is sent to the actual Win32 helper through an exclusively created mode-0600 file inside the marked disposable Wine prefix, and the file is removed after processing. A separate real Win32 `CreateProcessW` path independently validates execution, using fixed private-report status markers. No original proprietary MSI records, vendor paths, action names or installer logs enter CI output.
+
+**Engineering conclusion:** Read-only MSI CustomAction Type inspection is a verified, usable capability on the pinned Wine build. Next inspect the first failed nonstandard action **only if the original Microsoft installer actually retains its signed nested MSI inside the disposable prefix**, and output only the same allowlisted type family/execution mode. Do not invent an original action type, patch Wine SCM without source-backed evidence or claim native Microsoft CLR installation.
