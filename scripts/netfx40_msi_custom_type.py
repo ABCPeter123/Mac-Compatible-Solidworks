@@ -33,6 +33,10 @@ STATUSES = {
     "NOT_REQUESTED", "TRACE_MATCHED", "TRACE_MISSING", "TRACE_AMBIGUOUS",
     "NO_NONSTANDARD_FAILURE", "CAPTURE_TRUNCATED",
 }
+CAPTURE_REASONS = {
+    "NONE", "UNKNOWN", "LINE_LIMIT", "BYTE_LIMIT",
+    "READER_UNFINISHED", "PROCESS_INCOMPLETE",
+}
 EXECUTION = {"NOT_VERIFIED", "IMMEDIATE", "DEFERRED", "ROLLBACK", "COMMIT"}
 IMPERSONATION = {"NOT_VERIFIED", "DEFAULT", "NO_IMPERSONATE"}
 ASYNC = {"NOT_VERIFIED", "SYNCHRONOUS", "ASYNCHRONOUS"}
@@ -42,17 +46,25 @@ def relevant(line: bytes) -> bool:
     """Only fixed Wine subsystem evidence may enter the bounded private buffer."""
     if len(line) > MAX_LINE_BYTES:
         return False
-    return (b"err:msi:" in line or b"fixme:msi:" in line or
-            (b"trace:msi:" in line and b"Handling custom action " in line))
+    if b"err:msi:" in line or b"fixme:msi:" in line:
+        return True
+    # Original signed Microsoft setup produced OTHER_ACTION with the
+    # SERVICE_TEXT_ONLY identifier hint. Filter the extremely verbose MSI
+    # trace to only exact matching candidate *action names*, not target data.
+    event = TRACE.search(line)
+    return bool(event and b"service" in event.group(1).lower())
 
 
-def empty(status: str = "NOT_REQUESTED") -> dict:
-    if status not in STATUSES:
+def empty(status: str = "NOT_REQUESTED", *, reason: str = "NONE") -> dict:
+    if status not in STATUSES or reason not in CAPTURE_REASONS:
         raise ValueError("Invalid custom-action trace state")
+    if (status == "CAPTURE_TRUNCATED") != (reason != "NONE"):
+        raise ValueError("Capture reason must match truncated status")
     return {
         "status": status, "family": "NOT_VERIFIED", "base_type": None,
         "execution": "NOT_VERIFIED", "impersonation": "NOT_VERIFIED",
         "asynchronous": "NOT_VERIFIED", "ts_aware": False,
+        "capture_reason": reason,
     }
 
 
@@ -71,9 +83,11 @@ def _private_failed_action(raw: bytes) -> bytes | None:
     return None
 
 
-def parse(raw: bytes, *, truncated: bool = False) -> dict:
+def parse(raw: bytes, *, truncated: bool = False,
+          capture_reason: str = "UNKNOWN") -> dict:
     if not isinstance(raw, bytes) or truncated or len(raw) > MAX_RETAINED_BYTES:
-        return empty("CAPTURE_TRUNCATED")
+        reason = capture_reason if truncated else "BYTE_LIMIT"
+        return empty("CAPTURE_TRUNCATED", reason=reason)
     failed = _private_failed_action(raw)
     if failed is None:
         return empty("NO_NONSTANDARD_FAILURE")
@@ -109,13 +123,14 @@ def parse(raw: bytes, *, truncated: bool = False) -> dict:
         "impersonation": "NO_IMPERSONATE" if type_value & 0x800 else "DEFAULT",
         "asynchronous": "ASYNCHRONOUS" if type_value & 0x80 else "SYNCHRONOUS",
         "ts_aware": bool(type_value & 0x4000),
+        "capture_reason": "NONE",
     }
 
 
 def validate(result: dict) -> bool:
     if type(result) is not dict or set(result) != {
         "status", "family", "base_type", "execution", "impersonation",
-        "asynchronous", "ts_aware",
+        "asynchronous", "ts_aware", "capture_reason",
     }:
         return False
     if (result["status"] not in STATUSES
@@ -123,10 +138,13 @@ def validate(result: dict) -> bool:
             or result["execution"] not in EXECUTION
             or result["impersonation"] not in IMPERSONATION
             or result["asynchronous"] not in ASYNC
-            or type(result["ts_aware"]) is not bool):
+            or type(result["ts_aware"]) is not bool
+            or result["capture_reason"] not in CAPTURE_REASONS
+            or ((result["status"] == "CAPTURE_TRUNCATED")
+                != (result["capture_reason"] != "NONE"))):
         return False
     if result["status"] != "TRACE_MATCHED":
-        return result == empty(result["status"])
+        return result == empty(result["status"], reason=result["capture_reason"])
     return (
         type(result["base_type"]) is int
         and 0 <= result["base_type"] <= 63
@@ -134,4 +152,5 @@ def validate(result: dict) -> bool:
         and result["execution"] != "NOT_VERIFIED"
         and result["impersonation"] != "NOT_VERIFIED"
         and result["asynchronous"] != "NOT_VERIFIED"
+        and result["capture_reason"] == "NONE"
     )
