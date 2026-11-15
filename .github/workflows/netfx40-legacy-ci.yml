@@ -2,7 +2,14 @@ name: Original Microsoft .NET 4.0 CLR on Wine Staging A/B
 
 # Signed Microsoft installers run only on explicit operator request.
 # Python regression tests are covered by compatibility-ci.yml on each PR.
+# Focused 5100 report on PR, full installer baselines remain manually dispatched.
 on:
+  pull_request:
+    paths:
+      - 'scripts/netfx481_prereq_diagnostic.py'
+      - 'scripts/netfx481_setup_evidence.py'
+      - 'scripts/netfx40_to_481_upgrade.py'
+      - '.github/workflows/netfx40-legacy-ci.yml'
   workflow_dispatch:
 
 permissions:
@@ -216,6 +223,7 @@ jobs:
           retention-days: 1
 
   apple-silicon-native-baseline:
+    if: github.event_name == 'workflow_dispatch'
     name: Check genuine Microsoft .NET 4.0 on Apple Silicon Wine Staging 11.21
     needs: [authentic-netfx40-windows, absolute-path-regressions]
     runs-on: macos-15
@@ -674,7 +682,7 @@ jobs:
                 r["setup"]["exit_hex"] == "000013EC")
           PY
       - name: Run original Microsoft .NET 4.8.1 on same native CLR with Windows 11 profile
-        if: env.SWCOMPAT_RETRY_481_WIN11 == 'yes'
+        if: github.event_name == 'workflow_dispatch' && env.SWCOMPAT_RETRY_481_WIN11 == 'yes'
         shell: bash
         run: |
           set -euo pipefail
@@ -772,6 +780,12 @@ jobs:
                       out.write(f"original_481_prerequisite_{key}: **{upgraded['original_prerequisite'][key]}**\n\n")
                   for key in ("os_versions", "blockers"):
                       out.write(f"original_481_prerequisite_{key}: **{','.join(upgraded['original_prerequisite'][key])}**\n\n")
+                  if upgraded["secondary_evidence"] is not None:
+                      classified = upgraded["secondary_evidence"]["prerequisite"]
+                      out.write(f"secondary_481_prerequisite_status: **{classified['status']}**\n\n")
+                      out.write(f"secondary_481_prerequisite_5100: **{classified['5100_in_log']}**\n\n")
+                      out.write(f"secondary_481_prerequisite_blockers: **{','.join(classified['blockers'])}**\n\n")
+                      out.write(f"secondary_481_prerequisite_os: **{','.join(classified['os_versions'])}**\n\n")
               win11_path = Path("build/netfx40-to-481-win11.json")
               if win11_path.is_file():
                   resumed = json.loads(win11_path.read_text(encoding="utf-8"))
@@ -808,7 +822,7 @@ jobs:
         shell: bash
         run: |
           python3 - <<'PY'
-          import json
+          import json, os
           from pathlib import Path
           from scripts.netfx40_msxml3_prerequisite import validate as pre_validate
           from scripts.netfx40_legacy import validate as runtime_validate
@@ -849,7 +863,8 @@ jobs:
                   assert upgraded["original_native40_persistent"]
                   assert upgraded["solidworks_compatibility"] == "NOT_DEMONSTRATED"
                   retry = Path("build/netfx40-to-481-win11retry.json")
-                  if (upgraded["setup"]["exit_hex"] == "000013EC"
+                  if (os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+                          and upgraded["setup"]["exit_hex"] == "000013EC"
                           and upgraded["clr64_change"] == "UNCHANGED"
                           and upgraded["native_clr_load"] == "LOADED"
                           and upgraded["native_only_managed"] == "PASS"):
