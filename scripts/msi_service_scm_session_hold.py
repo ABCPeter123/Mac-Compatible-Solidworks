@@ -14,7 +14,7 @@ import tempfile
 import time
 
 from scripts.netfx481_trial import validate_prefix
-from scripts.msi_service_action_trial import EXE_NAME, SERVICE_STATES, _env, binary_state, query_service
+from scripts.msi_service_action_trial import EXE_NAME, SERVICE_STATES, _env, binary_state, service_result
 from scripts.msi_service_registry_observation import service_registry
 from scripts.msi_service_scm_coherence import validate as validate_prior
 
@@ -23,6 +23,41 @@ HOLDER = {"NOT_RUN", "SERVICE_OPEN", "MANAGER_ONLY", "FAILED", "NO_MARKER"}
 CONCLUSIONS = {"NOT_APPLICABLE", "VISIBLE_ONLY_WITH_HOLDER",
                "STILL_ABSENT_WITH_HOLDER", "INCONSISTENT", "UNRESOLVED"}
 PREFIX = b"SWCOMPAT_SCM_HOLDER="
+QUERY_DIAGNOSTICS = {
+    "NOT_RUN", "PARSED", "LAUNCH_FAILED", "TIMED_OUT",
+    "BAD_EXIT", "NO_PROTOCOL", "MALFORMED", "OVERSIZED",
+    "NOT_EXECUTED",
+}
+
+
+def query_with_diagnostic(wine: Path, prefix: Path, exe: Path) -> tuple[str, str]:
+    """Reproduce original Win32 query once, preserving only fixed failure kinds.
+
+    Never expose Wine stderr, arbitrary stdout, paths or untrusted text.
+    """
+    with tempfile.TemporaryFile() as output:
+        try:
+            completed = subprocess.run(
+                [str(wine), str(exe), "status"],
+                cwd=exe.parent, env=_env(prefix), stdin=subprocess.DEVNULL,
+                stdout=output, stderr=subprocess.DEVNULL, timeout=25,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return "UNKNOWN", "TIMED_OUT"
+        except OSError:
+            return "UNKNOWN", "LAUNCH_FAILED"
+        output.seek(0)
+        raw = output.read(2049)
+    if len(raw) > 2048:
+        return "UNKNOWN", "OVERSIZED"
+    if completed.returncode not in (0, 1):
+        return "UNKNOWN", "BAD_EXIT"
+    if b"SWCOMPAT_SERVICE_PHASE=" not in raw:
+        return "UNKNOWN", "NO_PROTOCOL"
+    status = service_result(raw, completed.returncode, "status")
+    return (status, "PARSED") if status != "UNKNOWN" else ("UNKNOWN", "MALFORMED")
+
 
 
 def parse_holder(raw: bytes) -> str:
@@ -37,7 +72,7 @@ def parse_holder(raw: bytes) -> str:
     } else "NO_MARKER"
 
 
-def during_holder(wine: Path, prefix: Path, exe: Path) -> tuple[str, str]:
+def during_holder(wine: Path, prefix: Path, exe: Path) -> tuple[str, str, str]:
     """Wait for exact holder readiness and query from a *different* process."""
     with tempfile.TemporaryFile() as output:
         try:
@@ -47,7 +82,7 @@ def during_holder(wine: Path, prefix: Path, exe: Path) -> tuple[str, str]:
                 stdout=output, stderr=subprocess.DEVNULL, start_new_session=True,
             )
         except OSError:
-            return "NO_MARKER", "UNKNOWN"
+            return "NO_MARKER", "UNKNOWN", "NOT_EXECUTED"
         try:
             ready = "NO_MARKER"
             for _ in range(48):
@@ -59,16 +94,16 @@ def during_holder(wine: Path, prefix: Path, exe: Path) -> tuple[str, str]:
                     break
                 time.sleep(0.25)
             if ready not in {"SERVICE_OPEN", "MANAGER_ONLY"}:
-                return ready, "UNKNOWN"
+                return ready, "UNKNOWN", "NOT_EXECUTED"
             # The original harmless Win32 executable is run via Wine again
             # with the same prefix, while this process retains SCM handles.
             if proc.poll() is not None:
                 return "NO_MARKER", "UNKNOWN"
-            visible = query_service(wine, prefix, exe, "status")
+            visible, diagnostic = query_with_diagnostic(wine, prefix, exe)
             if proc.poll() is not None:
                 # Holder could have exited before the independent query ended.
                 return "NO_MARKER", "UNKNOWN"
-            return ready, visible
+            return ready, visible, diagnostic
         finally:
             if proc.poll() is None:
                 proc.terminate()
@@ -115,6 +150,8 @@ def inspect(wine: Path, prefix: Path, exe: Path, prior: Path) -> dict:
         "trial": "MEASURED" if eligible else "NOT_APPLICABLE",
         "binary": "NOT_RUN", "registry": "UNAVAILABLE", "scm_before": "UNKNOWN",
         "holder": "NOT_RUN", "scm_while_held": "UNKNOWN", "scm_after": "UNKNOWN",
+        "diagnostic_before": "NOT_RUN", "diagnostic_while_held": "NOT_RUN",
+        "diagnostic_after": "NOT_RUN",
         "outcome": "NOT_APPLICABLE", "native_microsoft_clr": False,
         "solidworks_compatibility": "NOT_DEMONSTRATED",
     }
@@ -124,9 +161,9 @@ def inspect(wine: Path, prefix: Path, exe: Path, prior: Path) -> dict:
     r["registry"] = service_registry(wine, prefix)
     if r["binary"] != "PRESENT_MATCH" or r["registry"] != "PRESENT":
         raise ValueError("Original MSI-installed service not independently verified")
-    r["scm_before"] = query_service(wine, prefix, exe, "status")
-    r["holder"], r["scm_while_held"] = during_holder(wine, prefix, exe)
-    r["scm_after"] = query_service(wine, prefix, exe, "status")
+    r["scm_before"], r["diagnostic_before"] = query_with_diagnostic(wine, prefix, exe)
+    r["holder"], r["scm_while_held"], r["diagnostic_while_held"] = during_holder(wine, prefix, exe)
+    r["scm_after"], r["diagnostic_after"] = query_with_diagnostic(wine, prefix, exe)
     r["outcome"] = classify(r["scm_before"], r["holder"], r["scm_while_held"], r["scm_after"])
     return r
 
@@ -135,6 +172,7 @@ def validate(r: dict) -> bool:
     if type(r) is not dict or set(r) != {
         "schema", "scope", "trial", "binary", "registry", "scm_before",
         "holder", "scm_while_held", "scm_after", "outcome",
+        "diagnostic_before", "diagnostic_while_held", "diagnostic_after",
         "native_microsoft_clr", "solidworks_compatibility",
     }:
         return False
@@ -145,6 +183,8 @@ def validate(r: dict) -> bool:
             or r["holder"] not in HOLDER
             or any(r[x] not in SERVICE_STATES for x in (
                 "scm_before", "scm_while_held", "scm_after"))
+            or any(r[k] not in QUERY_DIAGNOSTICS for k in (
+                "diagnostic_before", "diagnostic_while_held", "diagnostic_after"))
             or r["outcome"] not in CONCLUSIONS
             or r["native_microsoft_clr"] is not False
             or r["solidworks_compatibility"] != "NOT_DEMONSTRATED"):
@@ -155,7 +195,18 @@ def validate(r: dict) -> bool:
             and r["holder"] == "NOT_RUN" and r["outcome"] == "NOT_APPLICABLE"
             and all(r[key] == "UNKNOWN" for key in (
                 "scm_before", "scm_while_held", "scm_after"))
+            and all(r[key] == "NOT_RUN" for key in (
+                "diagnostic_before", "diagnostic_while_held", "diagnostic_after"))
         )
+    if any(r[k] == "NOT_RUN" for k in ("diagnostic_before", "diagnostic_after")):
+        return False
+    for state, diagnostic in (
+        ("scm_before", "diagnostic_before"),
+        ("scm_while_held", "diagnostic_while_held"),
+        ("scm_after", "diagnostic_after"),
+    ):
+        if (r[state] != "UNKNOWN") != (r[diagnostic] == "PARSED"):
+            return False
     return (r["binary"] == "PRESENT_MATCH" and r["registry"] == "PRESENT"
             and r["outcome"] == classify(r["scm_before"], r["holder"],
                                           r["scm_while_held"], r["scm_after"]))
@@ -179,7 +230,9 @@ def main(argv: list[str] | None = None) -> int:
         a.output.write_text(json.dumps(r, indent=2) + "\n", encoding="ascii")
     except (OSError, ValueError, json.JSONDecodeError):
         p.error("Isolated read-only SCM holder experiment failed")
-    for key in ("trial", "binary", "registry", "scm_before", "holder", "scm_while_held", "scm_after", "outcome"):
+    for key in ("trial", "binary", "registry", "scm_before", "diagnostic_before",
+                "holder", "scm_while_held", "diagnostic_while_held", "scm_after",
+                "diagnostic_after", "outcome"):
         print("Original MSI SCM connection-lifetime differential", key, r[key])
     print("Native Microsoft CLR and SOLIDWORKS: NOT DEMONSTRATED")
     return 0
