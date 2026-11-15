@@ -35,7 +35,7 @@ def protocol_detail(raw: bytes, code: int, mode: str) -> str:
     """Distinguish strict original Win32 marker failures without exporting output."""
     if len(raw) > 2048:
         return "OVERSIZED"
-    if b"\\0" in raw:
+    if b"\0" in raw:
         return "NUL_BYTE"
     if code not in (0, 1):
         return "BAD_EXIT"
