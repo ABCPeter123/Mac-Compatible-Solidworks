@@ -58,9 +58,13 @@ def validate(report: dict) -> bool:
                  or not (report["x86_dll_changed"] or report["x64_dll_changed"])))
 
 
+def _is_wine_host() -> bool:
+    return os.name != "nt"
+
+
 def inspect(wine: Path, prefix: Path, winetricks: Path, *,
             timeout: int = 300) -> dict:
-    if os.name == "nt" or not 60 <= timeout <= 420:
+    if not _is_wine_host() or not 60 <= timeout <= 420:
         raise ValueError("Only bounded disposable Wine experiments are allowed")
     if any(p.is_symlink() for p in (wine, prefix, winetricks)):
         raise ValueError("Linked experiment paths are forbidden")
@@ -80,9 +84,11 @@ def inspect(wine: Path, prefix: Path, winetricks: Path, *,
         "WINEPREFIX": str(prefix),
         "WINEARCH": "win64",
         "WINE": str(wine),
+        "PATH": str(wine.parent) + os.pathsep + env.get("PATH", ""),
         "WINEDEBUG": "-all",
         "WINETRICKS_LATEST_VERSION_CHECK": "disabled",
     })
+    env.pop("WINESERVER", None)
     if (wine.parent / "wineserver").is_file():
         env["WINESERVER"] = str(wine.parent / "wineserver")
     try:
