@@ -24,6 +24,10 @@ from scripts.netfx481_setup_evidence import (
     private_log_path, classify_log, discard_log, scan_secondary_logs,
     validate_secondary_report, KNOWN_RESULTS, KNOWN_PHASES, KNOWN_CODES,
 )
+from scripts.netfx481_prereq_diagnostic import (
+    classify_file as classify_prerequisite, empty as empty_prerequisite,
+    validate as valid_prerequisite,
+)
 
 STATES_UPGRADE = {"PREREQUISITE_MISSING", "MEASURED"}
 RESTARTS = {"NOT_RUN", "COMPLETED", "TIMED_OUT", "START_FAILED",
@@ -39,6 +43,7 @@ def blank() -> dict:
         "original_native40_persistent": False,
         "setup": blank_launch(),
         "setup_evidence": {"status": "NOT_REQUESTED", "phase": "UNKNOWN", "codes": []},
+        "original_prerequisite": empty_prerequisite(),
         "secondary_evidence": None,
         "restart": "NOT_RUN",
         "clr64_before": "NOT_VERIFIED",
@@ -57,6 +62,8 @@ def blank() -> dict:
 
 def validate(result: dict) -> bool:
     if type(result) is not dict or set(result) != set(blank()):
+        return False
+    if not valid_prerequisite(result["original_prerequisite"]):
         return False
     evidence = result["setup_evidence"]
     if (type(evidence) is not dict or set(evidence) != {"status", "phase", "codes"}
@@ -152,12 +159,14 @@ def inspect(wine: Path, prefix: Path, installer: Path, manifest: Path,
                            timeout=245, fusion_builtin=True)
         finally:
             setup_evidence = classify_log(log_file)
+            prerequisite = classify_prerequisite(log_file)
             discard_log(log_file)
         secondary_evidence = scan_secondary_logs(prefix)
     else:
         setup = launch(wine, prefix, installer, launcher,
                        timeout=245, fusion_builtin=True)
         setup_evidence = {"status": "NOT_REQUESTED", "phase": "UNKNOWN", "codes": []}
+        prerequisite = empty_prerequisite()
         secondary_evidence = None
     if not validate_launch(setup):
         raise ValueError("Unverified original Microsoft installer exit")
@@ -178,6 +187,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, manifest: Path,
         "original_native40_persistent": True,
         "setup": setup, "restart": restart,
         "setup_evidence": setup_evidence,
+        "original_prerequisite": prerequisite,
         "secondary_evidence": secondary_evidence,
         "clr64_before": comparison["before"]["CLR64"],
         "clr64_after": comparison["after"]["CLR64"],
@@ -241,6 +251,10 @@ def main(argv: list[str] | None = None) -> int:
     for key in ("status", "phase"):
         print("Genuine Microsoft .NET private setup", key, outcome["setup_evidence"][key])
     print("Genuine Microsoft .NET private setup error classes", ",".join(outcome["setup_evidence"]["codes"]))
+    for key in ("status", "5100_in_log"):
+        print("Original .NET 4.8.1 prerequisite evidence", key, outcome["original_prerequisite"][key])
+    print("Original .NET 4.8.1 setup OS classes", ",".join(outcome["original_prerequisite"]["os_versions"]))
+    print("Original .NET 4.8.1 setup blockers", ",".join(outcome["original_prerequisite"]["blockers"]))
     if outcome["secondary_evidence"] is not None:
         for key in ("status", "phase"):
             print("Genuine Microsoft .NET secondary setup", key, outcome["secondary_evidence"][key])

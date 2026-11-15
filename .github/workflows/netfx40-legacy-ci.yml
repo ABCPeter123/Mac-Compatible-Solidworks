@@ -9,6 +9,8 @@ on:
       - 'tests/test_netfx40_msxml3_prerequisite.py'
       - 'scripts/netfx40_msxml3_restart.py'
       - 'scripts/netfx40_to_481_upgrade.py'
+      - 'scripts/netfx481_prereq_diagnostic.py'
+      - 'tests/test_netfx481_prereq_diagnostic.py'
       - 'tests/test_netfx40_to_481_upgrade.py'
       - 'tests/test_netfx40_msxml3_restart.py'
       - 'scripts/netfx40_msi_logging_policy.py'
@@ -73,6 +75,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_prerequisite.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_restart.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_to_481_upgrade.py' -v
+          python -m unittest discover -s tests -p 'test_netfx481_prereq_diagnostic.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msi_evidence.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msi_inventory.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_offline_extract.py' -v
@@ -102,6 +105,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "msxml3 workaround tests failed" }
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_restart.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_to_481_upgrade.py' -v
+          python -m unittest discover -s tests -p 'test_netfx481_prereq_diagnostic.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Post-setup CLR restart persistence safety regression failed" }
           if ($LASTEXITCODE -ne 0) { throw "Original Microsoft .NET in-place upgrade safety regression failed" }
           python -m unittest discover -s tests -p 'test_netfx40_msi_evidence.py' -v
@@ -723,6 +727,10 @@ jobs:
                             + result["setup"]["exit_hex"] + "**\n\n")
                   out.write("Windows 11 private setup phase: **"
                             + result["setup_evidence"]["phase"] + "**\n\n")
+                  for key in ("status", "5100_in_log"):
+                      out.write(f"Windows 11 authentic setup {key}: **{result['original_prerequisite'][key]}**\n\n")
+                  for key in ("os_versions", "blockers"):
+                      out.write(f"Windows 11 authentic setup {key}: **{','.join(result['original_prerequisite'][key])}**\n\n")
                   out.write("Windows 11 native CLR changed: **"
                             + result["clr64_change"] + "**\n\n")
                   out.write("Windows 11 genuine 4.8.1 confirmed: **"
@@ -775,6 +783,10 @@ jobs:
                   for k in ("status", "phase"):
                       out.write(f"native40_to481_private_log_{k}: **{upgraded['setup_evidence'][k]}**\n\n")
                   out.write(f"native40_to481_private_error_classes: **{','.join(upgraded['setup_evidence']['codes'])}**\n\n")
+                  for key in ("status", "5100_in_log"):
+                      out.write(f"original_481_prerequisite_{key}: **{upgraded['original_prerequisite'][key]}**\n\n")
+                  for key in ("os_versions", "blockers"):
+                      out.write(f"original_481_prerequisite_{key}: **{','.join(upgraded['original_prerequisite'][key])}**\n\n")
               win11_path = Path("build/netfx40-to-481-win11.json")
               if win11_path.is_file():
                   resumed = json.loads(win11_path.read_text(encoding="utf-8"))
