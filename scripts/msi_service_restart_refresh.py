@@ -26,8 +26,11 @@ QUERY_STATES = {"ABSENT", "RUNNING", "STOPPED", "LOCKED", "START_TIMEOUT", "OTHE
 def inspect(wine: Path, prefix: Path, executable: Path, prior: Path) -> dict:
     if os.name == "nt" or any(x.is_symlink() for x in (wine, prefix, executable, prior)):
         raise ValueError("Only self-authored disposable Wine service experiment")
-    wine, prefix, executable, prior = (
-        x.resolve(strict=True) for x in (wine, prefix, executable, prior))
+    try:
+        wine, prefix, executable, prior = (
+            x.resolve(strict=True) for x in (wine, prefix, executable, prior))
+    except OSError as exc:
+        raise ValueError("Original disposable Wine fixture missing") from exc
     validate_prefix(prefix)
     if not wine.is_file() or not os.access(wine, os.X_OK):
         raise ValueError("Wine missing")
