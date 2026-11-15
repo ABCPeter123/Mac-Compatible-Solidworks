@@ -19,7 +19,7 @@ STATUSES = {
     "ACTION_FOUND", "ACTION_ABSENT", "DATABASE_UNAVAILABLE", "TABLE_UNAVAILABLE",
     "QUERY_FAILED", "INVALID_ARGUMENT", "PROCESS_FAILED", "TIMED_OUT",
     "MALFORMED", "BAD_EXIT", "MSI_DLL_UNAVAILABLE", "MSI_EXPORT_UNAVAILABLE",
-    "SELFTEST_OK",
+    "SELFTEST_OK", "INPUT_UNAVAILABLE",
 }
 LINE = re.compile(rb"SWCOMPAT_CA_TABLE_(STATUS|TYPE|STAGE)=([A-Z_]+|[0-9]{1,10})\Z")
 STAGES = {
@@ -112,16 +112,33 @@ def inspect(wine: Path, prefix: Path, probe: Path, msi: Path,
     windows_status = r"C:\windows\temp\swcompat_ca_table_probe.status"
     env = os.environ.copy()
     env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64", "WINEDEBUG": "-all"})
+    # Passing a pipe as stdin to Wine worked differently from the native
+    # Windows reference. An exclusively created mode-0600 file avoids that
+    # ambiguity. This contains only the test action name (later original
+    # identifiers stay private on the disposable runner), and is removed on
+    # success, failure, timeout or process-start error.
+    action_file = status_file.parent / "swcompat_ca_action_private.input"
+    if action_file.exists() or action_file.is_symlink():
+        raise ValueError("Existing or linked private action input")
+    fd = os.open(action_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        result = subprocess.run(
-            [str(wine), str(probe), path, windows_status], input=action.encode("utf-8"),
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            env=env, cwd=prefix, timeout=25, check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return {"status": "TIMED_OUT", "base_type": None, "family": "NOT_VERIFIED", "stage": "NOT_OBSERVED"}
-    except OSError:
-        return {"status": "PROCESS_FAILED", "base_type": None, "family": "NOT_VERIFIED", "stage": "NOT_OBSERVED"}
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(action.encode("utf-8"))
+        try:
+            result = subprocess.run(
+                [str(wine), str(probe), path, windows_status, "--private-file"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=env, cwd=prefix, timeout=25, check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return {"status": "TIMED_OUT", "base_type": None,
+                    "family": "NOT_VERIFIED", "stage": "NOT_OBSERVED"}
+        except OSError:
+            return {"status": "PROCESS_FAILED", "base_type": None,
+                    "family": "NOT_VERIFIED", "stage": "NOT_OBSERVED"}
+    finally:
+        action_file.unlink(missing_ok=True)
     raw = result.stdout
     if status_file.is_file() and not status_file.is_symlink():
         try:
