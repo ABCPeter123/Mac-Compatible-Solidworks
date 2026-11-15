@@ -90,11 +90,16 @@ def scan(root: Path) -> dict:
             break
         dirs += 1
         if len(directory.relative_to(root).parts) >= MAX_DEPTH:
+            if subdirs:
+                incomplete = True
             subdirs.clear()
         else:
-            subdirs[:] = sorted(
+            safe_subdirs = sorted(
                 n for n in subdirs if not (directory / n).is_symlink()
-            )[:16]
+            )
+            if len(safe_subdirs) > 16:
+                incomplete = True
+            subdirs[:] = safe_subdirs[:16]
         for name in sorted(names):
             if files >= MAX_FILES:
                 incomplete = True
