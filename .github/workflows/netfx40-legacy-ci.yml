@@ -5,6 +5,8 @@ on:
     paths:
       - '.github/workflows/netfx40-legacy-ci.yml'
       - 'scripts/netfx40_legacy.py'
+      - 'scripts/netfx40_msxml3_prerequisite.py'
+      - 'tests/test_netfx40_msxml3_prerequisite.py'
       - 'scripts/netfx40_msi_logging_policy.py'
       - 'tests/test_netfx40_msi_logging_policy.py'
       - 'docs/NETFX40_VERBOSE_MSI_POLICY.md'
@@ -62,6 +64,7 @@ jobs:
       - name: Run absolute media and fixture path regression tests
         run: |
           python -m unittest discover -s tests -p 'test_netfx40_legacy.py' -v
+          python -m unittest discover -s tests -p 'test_netfx40_msxml3_prerequisite.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msi_evidence.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msi_inventory.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_offline_extract.py' -v
@@ -85,6 +88,8 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_netfx40_legacy.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Original Microsoft 4.0 safety tests failed" }
+          python -m unittest discover -s tests -p 'test_netfx40_msxml3_prerequisite.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "msxml3 workaround tests failed" }
           python -m unittest discover -s tests -p 'test_netfx40_msi_evidence.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Nested MSI privacy and failure-action tests failed" }
           python -m unittest discover -s tests -p 'test_netfx40_msi_inventory.py' -v
@@ -373,4 +378,150 @@ jobs:
           assert validate_original_table(original_table)
           assert r["netfx481_ready"] is False
           assert r["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+          PY
+
+  apple-silicon-msxml3-fix:
+    name: Try genuine .NET 4.0 after msxml3 in a fresh Apple Silicon Wine prefix
+    needs: [authentic-netfx40-windows, absolute-path-regressions]
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: authenticated-original-microsoft-netfx40-private
+          path: build
+      - name: Install supported Winetricks 20260125 and its cabextract dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install winetricks
+          command -v cabextract >/dev/null
+          command -v winetricks >/dev/null
+          winetricks --version | grep -F '20260125'
+          echo "SWCOMPAT_WINETRICKS=$(command -v winetricks)" >> "$GITHUB_ENV"
+      - name: Download the same hash-pinned Wine Staging 11.21 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-staging-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-staging-11.21-osx64.tar.xz"
+          echo "d7bcd5abf4df27aae397a7898aef074fea4a2e0b51e0a55aa9659517bbf9d452  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/msxml3-wine-build"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/msxml3-wine-build"
+          WINE_BIN="$(find "$RUNNER_TEMP/msxml3-wine-build" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Initialize new marked Wine x64 prefix for msxml3 fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" --logs-dir "$RUNNER_TEMP/netfx40-msxml3-logs" init
+          touch "$RUNNER_TEMP/netfx40-msxml3-prefix/.swcompat-netfx481-disposable"
+      - name: Install native msxml3 through original Winetricks verb
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx40_msxml3_prerequisite \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --winetricks "$SWCOMPAT_WINETRICKS" \
+            --output build/netfx40-msxml3-prerequisite.json \
+            --timeout 300 --agree-disposable-prefix
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx40_msxml3_prerequisite import validate
+          r = json.loads(Path("build/netfx40-msxml3-prerequisite.json").read_text())
+          assert validate(r)
+          if r["status"] == "VERB_SUCCEEDED":
+              with open(os.environ["GITHUB_ENV"], "a") as f:
+                  f.write("SWCOMPAT_MSXML3_READY=yes\n")
+          PY
+      - name: Retry genuine original Microsoft .NET 4.0 following msxml3
+        if: env.SWCOMPAT_MSXML3_READY == 'yes'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx40_legacy \
+            --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --installer build/dotNetFx40_Full_x86_x64.exe \
+            --managed build/netfx481_runtime_probe.exe \
+            --loader build/netfx481_clr_load.exe \
+            --launcher build/netfx40_win32_launch.exe \
+            --output build/netfx40-msxml3-runtime.json \
+            --timeout 210 --agree-disposable-prefix \
+            --experiment-enable-verbose-msi \
+            --experiment-restart-after-mono \
+            --experiment-trace-custom-action-type \
+            --experiment-inventory-retained-msi
+      - name: Report only prerequisite and independently verified CLR categories
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx40_msxml3_prerequisite import validate as valid_pre
+          from scripts.netfx40_legacy import validate as valid_runtime
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write("## Original Microsoft .NET 4.0 after Winetricks msxml3\n\n")
+              pre = Path("build/netfx40-msxml3-prerequisite.json")
+              if not pre.is_file():
+                  out.write("Prerequisite experiment did not complete. Native CLR not verified.\n")
+              else:
+                  r = json.loads(pre.read_text())
+                  assert valid_pre(r)
+                  for k in ("status", "x86_dll_changed", "x64_dll_changed"):
+                      out.write(f"msxml3_{k}: **{r[k]}**\n\n")
+              path = Path("build/netfx40-msxml3-runtime.json")
+              if not path.is_file():
+                  out.write("Original Microsoft setup after msxml3: **NOT_RUN**\n\n")
+              else:
+                  r = json.loads(path.read_text())
+                  assert valid_runtime(r)
+                  for k in ("status", "installer_status", "installer_exit",
+                            "installer_child_seen", "installer_child_exit",
+                            "clr64_after", "mscorlib64_after", "native_loader",
+                            "runtime_family", "managed_functionality",
+                            "candidate_native40", "solidworks_compatibility"):
+                      out.write(f"msxml3_trial_{k}: **{r[k]}**\n\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: original-netfx40-after-msxml3-privacy-safe-result
+          path: |
+            build/netfx40-msxml3-prerequisite.json
+            build/netfx40-msxml3-runtime.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Validate that msxml3 cannot fabricate a CLR install
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.netfx40_msxml3_prerequisite import validate as pre_validate
+          from scripts.netfx40_legacy import validate as runtime_validate
+          prerequisite = Path("build/netfx40-msxml3-prerequisite.json")
+          assert prerequisite.is_file(), "Pre-install msxml3 experiment missing"
+          p = json.loads(prerequisite.read_text())
+          assert pre_validate(p)
+          runtime = Path("build/netfx40-msxml3-runtime.json")
+          if p["status"] == "VERB_SUCCEEDED":
+              assert runtime.is_file(), "msxml3 succeeded but original setup was not tested"
+          if runtime.is_file():
+              r = json.loads(runtime.read_text())
+              assert runtime_validate(r)
+              assert r["installer_status"] != "NOT_RUN"
+              assert r["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+              if r["candidate_native40"]:
+                  assert r["native_loader"] == "LOADED"
+                  assert r["managed_functionality"] == "PASS"
           PY
