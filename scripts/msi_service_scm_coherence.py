@@ -77,8 +77,9 @@ def inspect(wine: Path, prefix: Path, exe: Path, prior: Path) -> dict:
     eligible = (
         previous["trial"] == "MEASURED"
         and previous["installed_binary"] == "PRESENT_MATCH"
-        and previous["api_register"] == "ALREADY_EXISTS"
-        and previous["scm_after_register"] == "ABSENT"
+        and previous["api_register"] in {"ALREADY_EXISTS", "CREATED"}
+        and previous["scm_after_register"] in {"ABSENT", "UNKNOWN"}
+        and previous["scm_final"] in {"ABSENT", "UNKNOWN"}
         and previous["registry_final"] == "PRESENT"
     )
     report = {
