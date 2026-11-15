@@ -162,3 +162,29 @@ def inspect_cab_mums(sevenzip: Path, archive: Path, destination: Path) -> dict:
         # Explicitly keep all original Microsoft XML in the already disposable
         # CI scratch location; the enclosing TemporaryDirectory removes it.
         pass
+
+
+def combine(reports: list[dict]) -> dict:
+    """Aggregate actual distinct CABs, preserving partial and no-op semantics."""
+    if not reports:
+        return blank()
+    if any(not valid(r) for r in reports):
+        raise ValueError("Unverified original servicing MUM report")
+    result = blank()
+    partial = False
+    for report in reports:
+        if report["status"] != "PARSED":
+            partial = True
+        for field in ("mums_seen", "mums_parsed", "mum_with_update",
+                      "mum_with_package", "mum_with_dependency"):
+            result[field] += report[field]
+        for key in TAGS:
+            result["tags"][key] += report["tags"][key]
+        for key in ARCH:
+            result["architectures"][key] += report["architectures"][key]
+    if not valid({**result, "status": "PARSED"}):
+        raise ValueError("Aggregated original servicing payload exceeds bounded limits")
+    result["status"] = ("PARTIAL" if partial else
+                        "PARSED" if result["mums_parsed"] else "NO_MUM")
+    assert valid(result)
+    return result
