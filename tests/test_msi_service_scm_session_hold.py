@@ -23,7 +23,7 @@ class SCMHolderTests(unittest.TestCase):
     def test_only_real_cross_process_visibility_counts(self):
         self.assertEqual(trial.classify("ABSENT", "SERVICE_OPEN", "STOPPED", "ABSENT"),
                          "VISIBLE_ONLY_WITH_HOLDER")
-        self.assertEqual(trial.classify("ABSENT", "SERVICE_OPEN", "RUNNING", "PRESENT" if False else "ABSENT"),
+        self.assertEqual(trial.classify("ABSENT", "SERVICE_OPEN", "RUNNING", "ABSENT"),
                          "VISIBLE_ONLY_WITH_HOLDER")
         self.assertEqual(trial.classify("ABSENT", "SERVICE_OPEN", "ABSENT", "ABSENT"),
                          "STILL_ABSENT_WITH_HOLDER")
