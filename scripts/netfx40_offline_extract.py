@@ -26,14 +26,14 @@ MAX_BYTES = 200 * 1024 * 1024
 OLE_SIGNATURE = bytes.fromhex("D0CF11E0A1B11AE1")
 MSI_NAME = re.compile(r"(?i)^[a-z0-9_. -]{1,110}\.msi\Z")
 STATUSES = {
-    "EXTRACTED_MSI_CANDIDATES", "NO_MSI_CANDIDATES", "PARTIAL_SCAN",
+    "EXTRACTED_MSI_CANDIDATES", "NO_OLE_MSI_CANDIDATES", "PARTIAL_SCAN",
     "EXTRACTION_NONZERO", "EXTRACTION_TIMEOUT", "EXTRACTION_START_FAILED",
 }
 PROCESS = {"ZERO", "NONZERO", "TIMEOUT", "START_FAILED"}
 
 
 def blank() -> dict:
-    return {"status": "NO_MSI_CANDIDATES", "process": "ZERO",
+    return {"status": "NO_OLE_MSI_CANDIDATES", "process": "ZERO",
             "msi_entries": 0, "ole_msi_candidates": 0,
             "core_x64_ole_candidate": False, "directories_scanned": 0,
             "file_entries_scanned": 0}
@@ -61,8 +61,8 @@ def validate(report: dict) -> bool:
     if process == "ZERO":
         if state == "EXTRACTED_MSI_CANDIDATES":
             return ole > 0
-        if state == "NO_MSI_CANDIDATES":
-            return ole == 0 and n == 0
+        if state == "NO_OLE_MSI_CANDIDATES":
+            return ole == 0
         return state == "PARTIAL_SCAN"
     return {
         "NONZERO": "EXTRACTION_NONZERO",
@@ -130,7 +130,7 @@ def scan(root: Path) -> dict:
         file_entries_scanned=files,
         status=("PARTIAL_SCAN" if incomplete else
                 "EXTRACTED_MSI_CANDIDATES" if ole_count else
-                "NO_MSI_CANDIDATES"),
+                "NO_OLE_MSI_CANDIDATES"),
     )
     return report
 
