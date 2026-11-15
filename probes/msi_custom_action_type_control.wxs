@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="SWCompat MSI Deferred Custom Action Reference"
+           Manufacturer="SWCompat Open Compatibility Research"
+           Version="1.0.0" Scope="perMachine"
+           UpgradeCode="{7E8AA167-FC50-4CF9-B956-32A94301AB8B}">
+    <MediaTemplate EmbedCab="yes"/>
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="SWCompatCustomActionControlDir" Name="SWCompatMsiCustomActionControl">
+        <Component Id="SentinelComponent" Guid="{0AB4690C-486F-4DAF-A5E3-94F31B512FAC}">
+          <File Id="SentinelFile" Source="build/msi_custom_action_control.txt" KeyPath="yes"/>
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="ControlFeature" Level="1">
+      <ComponentRef Id="SentinelComponent"/>
+    </Feature>
+    <!-- Real deferred x64 Type 1 DLL custom action: returns 1603 without
+         registry/service/COM/filesystem side effects. Exact prefix/name
+         matches the original bounded Wine trace filter. -->
+    <Binary Id="SelfAuthoredCustomActionDll" SourceFile="build/msi_custom_action_fail.dll"/>
+    <CustomAction Id="ServiceTypeControlSentinel"
+                  BinaryRef="SelfAuthoredCustomActionDll"
+                  DllEntry="SWCompatIntentionalFailure"
+                  Execute="deferred" Return="check" Impersonate="no"/>
+    <InstallExecuteSequence>
+      <Custom Action="ServiceTypeControlSentinel" After="InstallFiles" Condition="NOT Installed"/>
+    </InstallExecuteSequence>
+  </Package>
+</Wix>
