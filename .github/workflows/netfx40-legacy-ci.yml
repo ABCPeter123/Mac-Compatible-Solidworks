@@ -1,4 +1,4 @@
-name: Original Microsoft .NET 4.0 legacy CLR on Apple Silicon Wine
+name: Original Microsoft .NET 4.0 CLR on Wine Staging A/B
 
 on:
   pull_request:
@@ -13,6 +13,7 @@ on:
       - 'tests/test_netfx40_wine_msi_errors.py'
       - 'tests/test_netfx40_msi_evidence.py'
       - 'docs/NETFX40_INNER_MSI.md'
+      - 'docs/NETFX40_WINE_STAGING_AB.md'
       - 'probes/netfx481_win32_launch.c'
       - 'tests/test_netfx40_legacy.py'
       - 'scripts/netfx481_trial.py'
@@ -131,7 +132,7 @@ jobs:
           retention-days: 1
 
   apple-silicon-native-baseline:
-    name: Check real Microsoft .NET 4.0 CLR deployment under Apple Silicon Wine
+    name: Check genuine Microsoft .NET 4.0 on Apple Silicon Wine Staging 11.21
     needs: [authentic-netfx40-windows, absolute-path-regressions]
     runs-on: macos-15
     timeout-minutes: 35
@@ -148,10 +149,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ARCHIVE="$RUNNER_TEMP/wine-devel-11.21-osx64.tar.xz"
+          # A/B against Wine Development 11.21 on main. The exact
+          # Staging 11.21 archive is already checksum-pinned in SCM CI.
+          ARCHIVE="$RUNNER_TEMP/wine-staging-11.21-osx64.tar.xz"
           curl --fail --location --retry 3 --output "$ARCHIVE" \
-            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-devel-11.21-osx64.tar.xz"
-          echo "9909b486657e10ab66c7279371ae1f990345b596b3b1b3a0cf21f28af24fa0ce  $ARCHIVE" | shasum -a 256 -c -
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-staging-11.21-osx64.tar.xz"
+          echo "d7bcd5abf4df27aae397a7898aef074fea4a2e0b51e0a55aa9659517bbf9d452  $ARCHIVE" | shasum -a 256 -c -
           mkdir -p "$RUNNER_TEMP/wine-build"
           tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-build"
           WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
