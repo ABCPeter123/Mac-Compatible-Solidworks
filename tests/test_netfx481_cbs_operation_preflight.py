@@ -16,6 +16,7 @@ class CbsOperationPreflightTests(unittest.TestCase):
                   '<registryValue name="SECRET"/><file name="SECRET"/></package>')
         report = preflight(raw)
         self.assertEqual(report["target_arch"], "amd64")
+        self.assertEqual(report["root_identity_arch"], "amd64")
         self.assertEqual(report["updates"], 1)
         self.assertEqual(report["parents"], 1)
         self.assertEqual(report["dependencies"], 1)
@@ -26,6 +27,7 @@ class CbsOperationPreflightTests(unittest.TestCase):
     def test_mixed_architecture_is_not_amd64_only(self):
         report = preflight(mum("amd64", '<assemblyIdentity processorArchitecture="x86"/>'))
         self.assertEqual(report["target_arch"], "MIXED")
+        self.assertEqual(report["root_identity_arch"], "amd64")
         self.assertFalse(report["safe_to_apply"])
 
     def test_malformed_dtd_and_wrong_root_are_rejected(self):
@@ -44,6 +46,8 @@ class CbsOperationPreflightTests(unittest.TestCase):
         report = summarize_many([mum("amd64"), mum("x86"), b"bad"])
         self.assertEqual((report["parsed"], report["invalid"]), (2, 1))
         self.assertEqual(report["amd64_only"], 1)
+        self.assertEqual(report["root_amd64"], 1)
+        self.assertEqual(report["root_x86"], 1)
         self.assertFalse(report["safe_to_apply"])
         self.assertNotIn("PRIVATE", str(report))
 
