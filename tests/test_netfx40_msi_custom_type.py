@@ -63,7 +63,7 @@ class OriginalMsiCustomTypeTests(unittest.TestCase):
             (0x112, "EXE_FILE", "ROLLBACK"),
             (0x223, "SET_DIRECTORY", "COMMIT"),
             (0x407, "NESTED_MSI", "DEFERRED"),
-            (0x63, "OTHER_TYPE", "IMMEDIATE"),
+            (0x3f, "OTHER_TYPE", "IMMEDIATE"),
         ]:
             with self.subTest(raw_type=raw_type):
                 raw = (
