@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <winsvc.h>
 #include <stdio.h>
+#include <string.h>
 #include <wchar.h>
 
 static const wchar_t *SERVICE_NAME = L"SWCompatOriginalServiceTest";
