@@ -176,6 +176,25 @@ class Netfx40LegacyTests(unittest.TestCase):
             self.assertFalse(legacy.validate(dict(r, pre_setup_scm_restart="FORGED")))
             self.assertFalse(legacy.validate(dict(r, installer_status="EXIT_CAPTURED")))
 
+    def test_incomplete_trace_candidate_requires_exact_reader_unfinished(self):
+        result = {"status": "EXIT_CAPTURED", "category": "MSI_FATAL_ERROR"}
+        good = {"overflow": False, "lines": 2, "reason": "NONE"}
+        self.assertTrue(legacy._may_store_incomplete_action(True, good, result))
+        partial = {"overflow": True, "lines": 2, "reason": "READER_UNFINISHED"}
+        self.assertTrue(legacy._may_store_incomplete_action(True, partial, result))
+        self.assertFalse(legacy._may_store_incomplete_action(False, partial, result))
+        self.assertFalse(legacy._may_store_incomplete_action(True, partial,
+                          dict(result, category="SUCCESS")))
+        for reason in ("LINE_LIMIT", "BYTE_LIMIT", "PROCESS_INCOMPLETE", "UNKNOWN"):
+            self.assertFalse(legacy._may_store_incomplete_action(
+                True, dict(partial, reason=reason), result))
+        self.assertFalse(legacy._may_store_incomplete_action(
+            True, dict(partial, lines=0), result))
+        self.assertFalse(legacy._may_store_incomplete_action(
+            True, dict(partial, lines=legacy.MAX_RETAINED_LINES), result))
+        self.assertFalse(legacy._may_store_incomplete_action(
+            True, dict(partial, lines=True), result))
+
     def test_rejects_unmarked_prefix(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp)
