@@ -460,6 +460,7 @@ jobs:
             --launcher build/netfx40_win32_launch.exe \
             --output build/netfx40-msxml3-runtime.json \
             --timeout 330 --agree-disposable-prefix \
+            --experiment-extended-setup-wait \
             --experiment-enable-verbose-msi \
             --experiment-restart-after-mono \
             --experiment-trace-custom-action-type \
