@@ -29,6 +29,8 @@ class VerboseMsiLoggingTests(unittest.TestCase):
                 "wine_msi_errors": __import__(
                     "scripts.netfx40_wine_msi_errors", fromlist=["empty"]).empty(),
                 "msi_logging_policy": policy.blank(),
+                "custom_action_type": __import__(
+                    "scripts.netfx40_msi_custom_type", fromlist=["empty"]).empty(),
             })
             args = []
             for key in ("wine", "prefix", "installer", "launcher", "loader", "managed"):
