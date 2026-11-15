@@ -17,7 +17,7 @@ from scripts.netfx40_offline_extract import (
     MAX_MSIS, MSI_NAME, OLE_SIGNATURE,
 )
 from scripts.netfx40_private_action import consume
-from scripts.msi_custom_action_table_type import inspect as query, validate as validate_query
+from scripts.msi_custom_action_table_type import inspect as query, validate_detailed as validate_query
 from scripts.netfx481_trial import validate_prefix
 
 STATES = {
@@ -30,23 +30,34 @@ STATES = {
 def blank() -> dict:
     return {"status": "ACTION_NOT_CAPTURED", "msis_queried": 0,
             "action_matches": 0, "family": "NOT_VERIFIED",
-            "base_type": None}
+            "base_type": None, "execution": "NOT_VERIFIED",
+            "impersonation": "NOT_VERIFIED", "asynchronous": "NOT_VERIFIED",
+            "ts_aware": False}
 
 
 def validate(result: dict) -> bool:
     if type(result) is not dict or set(result) != {
         "status", "msis_queried", "action_matches", "family", "base_type",
+        "execution", "impersonation", "asynchronous", "ts_aware",
     } or result["status"] not in STATES:
         return False
     n, matches = result["msis_queried"], result["action_matches"]
+    if type(result["ts_aware"]) is not bool:
+        return False
     if type(n) is not int or type(matches) is not int or not 0 <= matches <= n <= MAX_MSIS:
         return False
     if result["status"] in {"ACTION_FOUND", "ACTION_FOUND_PARTIAL"}:
-        return (matches == 1 and type(result["base_type"]) is int
+        return (result["execution"] in {"IMMEDIATE", "DEFERRED", "ROLLBACK", "COMMIT"}
+                and result["impersonation"] in {"DEFAULT", "NO_IMPERSONATE"}
+                and result["asynchronous"] in {"SYNCHRONOUS", "ASYNCHRONOUS"}
+                and matches == 1 and type(result["base_type"]) is int
                 and 0 <= result["base_type"] <= 63
                 and type(result["family"]) is str
                 and result["family"] not in {"NOT_VERIFIED", ""})
-    if result["base_type"] is not None or result["family"] != "NOT_VERIFIED":
+    if (result["base_type"] is not None or result["family"] != "NOT_VERIFIED"
+            or any(result[k] != "NOT_VERIFIED" for k in
+                   ("execution", "impersonation", "asynchronous"))
+            or result["ts_aware"] is not False):
         return False
     if result["status"] == "ACTION_NOT_CAPTURED":
         return n == 0 and matches == 0
@@ -134,7 +145,7 @@ def inspect(wine: Path, prefix: Path, helper: Path, installer: Path) -> dict:
     bad = partial
     for package in candidates:
         result = query(wine, prefix, helper, package, action,
-                       allow_original_action=True)
+                       allow_original_action=True, detailed=True)
         if not validate_query(result):
             bad = True
         elif result["status"] == "ACTION_FOUND":
@@ -147,7 +158,11 @@ def inspect(wine: Path, prefix: Path, helper: Path, installer: Path) -> dict:
     if len(hits) == 1:
         return {"status": "ACTION_FOUND_PARTIAL" if bad else "ACTION_FOUND", "msis_queried": len(candidates),
                 "action_matches": 1, "family": hits[0]["family"],
-                "base_type": hits[0]["base_type"]}
+                "base_type": hits[0]["base_type"],
+                "execution": hits[0]["execution"],
+                "impersonation": hits[0]["impersonation"],
+                "asynchronous": hits[0]["asynchronous"],
+                "ts_aware": hits[0]["ts_aware"]}
     return {**blank(), "status": "QUERY_INCOMPLETE" if bad else
             "NOT_FOUND_IN_SCANNED_PACKAGES", "msis_queried": len(candidates),
             "action_matches": len(hits)}
@@ -166,7 +181,8 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("Unsafe original Microsoft MSI metadata report")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, sort_keys=True), encoding="ascii")
-    for field in ("status", "msis_queried", "action_matches", "family", "base_type"):
+    for field in ("status", "msis_queried", "action_matches", "family", "base_type",
+                  "execution", "impersonation", "asynchronous", "ts_aware"):
         print("Original Microsoft MSI action table", field, result[field])
     return 0
 
