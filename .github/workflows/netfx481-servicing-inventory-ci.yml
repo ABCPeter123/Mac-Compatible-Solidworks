@@ -1,0 +1,83 @@
+name: Inventory original Microsoft .NET 4.8.1 servicing payload and CAB manifests
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/netfx481-servicing-inventory-ci.yml'
+      - 'scripts/netfx481_servicing_inventory.py'
+      - 'tests/test_netfx481_servicing_inventory.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify-original-servicing-package:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify strict private-safe package inventory tests
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests -p 'test_netfx481_servicing_inventory.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Authentic servicing package inventory safety tests failed" }
+      - name: Authenticate unchanged original signed Microsoft .NET 4.8.1 installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force build | Out-Null
+          $url = "https://download.microsoft.com/download/4/b/2/cd00d4ed-ebdd-49ee-8a33-eabc3d1030e3/NDP481-x86-x64-AllOS-ENU.exe"
+          $exe = Join-Path (Resolve-Path build) "NDP481-x86-x64-AllOS-ENU.exe"
+          curl.exe --fail --location --retry 3 --max-time 600 --output $exe $url
+          if ($LASTEXITCODE -ne 0) { throw "Original Microsoft setup media download failed" }
+          $item = Get-Item -LiteralPath $exe
+          if ($item.Length -lt 15728640 -or $item.Length -gt 262144000) { throw "Original Microsoft media size unexpected" }
+          $sig = Get-AuthenticodeSignature -LiteralPath $exe
+          if ($sig.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+            throw "Original Microsoft media Authenticode invalid"
+          }
+          if ($null -eq $sig.SignerCertificate -or $sig.SignerCertificate.Subject -notmatch '(^|, )O=Microsoft Corporation(,|$)') {
+            throw "Original Microsoft 4.8.1 signer not verified"
+          }
+          (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant() |
+            Set-Content -LiteralPath build/netfx481.sha256 -NoNewline -Encoding ascii
+          Write-Output "Original Microsoft .NET 4.8.1 signature authenticated"
+      - name: Inspect authentic Microsoft CAB/MSU and nested MUM inventory without installation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $zipCommand = Get-Command 7z.exe -ErrorAction SilentlyContinue
+          if ($zipCommand) {
+            $sevenzip = $zipCommand.Source
+          } else {
+            $sevenzip = Join-Path $env:ProgramFiles "7-Zip\7z.exe"
+          }
+          if (!(Test-Path -LiteralPath $sevenzip)) { throw "Windows runner 7-Zip reference unavailable" }
+          python -m scripts.netfx481_servicing_inventory --installer build/NDP481-x86-x64-AllOS-ENU.exe --sha256-file build/netfx481.sha256 --sevenzip $sevenzip --output build/netfx481-servicing-inventory.json
+          if ($LASTEXITCODE -ne 0) { throw "Original .NET 4.8.1 CAB inventory failed" }
+      - name: Validate allowlisted package and manifest inventory without Microsoft binary artifacts
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $report = "build/netfx481-servicing-inventory.json"
+          if (!(Test-Path $report)) { throw "Original signed .NET 4.8.1 inventory result absent" }
+          python -c 'import json,sys; from pathlib import Path; from scripts.netfx481_servicing_inventory import valid; r=json.loads(Path(sys.argv[1]).read_text()); assert valid(r); assert not r["genuine_servicing_installed"]' $report
+          if ($LASTEXITCODE -ne 0) { throw "Original servicing manifest inventory invalid" }
+          $data = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "## Authenticated original Microsoft .NET 4.8.1 CAB/MSU inventory"
+          foreach ($key in @("outer_status","outer_entries","outer_arch_x64","outer_kb5011048_hint","embedded_candidates","embedded_checked","nested_status","nested_entries","nested_update_mum_hint","genuine_servicing_installed")) {
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "$($key): **$($data.$key)**"
+          }
+          foreach ($kind in @("CAB","MSU","MUM","MANIFEST","MSI","DLL")) {
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "outer_$($kind): **$($data.outer_types.$kind)**"
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "nested_$($kind): **$($data.nested_types.$kind)**"
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: signed-microsoft-netfx481-servicing-allowlisted-inventory
+          path: build/netfx481-servicing-inventory.json
+          if-no-files-found: warn
+          retention-days: 7
