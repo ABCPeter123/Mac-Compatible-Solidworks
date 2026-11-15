@@ -129,6 +129,24 @@ def _run(wine: Path, prefix: Path, fixture: Path, arguments: list[str],
     return result
 
 
+def _may_store_incomplete_action(store_private: bool, state: dict, result: dict) -> bool:
+    """Allow *candidate* MSI table queries from bounded partial evidence.
+
+    A still-open descendant stderr pipe is not the same as a line/byte
+    overflow. This never changes TRUNCATED status to SCANNED or proves
+    installer causality. A known rollback-only action is rejected separately.
+    """
+    return (store_private is True
+            and result.get("status") == "EXIT_CAPTURED"
+            and result.get("category") == "MSI_FATAL_ERROR"
+            and (state == {"overflow": False, "lines": state.get("lines"),
+                           "reason": "NONE"} or
+                 (state.get("overflow") is True
+                  and state.get("reason") == "READER_UNFINISHED"
+                  and type(state.get("lines")) is int
+                  and 0 < state["lines"] < MAX_RETAINED_LINES)))
+
+
 def _run_traced(wine: Path, prefix: Path, fixture: Path,
                 arguments: list[str], *, setup: bool = True, timeout: int = 75,
                 store_private: bool = False) -> dict:
@@ -224,9 +242,7 @@ def _run_traced(wine: Path, prefix: Path, fixture: Path,
     result = parse_win32(raw, code)
     result["wine_msi_errors"] = errors
     result["custom_action_type"] = action_type
-    if (store_private and not state["overflow"]
-            and result["status"] == "EXIT_CAPTURED"
-            and result["category"] == "MSI_FATAL_ERROR"):
+    if _may_store_incomplete_action(store_private, state, result):
         raw_action = _private_failed_action(private)
         normalized = (raw_action.rsplit(b"]", 1)[-1]
                       if raw_action and b"]" in raw_action else raw_action)
