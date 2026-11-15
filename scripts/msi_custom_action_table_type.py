@@ -84,9 +84,46 @@ def validate(report: dict) -> bool:
             and report["family"] == FAMILIES.get(report["base_type"], "OTHER_TYPE"))
 
 
+def _flags(raw: bytes, baseline: dict) -> dict:
+    """Decode Win32 MSI Type bits without returning vendor names or full rows."""
+    unknown = {"execution": "NOT_VERIFIED", "impersonation": "NOT_VERIFIED",
+               "asynchronous": "NOT_VERIFIED", "ts_aware": False}
+    if baseline["status"] != "ACTION_FOUND":
+        return unknown
+    values = [int(m.group(2)) for line in raw.splitlines()
+              if (m := LINE.fullmatch(line.strip())) and m.group(1) == b"TYPE"
+              and m.group(2).isdigit()]
+    if len(values) != 1 or not 0 <= values[0] <= 65535:
+        return unknown
+    value = values[0]
+    execution = ("ROLLBACK" if value & 0x100 else "COMMIT" if value & 0x200
+                 else "DEFERRED" if value & 0x400 else "IMMEDIATE")
+    return {"execution": execution,
+            "impersonation": "NO_IMPERSONATE" if value & 0x800 else "DEFAULT",
+            "asynchronous": "ASYNCHRONOUS" if value & 0x80 else "SYNCHRONOUS",
+            "ts_aware": bool(value & 0x4000)}
+
+
+def validate_detailed(r: dict) -> bool:
+    if type(r) is not dict or set(r) != {
+        "status", "base_type", "family", "stage",
+        "execution", "impersonation", "asynchronous", "ts_aware",
+    }:
+        return False
+    basic = {key: r[key] for key in ("status", "base_type", "family", "stage")}
+    if not validate(basic) or type(r["ts_aware"]) is not bool:
+        return False
+    flags = {key: r[key] for key in ("execution", "impersonation", "asynchronous", "ts_aware")}
+    if r["status"] != "ACTION_FOUND":
+        return flags == _flags(b"", basic)
+    return (r["execution"] in {"IMMEDIATE", "DEFERRED", "ROLLBACK", "COMMIT"}
+            and r["impersonation"] in {"DEFAULT", "NO_IMPERSONATE"}
+            and r["asynchronous"] in {"SYNCHRONOUS", "ASYNCHRONOUS"})
+
+
 def inspect(wine: Path, prefix: Path, probe: Path, msi: Path,
             action: str = "ServiceTypeControlSentinel", *,
-            allow_original_action: bool = False) -> dict:
+            allow_original_action: bool = False, detailed: bool = False) -> dict:
     if os.name == "nt":
         raise ValueError("Use native Windows probe directly")
     if any(p.is_symlink() for p in (wine, prefix, probe, msi)):
@@ -151,7 +188,8 @@ def inspect(wine: Path, prefix: Path, probe: Path, msi: Path,
                 raw = f.read(2049)
         finally:
             status_file.unlink(missing_ok=True)
-    return parse(raw, result.returncode)
+    baseline = parse(raw, result.returncode)
+    return {**baseline, **_flags(raw, baseline)} if detailed else baseline
 
 
 def inspect_selftest(wine: Path, prefix: Path, probe: Path) -> dict:
