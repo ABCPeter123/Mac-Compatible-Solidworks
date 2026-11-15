@@ -218,7 +218,8 @@ jobs:
                                 "nonstandard_name_hint"):
                       f.write(f"wine_msi_{field}: **{r['wine_msi_errors'][field]}**\n\n")
                   for field in ("status", "family", "base_type", "execution",
-                                "impersonation", "asynchronous", "ts_aware"):
+                                "impersonation", "asynchronous", "ts_aware",
+                                "capture_reason"):
                       f.write(f"custom_action_{field}: **{r['custom_action_type'][field]}**\n\n")
                   for field in ("activation", "restoration"):
                       f.write(f"msi_logging_{field}: **{r['msi_logging_policy'][field]}**\n\n")
