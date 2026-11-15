@@ -20,3 +20,12 @@ No original Microsoft MSI, raw Wine output, action names, expanded MSI propertie
 - `FINALIZE_ONLY` or `NOT_IDENTIFIED`: do not invent a first cause. Add the next bounded private-log parser or Win32 fixture before changing Wine.
 
 This experiment is not a SOLIDWORKS installation and does not establish functional .NET Framework or CAD readiness.
+
+
+## Measured result on Wine Staging, November 15, 2026
+
+[Authenticated original Microsoft .NET 4.0 run 43666816258](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43666816258) passed its evidence gates and still returned Windows `MSI_FATAL_ERROR` (1603). Original native Microsoft `clr.dll`/`mscorlib.dll` are ABSENT, the native loader was NOT_FOUND and `candidate_native40=False`. The same private trace contains three `err:msi` lines; exact script-action classification returned `first_failed_action=OTHER_ACTION` and `service_action_failures=[]`.
+
+The prior aggregate Wine class still contains `MSI_ACTION_SERVICE`. **This is not evidence of a failed standard InstallServices or StartServices action.** The older broad classifier matches `installservice`/ `startservice` *substrings* in arbitrary action names. The exact classifier requires canonical full action names, and found none. Do not target a Wine standard service-action implementation based solely on that broad category.
+
+**Next change:** remove the misleading substring-based service classification; distinguish an original nonstandard action name from a genuine built-in MSI action. For nonstandard actions, allow only finite shape/category hints without emitting its raw expanded identifier. Then reproduce the actual failing behavior in a harmless independently authored MSI before proposing compatibility hooks.
