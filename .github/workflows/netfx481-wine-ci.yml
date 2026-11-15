@@ -6,6 +6,8 @@ on:
       - '.github/workflows/netfx481-wine-ci.yml'
       - 'probes/netfx481_runtime_probe.cs'
       - 'scripts/netfx481_trial.py'
+      - 'scripts/netfx40_msxml3_prerequisite.py'
+      - 'tests/test_netfx40_msxml3_prerequisite.py'
       - 'tests/test_netfx481_trial.py'
       - 'scripts/wine_mono_removal.py'
       - 'tests/test_wine_mono_removal.py'
@@ -37,6 +39,11 @@ jobs:
       - name: Validate self-authored framework verification tests
         shell: pwsh
         run: python -m unittest discover -s tests -p 'test_netfx481_trial.py' -v
+      - name: Test real msxml3 prerequisite privacy and failure gates
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests -p 'test_netfx40_msxml3_prerequisite.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "msxml3 compatibility preinstall tests failed" }
       - name: Validate verified Wine Mono MSI uninstall safety tests
         shell: pwsh
         run: python -m unittest discover -s tests -p 'test_wine_mono_removal.py' -v
@@ -314,4 +321,202 @@ jobs:
           assert data["install_os_profile"] == "WIN10_REPORTED"
           assert data["post_restore_os_profile"] == "WIN11_REPORTED"
           assert type(data["post_restore_framework_ready"]) is bool
+          PY
+
+
+  apple-silicon-msxml3-netfx481:
+    name: Try original Microsoft .NET 4.8.1 with msxml3 first on Apple Silicon
+    runs-on: macos-15
+    needs: verify-microsoft
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: signed-netfx481-original-microsoft-runtime
+          path: build
+      - name: Prepare verified Winetricks msxml3 command and cabextract
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install winetricks
+          command -v cabextract >/dev/null
+          winetricks --version | grep -F '20260125'
+          echo "SWCOMPAT_WINETRICKS=$(realpath "$(command -v winetricks)")" >> "$GITHUB_ENV"
+      - name: Verify identical Apple Silicon Wine Development 11.21 as the baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-devel-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-devel-11.21-osx64.tar.xz"
+          echo "9909b486657e10ab66c7279371ae1f990345b596b3b1b3a0cf21f28af24fa0ce  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/netfx481-msxml3-wine"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/netfx481-msxml3-wine"
+          WINE_BIN="$(find "$RUNNER_TEMP/netfx481-msxml3-wine" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Initialize fresh marked prefix with the same Windows 10 setup profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          PREFIX="$RUNNER_TEMP/netfx481-msxml3-prefix"
+          LOGS="$RUNNER_TEMP/netfx481-msxml3-logs"
+          python3 -m swcompat --prefix "$PREFIX" --logs-dir "$LOGS" init
+          touch "$PREFIX/.swcompat-netfx481-disposable"
+          python3 -m swcompat --prefix "$PREFIX" --logs-dir "$LOGS" set-winver win10
+      - name: Install msxml3 before the unchanged original Microsoft 4.8.1 setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx40_msxml3_prerequisite \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx481-msxml3-prefix" \
+            --winetricks "$SWCOMPAT_WINETRICKS" \
+            --output build/netfx481-msxml3-prerequisite.json \
+            --timeout 300 --agree-disposable-prefix
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx40_msxml3_prerequisite import validate
+          r = json.loads(Path("build/netfx481-msxml3-prerequisite.json").read_text())
+          assert validate(r)
+          if (r["status"] == "VERB_SUCCEEDED"
+                  and r["x86_dll_changed"] and r["x64_dll_changed"]):
+              with open(os.environ["GITHUB_ENV"], "a") as f:
+                  f.write("SWCOMPAT_NETFX481_MSXML3_READY=yes\n")
+          PY
+      - name: Restore Windows 10 setup profile after msxml3
+        if: env.SWCOMPAT_NETFX481_MSXML3_READY == 'yes'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat \
+            --prefix "$RUNNER_TEMP/netfx481-msxml3-prefix" \
+            --logs-dir "$RUNNER_TEMP/netfx481-msxml3-logs" set-winver win10
+      - name: Run unchanged authentic Microsoft .NET 4.8.1 installer after msxml3
+        if: env.SWCOMPAT_NETFX481_MSXML3_READY == 'yes'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx481_trial \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx481-msxml3-prefix" \
+            --installer build/NDP481-x86-x64-AllOS-ENU.exe \
+            --sha256-file build/netfx481.sha256 \
+            --probe build/netfx481_runtime_probe.exe \
+            --win32-launcher build/netfx481_win32_launch.exe \
+            --clr-loader build/netfx481_clr_load.exe \
+            --experiment-fusion-builtin \
+            --output build/netfx481-msxml3-experiment.json \
+            --timeout 210 --agree-disposable-prefix \
+            --experiment-clear-false-release \
+            --experiment-clear-wow6432-release \
+            --experiment-remove-wine-mono \
+            --experiment-reboot-after-possible-3010 \
+            --experiment-setup-log
+      - name: Restore Windows 11 profile and test the actual managed runtime
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          PREFIX="$RUNNER_TEMP/netfx481-msxml3-prefix"
+          if [ -f "$PREFIX/.swcompat-netfx481-disposable" ]; then
+            python3 -m swcompat --prefix "$PREFIX" \
+              --logs-dir "$RUNNER_TEMP/netfx481-msxml3-logs" set-winver win11
+            if [ -f build/netfx481-msxml3-experiment.json ]; then
+              python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx481_trial import probe, runtime_ready
+          wine = Path(os.environ["SWCOMPAT_WINE"])
+          prefix = Path(os.environ["RUNNER_TEMP"]) / "netfx481-msxml3-prefix"
+          fixture = Path("build/netfx481_runtime_probe.exe").resolve()
+          status = probe(wine, prefix, fixture)
+          result = Path("build/netfx481-msxml3-experiment.json")
+          data = json.loads(result.read_text(encoding="utf-8"))
+          data["install_os_profile"] = "WIN10_REPORTED"
+          data["post_restore_os_profile"] = "WIN11_REPORTED"
+          data["post_restore_wine11"] = status
+          data["post_restore_framework_ready"] = runtime_ready(status)
+          result.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+          print("Original .NET 4.8.1 after msxml3 Windows 11 managed gate:",
+                data["post_restore_framework_ready"])
+          PY
+            fi
+          fi
+      - name: Report allowlisted prerequisites and original .NET 4.8.1 outcome
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx40_msxml3_prerequisite import validate as pre_valid
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("## Original Microsoft .NET 4.8.1 after native msxml3\n\n")
+              pre = Path("build/netfx481-msxml3-prerequisite.json")
+              if pre.is_file():
+                  r = json.loads(pre.read_text())
+                  assert pre_valid(r)
+                  for k in ("status", "x86_dll_changed", "x64_dll_changed"):
+                      f.write(f"msxml3_{k}: **{r[k]}**\n\n")
+              else:
+                  f.write("msxml3 prerequisite: **NOT_RUN**\n\n")
+              p = Path("build/netfx481-msxml3-experiment.json")
+              if p.is_file():
+                  r = json.loads(p.read_text())
+                  for k in ("install_execution", "clr_dll_load",
+                            "framework_runtime_ready", "native_only_runtime_ready",
+                            "post_restore_framework_ready", "solidworks_compatibility"):
+                      f.write(f"original_netfx481_{k}: **{r.get(k, 'NOT_VERIFIED')}**\n\n")
+                  for k in ("status", "category", "child_lifecycle"):
+                      f.write(f"original_win32_{k}: **{r['win32_launch'][k]}**\n\n")
+                  for k in ("clr_family", "managed", "registry"):
+                      f.write(f"original_after_{k}: **{r['after'][k]}**\n\n")
+              else:
+                  f.write("Original .NET 4.8.1 setup after msxml3: **NOT_RUN**\n\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netfx481-original-after-msxml3-private-safe
+          path: |
+            build/netfx481-msxml3-prerequisite.json
+            build/netfx481-msxml3-experiment.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Require real signed installer measurement without false SOLIDWORKS claims
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.netfx40_msxml3_prerequisite import validate as pre_valid
+          from scripts.netfx481_win32_exit import validate as win32_valid
+          pre = Path("build/netfx481-msxml3-prerequisite.json")
+          assert pre.is_file(), "No msxml3 trial result"
+          p = json.loads(pre.read_text())
+          assert pre_valid(p)
+          runtime = Path("build/netfx481-msxml3-experiment.json")
+          if (p["status"] == "VERB_SUCCEEDED"
+                  and p["x86_dll_changed"] and p["x64_dll_changed"]):
+              assert runtime.is_file(), "Original .NET 4.8.1 trial did not execute"
+          if runtime.is_file():
+              r = json.loads(runtime.read_text())
+              assert r["scope"] == "MICROSOFT_NETFX481_WINE_DISPOSABLE_EXPERIMENT"
+              assert r["media_sha256_verified"] is True
+              assert r["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+              assert r["install_os_profile"] == "WIN10_REPORTED"
+              assert r["post_restore_os_profile"] == "WIN11_REPORTED"
+              assert win32_valid(r["win32_launch"])
+              assert r["win32_launch"]["status"] != "NOT_REQUESTED"
+              assert type(r["native_only_runtime_ready"]) is bool
+              assert type(r["post_restore_framework_ready"]) is bool
+              if r["post_restore_framework_ready"]:
+                  assert r["post_restore_wine11"]["managed"] == "PASS"
           PY
