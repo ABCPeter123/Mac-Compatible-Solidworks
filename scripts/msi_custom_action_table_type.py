@@ -100,11 +100,20 @@ def inspect(wine: Path, prefix: Path, probe: Path, msi: Path,
     if not msi.is_file():
         raise ValueError("Expected original self-authored MSI")
     path = windows_media_path(wine, prefix, msi)
+    # A fixed marker-only file is a fallback when Wine's Win32 console
+    # does not forward stdout. Never store action names or raw MSI data.
+    status_file = prefix / "drive_c" / "windows" / "temp" / "swcompat_ca_table_probe.status"
+    if status_file.is_symlink() or status_file.parent.is_symlink():
+        raise ValueError("Reject linked Win32 status output")
+    status_file.parent.mkdir(parents=True, exist_ok=True)
+    if status_file.exists():
+        status_file.unlink()
+    windows_status = r"C:\windows\temp\swcompat_ca_table_probe.status"
     env = os.environ.copy()
     env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64", "WINEDEBUG": "-all"})
     try:
         result = subprocess.run(
-            [str(wine), str(probe), path], input=action.encode("utf-8"),
+            [str(wine), str(probe), path, windows_status], input=action.encode("utf-8"),
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             env=env, cwd=prefix, timeout=25, check=False,
         )
@@ -112,4 +121,11 @@ def inspect(wine: Path, prefix: Path, probe: Path, msi: Path,
         return {"status": "TIMED_OUT", "base_type": None, "family": "NOT_VERIFIED", "stage": "NOT_OBSERVED"}
     except OSError:
         return {"status": "PROCESS_FAILED", "base_type": None, "family": "NOT_VERIFIED", "stage": "NOT_OBSERVED"}
-    return parse(result.stdout, result.returncode)
+    raw = result.stdout
+    if status_file.is_file() and not status_file.is_symlink():
+        try:
+            with status_file.open("rb") as f:
+                raw = f.read(2049)
+        finally:
+            status_file.unlink(missing_ok=True)
+    return parse(raw, result.returncode)
