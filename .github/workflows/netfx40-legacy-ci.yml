@@ -23,6 +23,9 @@ on:
       - 'scripts/netfx40_windows_extract_reference.py'
       - 'tests/test_netfx40_windows_extract_reference.py'
       - 'scripts/netfx40_original_msi_table.py'
+      - 'scripts/msi_original_binary_imports.py'
+      - 'probes/msi_original_binary_imports.c'
+      - 'tests/test_msi_original_binary_imports.py'
       - 'scripts/netfx40_private_action.py'
       - 'tests/test_netfx40_original_msi_table.py'
       - 'scripts/msi_custom_action_table_type.py'
@@ -81,6 +84,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx40_offline_extract.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_windows_extract_reference.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_original_msi_table.py' -v
+          python -m unittest discover -s tests -p 'test_msi_original_binary_imports.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_wine_msi_errors.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msi_custom_type.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msi_logging_policy.py' -v
@@ -117,6 +121,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx40_windows_extract_reference.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Native Windows /x reference privacy and fixture tests failed" }
           python -m unittest discover -s tests -p 'test_netfx40_original_msi_table.py' -v
+          python -m unittest discover -s tests -p 'test_msi_original_binary_imports.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Private original MSI action lookup tests failed" }
           python -m unittest discover -s tests -p 'test_netfx40_wine_msi_errors.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Wine MSI error evidence regression failed" }
@@ -183,6 +188,20 @@ jobs:
           } finally {
             Remove-Item -LiteralPath $smokeFile -ErrorAction SilentlyContinue
           }
+      - name: Compile read-only original MSI Binary PE import census
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw "MSVC compiler missing for Binary import analysis" }
+          $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+          $lines = @('@echo off', ('call "' + $vcvars + '"'),
+            'cl /nologo /W4 /O2 /MT /DUNICODE /D_UNICODE /Fe:build\msi_original_binary_imports.exe probes\msi_original_binary_imports.c',
+            'exit /b %errorlevel%')
+          [System.IO.File]::WriteAllLines((Join-Path (Get-Location) 'build\compile-original-binary.cmd'), $lines, [System.Text.Encoding]::ASCII)
+          & cmd.exe /d /c build\compile-original-binary.cmd
+          if ($LASTEXITCODE -ne 0 -or !(Test-Path build/msi_original_binary_imports.exe)) { throw "Private original Binary probe compilation failed" }
       - name: Download official Microsoft .NET 4.0 offline installer and validate original Authenticode
         shell: pwsh
         run: |
@@ -241,6 +260,7 @@ jobs:
             build/netfx40_win32_launch.exe
             build/netfx481_win32_launch.exe
             build/msi_custom_action_table_probe.exe
+            build/msi_original_binary_imports.exe
           compression-level: 0
           retention-days: 1
 
@@ -314,6 +334,7 @@ jobs:
             --wine "$SWCOMPAT_WINE" \
             --prefix "$RUNNER_TEMP/netfx40-prefix" \
             --helper build/msi_custom_action_table_probe.exe \
+            --binary-helper build/msi_original_binary_imports.exe \
             --installer build/dotNetFx40_Full_x86_x64.exe \
             --output build/netfx40-original-table.json \
             --agree-disposable-prefix
@@ -365,6 +386,13 @@ jobs:
                       for field in ("status", "msis_queried", "action_matches", "family", "base_type",
                                     "execution", "impersonation", "asynchronous", "ts_aware"):
                           f.write(f"original_msi_table_{field}: **{table[field]}**\n\n")
+                  binary = table["binary_imports"]
+                  from scripts.msi_original_binary_imports import validate as validate_binary
+                  assert validate_binary(binary)
+                  for field in ("status", "machine"):
+                      f.write(f"original_action_binary_{field}: **{binary[field]}**\n\n")
+                  for family, count in binary["imports"].items():
+                      f.write(f"original_action_import_{family}: **{count}**\n\n")
                   original_extract = Path("build/netfx40-original-extract.json")
                   if original_extract.is_file():
                       from scripts.netfx40_offline_extract import validate as validate_extract
