@@ -242,7 +242,7 @@ def validate(r: dict) -> bool:
         )
     if any(r[k] == "NOT_RUN" for k in ("diagnostic_before", "diagnostic_after")):
         return False
-    for state, diagnostic in (
+    for state, diagnostic, detail in (
         ("scm_before", "diagnostic_before", "detail_before"),
         ("scm_while_held", "diagnostic_while_held", "detail_while_held"),
         ("scm_after", "diagnostic_after", "detail_after"),
