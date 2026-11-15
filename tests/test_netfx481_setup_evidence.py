@@ -118,6 +118,8 @@ class NetFxSetupEvidenceTests(unittest.TestCase):
             self.assertEqual(report["status"], "CLASSIFIED")
             self.assertEqual(report["files_scanned"], 3)
             self.assertEqual(report["prerequisite_files"], 2)
+            self.assertEqual(report["stage_scope"], "NOT_REQUESTED")
+            self.assertEqual(report["stage_files"], 0)
             self.assertEqual(report["sources"]["BOOTSTRAPPER_TEMP"], 1)
             self.assertEqual(report["sources"]["FRAMEWORK_SETUP"], 1)
             self.assertEqual(report["sources"]["SERVICING_CBS"], 1)
@@ -202,6 +204,9 @@ class NetFxSetupEvidenceTests(unittest.TestCase):
     def test_prerequisite_census_cannot_be_forged(self):
         report = {
             "status": "CLASSIFIED", "files_scanned": 1, "prerequisite_files": 0,
+            "stage_scope": "NOT_REQUESTED", "stage_files": 0,
+            "stage_prerequisite": {"status": "NOT_REQUESTED", "os_versions": [],
+                                   "blockers": [], "5100_in_log": False},
             "sources": {"BOOTSTRAPPER_TEMP": 1, "FRAMEWORK_SETUP": 0,
                         "SETUP_EVENTS": 0, "SERVICING_CBS": 0},
             "phase": "UNKNOWN", "codes": [],
@@ -215,6 +220,89 @@ class NetFxSetupEvidenceTests(unittest.TestCase):
                                                     blockers=["OS_VERSION_BLOCK"]))):
             self.assertFalse(evidence.validate_secondary_report(tamper))
 
+    def test_stage_delta_separates_old_generic_and_changed_481_logs(self):
+        with tempfile.TemporaryDirectory() as td:
+            prefix = Path(td)
+            (prefix / "drive_c").mkdir()
+            (prefix / "system.reg").write_text("")
+            (prefix / trial.SENTINEL).write_text("")
+            logs = prefix / "drive_c" / "users" / "tester" / "AppData" / "Local" / "Temp"
+            logs.mkdir(parents=True)
+            stale = logs / "dd_old_generic.log"
+            stale.write_bytes(b"OS Version = 6.1.7601\n"
+                              b"Blocked on Windows update KB1111111\n"
+                              b"Final Result: 5100 StopBlock\n")
+            changed = logs / "dd_current_generic.log"
+            changed.write_bytes(b"Original initial data\n")
+            baseline = evidence.snapshot_secondary_logs(prefix)
+            self.assertEqual(len(baseline), 2)
+            self.assertTrue(all(isinstance(path, Path) for path in baseline))
+            changed.write_bytes(b"OS Version = 10.0.19045\n"
+                                b"Insufficient disk space\n"
+                                b"Final Result: 5100 StopBlock\n")
+            fresh = logs / "dd_one_new.log"
+            fresh.write_bytes(b"Windows Update Service is not available\n")
+            result = evidence.scan_secondary_logs(prefix, baseline=baseline)
+            self.assertTrue(evidence.validate_secondary_report(result))
+            self.assertEqual(result["files_scanned"], 3)
+            self.assertEqual(result["stage_scope"], "CAPTURED")
+            self.assertEqual(result["stage_files"], 2)
+            self.assertEqual(result["prerequisite_files"], 0)
+            self.assertEqual(result["prerequisite"]["status"], "NOT_FOUND")
+            self.assertEqual(result["stage_prerequisite"]["os_versions"],
+                             ["WINDOWS_10_SUPPORTED"])
+            self.assertEqual(result["stage_prerequisite"]["blockers"],
+                             ["DISK_SPACE_BLOCK", "WINDOWS_UPDATE_BLOCK"])
+            self.assertTrue(result["stage_prerequisite"]["5100_in_log"])
+            for secret in ("tester", "dd_old_generic", "dd_current_generic", "one_new"):
+                self.assertNotIn(secret, json.dumps(result))
+
+    def test_stage_snapshot_rejects_limits_and_symlink_roots(self):
+        with tempfile.TemporaryDirectory() as td:
+            prefix = Path(td) / "prefix"
+            (prefix / "drive_c").mkdir(parents=True)
+            (prefix / "system.reg").write_text("")
+            (prefix / trial.SENTINEL).write_text("")
+            path = prefix / "drive_c" / "users"
+            path.mkdir()
+            for i in range(evidence.SECONDARY_MAX_FILES + 1):
+                (path / f"dd_test_{i}.log").write_text("private")
+            with self.assertRaises(ValueError):
+                evidence.snapshot_secondary_logs(prefix)
+            for file in path.glob("dd_test*"):
+                file.unlink()
+            external = Path(td) / "external"
+            external.mkdir()
+            path.rmdir()
+            try:
+                path.symlink_to(external)
+            except (OSError, NotImplementedError):
+                self.skipTest("Symlinks unavailable")
+            with self.assertRaises(ValueError):
+                evidence.snapshot_secondary_logs(prefix)
+            self.assertFalse((external / "dd_test_0.log").exists())
+
+    def test_stage_report_rejects_inconsistent_provenance(self):
+        report = evidence.scan_secondary_logs
+        with tempfile.TemporaryDirectory() as td:
+            prefix = Path(td)
+            (prefix / "drive_c").mkdir()
+            (prefix / "system.reg").write_text("")
+            (prefix / trial.SENTINEL).write_text("")
+            baseline = evidence.snapshot_secondary_logs(prefix)
+            valid = report(prefix, baseline=baseline)
+            self.assertTrue(evidence.validate_secondary_report(valid))
+            self.assertEqual(valid["stage_scope"], "CAPTURED")
+            self.assertEqual(valid["stage_prerequisite"]["status"], "NOT_FOUND")
+            for changed in (
+                dict(valid, stage_files=True),
+                dict(valid, stage_files=1),
+                dict(valid, stage_scope="PRIVATE"),
+                dict(valid, stage_prerequisite=dict(valid["stage_prerequisite"],
+                                                    blockers=["OS_VERSION_BLOCK"])),
+            ):
+                self.assertFalse(evidence.validate_secondary_report(changed))
+
     def test_secondary_scan_limits_symlinks_and_missing_source(self):
         with tempfile.TemporaryDirectory() as temp:
             prefix = Path(temp)
@@ -224,6 +312,7 @@ class NetFxSetupEvidenceTests(unittest.TestCase):
             no_files = evidence.scan_secondary_logs(prefix)
             self.assertEqual(no_files["status"], "NOT_FOUND")
             self.assertEqual(no_files["prerequisite_files"], 0)
+            self.assertEqual(no_files["stage_prerequisite"]["status"], "NOT_REQUESTED")
             self.assertEqual(no_files["prerequisite"]["status"], "NOT_FOUND")
             self.assertTrue(evidence.validate_secondary_report(no_files))
             tempdir = prefix / "drive_c" / "users" / "runner" / "Temp"
@@ -243,7 +332,10 @@ class NetFxSetupEvidenceTests(unittest.TestCase):
         before = {"registry": "NOT_FOUND", "managed": "PASS", "clr_family": "MONO"}
         legit = {
             "status": "CLASSIFIED", "files_scanned": 1,
-            "prerequisite_files": 0,
+            "prerequisite_files": 0, "stage_files": 0,
+            "stage_scope": "NOT_REQUESTED",
+            "stage_prerequisite": {"status": "NOT_REQUESTED", "os_versions": [],
+                                   "blockers": [], "5100_in_log": False},
             "sources": {"BOOTSTRAPPER_TEMP": 1, "FRAMEWORK_SETUP": 0,
                         "SETUP_EVENTS": 0, "SERVICING_CBS": 0},
             "phase": "MSI_INSTALL", "codes": ["MSI_FATAL_ERROR"],
