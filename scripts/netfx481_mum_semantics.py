@@ -53,7 +53,16 @@ def valid(r: object) -> bool:
             or ops["parsed"] + ops["invalid"] != ops["documents"]
             or ops["documents"] != r["mums_parsed"]
             or ops["amd64_only"] + ops["mixed_arch"] + ops["other_arch"] != ops["parsed"]
-            or sum(ops["root_" + x] for x in ("amd64", "x86", "arm64", "neutral", "unknown")) != ops["parsed"]):
+            or sum(ops["root_" + x] for x in ("amd64", "x86", "arm64", "neutral", "unknown")) != ops["parsed"]
+            or ops["unsupported_operations"] != sum(ops[k] for k in
+                ("installer_assembly", "custom_information", "security_descriptor",
+                 "other_unsupported"))
+            or any(ops[target] > ops[source] for target, source in (
+                ("root_amd64_updates", "updates"),
+                ("root_amd64_parents", "parents"),
+                ("root_amd64_dependencies", "dependencies"),
+                ("root_amd64_unsupported", "unsupported_operations"),
+            ))):
         return False
     for key in ("mums_seen", "mums_parsed", "mum_with_update",
                 "mum_with_package", "mum_with_dependency"):
@@ -170,8 +179,18 @@ def inspect_cab_mums(sevenzip: Path, archive: Path, destination: Path) -> dict:
                 else:
                     op["other_arch"] += 1
                 for key in ("updates", "parents", "dependencies", "files",
-                            "registry_values", "unsupported_operations"):
+                            "registry_values", "unsupported_operations",
+                            "installer_assembly", "custom_information",
+                            "security_descriptor", "other_unsupported"):
                     op[key] += operation[key]
+                if root_arch == "amd64":
+                    for source, target in (
+                        ("updates", "root_amd64_updates"),
+                        ("parents", "root_amd64_parents"),
+                        ("dependencies", "root_amd64_dependencies"),
+                        ("unsupported_operations", "root_amd64_unsupported"),
+                    ):
+                        op[target] += operation[source]
                 for key in TAGS:
                     result["tags"][key] = min(MAX_ELEMENTS,
                                               result["tags"][key] + parsed["tags"][key])
