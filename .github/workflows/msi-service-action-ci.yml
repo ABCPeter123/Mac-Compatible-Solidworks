@@ -1,0 +1,173 @@
+name: Original MSI InstallServices and StartServices differential on Apple Silicon Wine
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/msi-service-action-ci.yml'
+      - 'probes/msi_service_action_probe.wxs'
+      - 'probes/win_service_smoke.c'
+      - 'scripts/msi_service_action_trial.py'
+      - 'tests/test_msi_service_action_trial.py'
+      - 'docs/MSI_SERVICE_ACTION_DIFFERENTIAL.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-build-and-install:
+    name: Build native original MSI service-start baseline
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test strict self-authored MSI proof requirements
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests -p 'test_msi_service_action_trial.py' -v
+          if ($LASTEXITCODE -ne 0) { throw "Unsafe MSI transaction test gate" }
+      - name: Compile original x64 SCM service and MSI using MSVC and pinned WiX 5
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force build/wix | Out-Null
+          $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (!(Test-Path $vswhere)) { throw 'MSVC locator absent' }
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw 'MSVC toolchain missing' }
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          if (!(Test-Path $vcvars)) { throw 'MSVC environment missing' }
+          $lines = @('@echo off', ('call "' + $vcvars + '"'),
+            'cl /nologo /W4 /O2 /DUNICODE /D_UNICODE /Fe:build\service_smoke.exe probes\win_service_smoke.c advapi32.lib',
+            'exit /b %errorlevel%')
+          [System.IO.File]::WriteAllLines((Join-Path (Get-Location) 'build\compile-original-service.cmd'), $lines, [System.Text.Encoding]::ASCII)
+          & cmd.exe /d /c build\compile-original-service.cmd
+          if ($LASTEXITCODE -ne 0 -or !(Test-Path build/service_smoke.exe)) { throw 'MSVC service compile failed' }
+          dotnet tool install wix --tool-path build/wix --version 5.0.1
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned WiX install failed' }
+          & build/wix/wix.exe build probes/msi_service_action_probe.wxs -arch x64 -o build/swcompat_msi_service_action.msi
+          if ($LASTEXITCODE -ne 0) { throw 'Original service MSI build failed' }
+          (Get-FileHash -LiteralPath build/swcompat_msi_service_action.msi -Algorithm SHA256).Hash.ToLowerInvariant() |
+            Set-Content -LiteralPath build/msi-service.sha256 -NoNewline -Encoding ascii
+      - name: Require native MSI service start, exact service binary and uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $name = 'SWCompatOriginalServiceTest'
+          $binary = Join-Path $env:ProgramFiles 'SWCompatMsiServiceAction\service_smoke.exe'
+          $msi = (Resolve-Path build/swcompat_msi_service_action.msi).Path
+          if ((Get-Service -Name $name -ErrorAction SilentlyContinue) -or (Test-Path $binary)) { throw 'Preexisting original service' }
+          $install = Start-Process msiexec.exe -ArgumentList @('/i', ('"' + $msi + '"'), '/qn', '/norestart') -PassThru -Wait -NoNewWindow
+          if ($install.ExitCode -ne 0) { throw 'Original MSI service install failed' }
+          $svc = Get-Service -Name $name -ErrorAction Stop
+          if ($svc.Status -ne 'Running' -or !(Test-Path $binary)) { throw 'MSI failed to start original service' }
+          $before = [System.IO.File]::ReadAllBytes((Resolve-Path build/service_smoke.exe).Path)
+          $after = [System.IO.File]::ReadAllBytes($binary)
+          if ([Convert]::ToBase64String($before) -cne [Convert]::ToBase64String($after)) { throw 'Original MSI service executable bytes mismatch' }
+          $uninstall = Start-Process msiexec.exe -ArgumentList @('/x', ('"' + $msi + '"'), '/qn', '/norestart') -PassThru -Wait -NoNewWindow
+          if ($uninstall.ExitCode -ne 0) { throw 'Original MSI service uninstall failed' }
+          if ((Get-Service -Name $name -ErrorAction SilentlyContinue) -or (Test-Path $binary)) { throw 'MSI service removal failed' }
+          Write-Output 'Native Windows original MSI service install/start/remove verified'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: self-authored-msi-service-private-transfer
+          path: |
+            build/swcompat_msi_service_action.msi
+            build/msi-service.sha256
+            build/service_smoke.exe
+          retention-days: 1
+
+  apple-silicon-msi:
+    name: Test original MSI service install and start under Apple Silicon Wine
+    runs-on: macos-15
+    needs: windows-build-and-install
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: self-authored-msi-private-ci-transfer
+          path: build
+      - name: Download identical hash-verified Wine 11.21
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-devel-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-devel-11.21-osx64.tar.xz"
+          echo "9909b486657e10ab66c7279371ae1f990345b596b3b1b3a0cf21f28af24fa0ce  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-build"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-build"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-build" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Initialize a brand-new explicitly marked Wine prefix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat --prefix "$RUNNER_TEMP/self-msi-prefix" --logs-dir "$RUNNER_TEMP/self-msi-logs" init
+          touch "$RUNNER_TEMP/self-msi-prefix/.swcompat-netfx481-disposable"
+      - name: Run original self-authored MSI transaction and verify file bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.msi_service_action_trial \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/self-msi-prefix" \
+            --msi build/swcompat_msi_service_action.msi \
+            --sha256 build/msi-service.sha256 \
+            --exe build/service_smoke.exe \
+            --output build/msi-service-action.json \
+            --timeout 150 --agree-disposable-prefix
+      - name: Summarize only fixed self-authored MSI outcomes
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.msi_service_action_trial import validate
+          path = Path("build/msi-service-action.json")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("## Original harmless MSI InstallServices and StartServices on Apple Silicon Wine\n\n")
+              if not path.exists():
+                  f.write("Experiment incomplete; MSI service-start outcome NOT VERIFIED.\n")
+              else:
+                  report = json.loads(path.read_text())
+                  if not validate(report):
+                      raise ValueError("Unsafe MSI transaction report")
+                  for key in ("status", "winver", "service_before", "binary_before",
+                              "msi_process", "binary_after", "service_after",
+                              "msi_service_start_candidate", "dotnet_compatibility",
+                              "solidworks_compatibility"):
+                      f.write(f"{key}: **{report[key]}**\n\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-original-msi-service-status-only
+          path: build/msi-service-action.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Require actual bounded MSI attempt and prohibit false compatibility
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.msi_service_action_trial import validate
+          report = json.loads(Path("build/msi-service-action.json").read_text())
+          assert validate(report)
+          assert report["status"] == "MEASURED"
+          assert report["service_before"] == "ABSENT"
+          assert report["winver"] == "APPLIED"
+          assert report["msi_process"] in {"ZERO", "NONZERO", "TIMEOUT"}
+          assert report["dotnet_compatibility"] is False
+          assert report["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+          PY
