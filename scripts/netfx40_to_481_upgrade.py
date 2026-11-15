@@ -259,6 +259,11 @@ def main(argv: list[str] | None = None) -> int:
         for key in ("status", "phase"):
             print("Genuine Microsoft .NET secondary setup", key, outcome["secondary_evidence"][key])
         print("Genuine Microsoft .NET secondary setup error classes", ",".join(outcome["secondary_evidence"]["codes"]))
+        stopblock = outcome["secondary_evidence"]["prerequisite"]
+        print("Original .NET 4.8.1 secondary prerequisite status", stopblock["status"])
+        print("Original .NET 4.8.1 secondary prerequisite 5100", stopblock["5100_in_log"])
+        print("Original .NET 4.8.1 secondary prerequisite blockers", ",".join(stopblock["blockers"]))
+        print("Original .NET 4.8.1 secondary prerequisite OS classes", ",".join(stopblock["os_versions"]))
     return 0
 
 
