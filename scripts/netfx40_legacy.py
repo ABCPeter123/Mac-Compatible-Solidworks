@@ -27,6 +27,8 @@ from scripts.netfx481_win32_exit import (
     parse as parse_win32, CATEGORIES, CHILD_VALUES, LIFECYCLE_VALUES, EXIT_VALUES,
 )
 from scripts.netfx40_msi_evidence import scan as scan_inner_msi, empty as empty_msi, validate as validate_msi
+from scripts.netfx40_msi_inventory import (scan as scan_msi_inventory,
+    empty as empty_msi_inventory, validate as validate_msi_inventory)
 from scripts.netfx40_msi_custom_type import (parse as parse_custom_type, empty as empty_custom_type,
     relevant as relevant_custom_trace, validate as validate_custom_type,
     MAX_RETAINED_BYTES, MAX_RETAINED_LINES, MAX_LINE_BYTES)
@@ -225,7 +227,8 @@ def _run_traced(wine: Path, prefix: Path, fixture: Path,
 def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
             loader: Path, managed: Path, timeout: int = 210, *,
             enable_verbose_msi: bool = False, refresh_scm_after_mono: bool = False,
-            enable_custom_action_type: bool = False) -> dict:
+            enable_custom_action_type: bool = False,
+            enable_msi_inventory: bool = False) -> dict:
     if os.name == "nt":
         raise ValueError("Wine experiment cannot modify native Windows")
     if any(p.is_symlink() for p in (wine, prefix, installer, launcher, loader, managed)):
@@ -252,6 +255,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
         "installer_child_lifecycle": "NOT_VERIFIED",
         "installer_child_exit": "NOT_VERIFIED",
         "inner_msi": empty_msi(),
+        "msi_inventory": empty_msi_inventory(),
         "wine_msi_errors": empty_wine_msi(),
         "custom_action_type": empty_custom_type(),
         "msi_logging_policy": blank_logging(),
@@ -337,6 +341,10 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
     # Inspect the actual nested MSI failure before reboot can clear TEMP logs.
     # Raw logs NEVER leave this marked disposable prefix.
     report["inner_msi"] = scan_inner_msi(prefix)
+    if enable_msi_inventory:
+        # Run after the unchanged authentic installer exits, before a
+        # reboot can clear TEMP. This is a presence check, NOT MSI identity.
+        report["msi_inventory"] = scan_msi_inventory(prefix)
     report["wine_msi_errors"] = installed.get("wine_msi_errors", empty_wine_msi())
     report["custom_action_type"] = installed.get("custom_action_type", empty_custom_type())
     if installed["status"] == "EXIT_CAPTURED" and installed["category"] == "REBOOT_REQUIRED":
@@ -374,7 +382,7 @@ def validate(r: dict) -> bool:
         and set(r) == {"schema", "scope", "status", "winver", "registry64", "registry32",
                        "mono", "selftest", "installer_status", "installer_exit",
                        "installer_exit_hex", "installer_child_seen",
-                       "installer_child_lifecycle", "installer_child_exit", "inner_msi",
+                       "installer_child_lifecycle", "installer_child_exit", "inner_msi", "msi_inventory",
                        "wine_msi_errors", "custom_action_type", "msi_logging_policy",
                        "pre_setup_scm_restart", "reboot", "clr64_before", "clr64_after",
                        "clr32_before", "clr32_after", "mscorlib64_after",
@@ -391,6 +399,7 @@ def validate(r: dict) -> bool:
         and r["installer_child_lifecycle"] in LIFECYCLE_VALUES
         and r["installer_child_exit"] in EXIT_VALUES
         and validate_msi(r["inner_msi"])
+        and validate_msi_inventory(r["msi_inventory"])
         and validate_wine_msi(r["wine_msi_errors"])
         and validate_custom_type(r["custom_action_type"])
         and validate_logging(r["msi_logging_policy"])
@@ -435,6 +444,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--experiment-enable-verbose-msi", action="store_true")
     p.add_argument("--experiment-restart-after-mono", action="store_true")
     p.add_argument("--experiment-trace-custom-action-type", action="store_true")
+    p.add_argument("--experiment-inventory-retained-msi", action="store_true")
     args = p.parse_args(argv)
     if not 60 <= args.timeout <= 360:
         p.error("Invalid bounded runtime")
@@ -448,7 +458,8 @@ def main(argv: list[str] | None = None) -> int:
                          args.loader, args.managed, args.timeout,
                          enable_verbose_msi=args.experiment_enable_verbose_msi,
                          refresh_scm_after_mono=args.experiment_restart_after_mono,
-                         enable_custom_action_type=args.experiment_trace_custom_action_type)
+                         enable_custom_action_type=args.experiment_trace_custom_action_type,
+                         enable_msi_inventory=args.experiment_inventory_retained_msi)
         if not validate(report):
             raise ValueError("Privacy-safe report invalid")
         args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -465,6 +476,9 @@ def main(argv: list[str] | None = None) -> int:
     for key in ("status", "files_scanned", "msi_files", "primary_source",
                 "msi_result", "first_failed_action_class", "errors", "causality"):
         print("Original .NET 4.0 nested MSI", key, report["inner_msi"][key])
+    for key in ("status", "msi_candidates", "netfx_named_candidates",
+                "directories_checked", "file_entries_checked"):
+        print("Microsoft MSI retained candidate inventory", key, report["msi_inventory"][key])
     for key in ("status", "classes", "msi_error_lines",
                 "first_failed_action", "service_action_failures",
                 "nonstandard_name_hint"):
