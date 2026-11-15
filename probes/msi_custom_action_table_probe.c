@@ -19,6 +19,27 @@ typedef UINT (WINAPI *P_CLOSE_HANDLE)(MSIHANDLE);
 
 static HANDLE diagnostic_file = INVALID_HANDLE_VALUE;
 
+/* A fixed bootstrap breadcrumb independent of argv and stdout. Only
+   categorical statuses are written, never action name / MSI file path. */
+static void bootstrap_mark(int argc, int output_open)
+{
+    HANDLE file = CreateFileW(L"C:\\swcompat_ca_bootstrap.status",
+            GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL, NULL);
+    DWORD written;
+    const char *args = argc == 4 ? "FOUR" : argc == 3 ? "THREE" : "OTHER";
+    const char *output = output_open ? "OPEN" : "UNAVAILABLE";
+    char line[96];
+    if (file == INVALID_HANDLE_VALUE) return;
+    WriteFile(file, "SWCOMPAT_CA_BOOT_ENTRY=YES\r\n", 27, &written, NULL);
+    sprintf_s(line, sizeof(line), "SWCOMPAT_CA_BOOT_ARGC=%s\r\n", args);
+    WriteFile(file, line, lstrlenA(line), &written, NULL);
+    sprintf_s(line, sizeof(line), "SWCOMPAT_CA_BOOT_REPORT=%s\r\n", output);
+    WriteFile(file, line, lstrlenA(line), &written, NULL);
+    FlushFileBuffers(file);
+    CloseHandle(file);
+}
+
 static void emit(const char *line)
 {
     DWORD written = 0;
@@ -79,6 +100,7 @@ int wmain(int argc, wchar_t **argv)
     if ((argc == 3 || argc == 4) && argv[2] && argv[2][0])
         diagnostic_file = CreateFileW(argv[2], GENERIC_WRITE,
                 FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    bootstrap_mark(argc, diagnostic_file != INVALID_HANDLE_VALUE);
     stage("ENTRY");
     /* Self-test proves the same x64 PE/CRT/stdio/Win32 status transport
        works before any Windows Installer API or MSI file is accessed. */
