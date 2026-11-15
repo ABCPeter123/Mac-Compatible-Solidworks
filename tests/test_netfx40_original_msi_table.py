@@ -64,7 +64,11 @@ class OriginalMsiMetadataTests(unittest.TestCase):
                                     return_value={"status": "ACTION_FOUND",
                                                   "base_type": 1,
                                                   "family": "DLL_BINARY",
-                                                  "stage": "ROW_FETCHED"}) as query):
+                                                  "stage": "ROW_FETCHED",
+                                                  "execution": "DEFERRED",
+                                                  "impersonation": "NO_IMPERSONATE",
+                                                  "asynchronous": "SYNCHRONOUS",
+                                                  "ts_aware": True}) as query):
                 private.store(prefix, b"PrivateOriginalAction")
                 result = original.inspect(wine, prefix, helper, installer)
             self.assertEqual(result["status"], "ACTION_FOUND")
@@ -104,7 +108,11 @@ class OriginalMsiMetadataTests(unittest.TestCase):
                                     return_value={"status": "ACTION_FOUND",
                                                   "base_type": 1,
                                                   "family": "DLL_BINARY",
-                                                  "stage": "ROW_FETCHED"})):
+                                                  "stage": "ROW_FETCHED",
+                                                  "execution": "DEFERRED",
+                                                  "impersonation": "NO_IMPERSONATE",
+                                                  "asynchronous": "SYNCHRONOUS",
+                                                  "ts_aware": True})):
                 private.store(prefix, b"PrivateOriginalAction")
                 result = original.inspect(wine, prefix, helper, installer)
             self.assertEqual(result["status"], "MULTIPLE_MATCHES")
@@ -127,7 +135,11 @@ class OriginalMsiMetadataTests(unittest.TestCase):
                                     return_value={"status": "ACTION_FOUND",
                                                   "base_type": 2,
                                                   "family": "EXE_BINARY",
-                                                  "stage": "ROW_FETCHED"})):
+                                                  "stage": "ROW_FETCHED",
+                                                  "execution": "DEFERRED",
+                                                  "impersonation": "NO_IMPERSONATE",
+                                                  "asynchronous": "SYNCHRONOUS",
+                                                  "ts_aware": True})):
                 private.store(prefix, b"PrivateOriginalAction")
                 result = original.inspect(wine, prefix, helper, installer)
             self.assertEqual(result["status"], "ACTION_FOUND_PARTIAL")
@@ -148,7 +160,11 @@ class OriginalMsiMetadataTests(unittest.TestCase):
                                     return_value={"status": "ACTION_ABSENT",
                                                   "base_type": None,
                                                   "family": "NOT_VERIFIED",
-                                                  "stage": "VIEW_EXECUTED"})):
+                                                  "stage": "VIEW_EXECUTED",
+                                                  "execution": "NOT_VERIFIED",
+                                                  "impersonation": "NOT_VERIFIED",
+                                                  "asynchronous": "NOT_VERIFIED",
+                                                  "ts_aware": False})):
                 private.store(prefix, b"PrivateOriginalAction")
                 result = original.inspect(wine, prefix, helper, installer)
             self.assertEqual(result["status"], "NOT_FOUND_IN_SCANNED_PACKAGES")
