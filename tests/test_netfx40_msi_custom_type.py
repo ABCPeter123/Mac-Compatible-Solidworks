@@ -1,5 +1,10 @@
 """Failure-action MSI type correlation must never export original identifiers."""
 import unittest
+import io
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest import mock
+from scripts import netfx40_legacy as legacy
 from scripts import netfx40_msi_custom_type as t
 
 
@@ -83,6 +88,54 @@ class OriginalMsiCustomTypeTests(unittest.TestCase):
         self.assertTrue(t.validate(t.empty()))
         self.assertFalse(t.validate(dict(t.empty(), status="TRACE_MATCHED")))
         self.assertFalse(t.validate(dict(t.empty(), ts_aware=1)))
+
+    def test_private_streaming_original_launcher_does_not_emit_original_action(self):
+        original = (
+            b'0140:trace:msi:ACTION_CustomAction Handling custom action '
+            b'L"ServiceOriginalPrivate" (4c01 L"C:\\Private\\secret.dll" L"private target")\n'
+            b'0140:err:msi:execute_script action L"ServiceOriginalPrivate" returned 1603\n'
+        )
+        proc = mock.Mock()
+        proc.stderr = io.BytesIO(original)
+        proc.wait.return_value = 0
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            fixture = root / "netfx40_win32_launch.exe"
+            fixture.write_bytes(b"synthetic fixture")
+            with (mock.patch.object(legacy, "validate_prefix"),
+                  mock.patch.object(legacy.subprocess, "Popen", return_value=proc) as popen,
+                  mock.patch.object(legacy, "parse_win32", return_value={"status": "EXIT_CAPTURED"})):
+                r = legacy._run_traced(root / "wine", root, fixture, ["SYNTHETIC"], timeout=30)
+            self.assertEqual(r["custom_action_type"]["family"], "DLL_BINARY")
+            self.assertEqual(r["custom_action_type"]["execution"], "DEFERRED")
+            self.assertEqual(r["wine_msi_errors"]["msi_error_lines"], 1)
+            self.assertTrue(t.validate(r["custom_action_type"]))
+            self.assertNotIn("ServiceOriginalPrivate", str(r))
+            self.assertNotIn("secret.dll", str(r))
+            self.assertNotIn("Private", str(r))
+            self.assertIn("trace+msi", popen.call_args.kwargs["env"]["WINEDEBUG"])
+            self.assertEqual(popen.call_args.kwargs["stderr"], legacy.subprocess.PIPE)
+
+    def test_timed_out_original_setup_cannot_assert_custom_action_type(self):
+        original = (
+            b'0140:trace:msi:ACTION_CustomAction Handling custom action L"Secret" '
+            b'(4c01 L"private" L"private")\n'
+            b'0140:err:msi:execute_script action L"Secret" returned 1603\n'
+        )
+        proc = mock.Mock()
+        proc.stderr = io.BytesIO(original)
+        proc.wait.side_effect = [__import__("subprocess").TimeoutExpired("wine", 30), 124]
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            fixture = root / "netfx40_win32_launch.exe"
+            fixture.write_bytes(b"synthetic fixture")
+            with (mock.patch.object(legacy, "validate_prefix"),
+                  mock.patch.object(legacy.subprocess, "Popen", return_value=proc)):
+                r = legacy._run_traced(root / "wine", root, fixture, ["SYNTHETIC"], timeout=30)
+            proc.kill.assert_called_once()
+            self.assertEqual(r["status"], "TIMEOUT")
+            self.assertEqual(r["custom_action_type"], t.empty("CAPTURE_TRUNCATED"))
+            self.assertNotIn("Secret", str(r))
 
     def test_only_allowlisted_bounded_relevant_lines(self):
         self.assertTrue(t.relevant(b'0100:err:msi:execute_script error\n'))
