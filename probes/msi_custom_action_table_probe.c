@@ -59,6 +59,8 @@ int wmain(int argc, wchar_t **argv)
     unsigned char utf8[1408] = {0};
     wchar_t action[352] = {0};
     DWORD read = 0;
+    HANDLE action_input = INVALID_HANDLE_VALUE;
+    HANDLE input_handle = INVALID_HANDLE_VALUE;
     size_t count = 0;
     HMODULE library = NULL;
     MSIHANDLE db = 0, view = 0, param = 0, record = 0;
@@ -85,11 +87,33 @@ int wmain(int argc, wchar_t **argv)
         stage("SELFTEST");
         return result("SELFTEST_OK", 0);
     }
-    if ((argc != 2 && argc != 3) || !argv[1] || !argv[1][0])
+    if ((argc != 2 && argc != 3 && argc != 4) || !argv[1] || !argv[1][0])
         return result("INVALID_ARGUMENT", 0);
-    if (!ReadFile(GetStdHandle(STD_INPUT_HANDLE), utf8,
-                  sizeof(utf8) - 1, &read, NULL) || !read)
-        return result("INVALID_ARGUMENT", 0);
+    if (argc == 4)
+    {
+        /* Read a private fixed file, not a Wine stdin pipe. This is an
+           explicit, opt-in differential only for a marked disposable prefix.
+           No original action names are printed or passed on argv. */
+        if (wcscmp(argv[3], L"--private-file") != 0)
+            return result("INVALID_ARGUMENT", 0);
+        action_input = CreateFileW(
+            L"C:\\windows\\temp\\swcompat_ca_action_private.input",
+            GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL, NULL);
+        if (action_input == INVALID_HANDLE_VALUE)
+            return result("INPUT_UNAVAILABLE", 0);
+        input_handle = action_input;
+    }
+    else
+        input_handle = GetStdHandle(STD_INPUT_HANDLE);
+    if (!ReadFile(input_handle, utf8, sizeof(utf8) - 1, &read, NULL) || !read)
+    {
+        if (action_input != INVALID_HANDLE_VALUE)
+            CloseHandle(action_input);
+        return result("INPUT_UNAVAILABLE", 0);
+    }
+    if (action_input != INVALID_HANDLE_VALUE)
+        CloseHandle(action_input);
     for (count = 0; count < read; ++count)
         if (utf8[count] == '\r' || utf8[count] == '\n' || utf8[count] == '\0')
             break;
