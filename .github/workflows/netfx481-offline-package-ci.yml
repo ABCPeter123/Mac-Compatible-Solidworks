@@ -1,14 +1,7 @@
 name: Analyze original Microsoft .NET 4.8.1 installer package structure
 
+# Original signed package anatomy is stable. Re-run only for a specific new hypothesis.
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/netfx481-offline-package-ci.yml'
-      - 'scripts/netfx481_archive_evidence.py'
-      - 'tests/test_netfx481_archive_evidence.py'
-      - 'scripts/netfx481_nested_cab_evidence.py'
-      - 'tests/test_netfx481_nested_cab_evidence.py'
-      - 'docs/NETFX481_REAL_RUNTIME.md'
   workflow_dispatch:
 
 permissions:
