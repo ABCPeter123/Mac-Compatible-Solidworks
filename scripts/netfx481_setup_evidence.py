@@ -163,6 +163,17 @@ def _source_group(name: str) -> str:
     return "BOOTSTRAPPER_TEMP"
 
 
+def _is_481_log_name(name: str) -> bool:
+    """Require an explicit 4.8.1 source name before attributing a StopBlock.
+
+    Generic dd_, CBS, and NetFxSetupEvents logs may belong to the preceding
+    .NET 4.0 or msxml3 installation. Never merge their blockers into 4.8.1.
+    """
+    lower = name.casefold()
+    return (lower.startswith("microsoft .net framework 4.8.1 setup_")
+            or lower.startswith(("dd_ndp481", "dd_netfx481", "dd_dotnetfx481")))
+
+
 def scan_secondary_logs(prefix: Path) -> dict[str, object]:
     """Bounded local classification of Microsoft logs in a disposable prefix.
 
@@ -191,6 +202,7 @@ def scan_secondary_logs(prefix: Path) -> dict[str, object]:
     errors: set[str] = set()
     phases = {name: 0 for name in sorted(KNOWN_PHASES)}
     scanned = 0
+    prerequisite_files = 0
     prereq_os: set[str] = set()
     prereq_blockers: set[str] = set()
     prereq_5100 = False
@@ -236,13 +248,15 @@ def scan_secondary_logs(prefix: Path) -> dict[str, object]:
                 if len(raw) > SECONDARY_MAX_PER_FILE:
                     partial = True
                     continue
-                prereq = classify_prerequisite_text(raw)
-                if prereq["status"] == "CLASSIFIED":
-                    prereq_os.update(prereq["os_versions"])
-                    prereq_blockers.update(prereq["blockers"])
-                    prereq_5100 = prereq_5100 or prereq["5100_in_log"]
-                else:
-                    partial = True
+                if _is_481_log_name(name):
+                    prereq = classify_prerequisite_text(raw)
+                    if prereq["status"] == "CLASSIFIED":
+                        prerequisite_files += 1
+                        prereq_os.update(prereq["os_versions"])
+                        prereq_blockers.update(prereq["blockers"])
+                        prereq_5100 = prereq_5100 or prereq["5100_in_log"]
+                    else:
+                        partial = True
                 result = classify_text(raw)
                 if result["status"] != "CLASSIFIED":
                     partial = True
@@ -264,21 +278,24 @@ def scan_secondary_logs(prefix: Path) -> dict[str, object]:
     return {
         "status": status,
         "files_scanned": scanned,
+        "prerequisite_files": prerequisite_files,
         "sources": totals,
         "phase": phase,
         "codes": sorted(errors),
         "prerequisite": (
             {"status": "CLASSIFIED", "os_versions": sorted(prereq_os),
              "blockers": sorted(prereq_blockers), "5100_in_log": prereq_5100}
-            if scanned else empty_prerequisite("NOT_FOUND")
+            if prerequisite_files else empty_prerequisite("NOT_FOUND")
         ),
     }
 
 
 def validate_secondary_report(report: dict) -> bool:
-    from scripts.netfx481_prereq_diagnostic import validate as validate_prerequisite
+    from scripts.netfx481_prereq_diagnostic import (
+        validate as validate_prerequisite, empty as empty_prerequisite,
+    )
     if type(report) is not dict or set(report) != {
-            "status", "files_scanned", "sources", "phase", "codes", "prerequisite"}:
+            "status", "files_scanned", "prerequisite_files", "sources", "phase", "codes", "prerequisite"}:
         return False
     if not validate_prerequisite(report["prerequisite"]):
         return False
@@ -286,9 +303,11 @@ def validate_secondary_report(report: dict) -> bool:
     codes = report.get("codes")
     return (
         report.get("status") in SECONDARY_STATUSES
-        and (report["files_scanned"] > 0 or
-             report["prerequisite"]["status"] == "NOT_FOUND")
-        and (report["files_scanned"] == 0 or
+        and type(report["prerequisite_files"]) is int
+        and 0 <= report["prerequisite_files"] <= report["files_scanned"]
+        and (report["prerequisite_files"] > 0 or
+             report["prerequisite"] == empty_prerequisite("NOT_FOUND"))
+        and (report["prerequisite_files"] == 0 or
              report["prerequisite"]["status"] == "CLASSIFIED")
         and report.get("phase") in KNOWN_PHASES
         and isinstance(report.get("files_scanned"), int)

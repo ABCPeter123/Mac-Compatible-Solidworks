@@ -117,6 +117,7 @@ class NetFxSetupEvidenceTests(unittest.TestCase):
             report = evidence.scan_secondary_logs(prefix)
             self.assertEqual(report["status"], "CLASSIFIED")
             self.assertEqual(report["files_scanned"], 3)
+            self.assertEqual(report["prerequisite_files"], 2)
             self.assertEqual(report["sources"]["BOOTSTRAPPER_TEMP"], 1)
             self.assertEqual(report["sources"]["FRAMEWORK_SETUP"], 1)
             self.assertEqual(report["sources"]["SERVICING_CBS"], 1)
@@ -158,6 +159,62 @@ class NetFxSetupEvidenceTests(unittest.TestCase):
             forged["prerequisite"] = dict(outcome["prerequisite"], original_html="LEAK")
             self.assertFalse(evidence.validate_secondary_report(forged))
 
+    def test_prior_setup_failure_never_becomes_481_stopblock(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            prefix = root / "prefix"
+            (prefix / "drive_c").mkdir(parents=True)
+            (prefix / "system.reg").write_text("")
+            (prefix / trial.SENTINEL).write_text("")
+            logs = prefix / "drive_c" / "users" / "runner" / "AppData" / "Local" / "Temp"
+            logs.mkdir(parents=True)
+            previous = (b"OS Version = 6.1.7601\n"
+                        b"Installation Blockers:\n"
+                        b"1.The setup cannot run in compatibility mode.\n"
+                        b"2.A missing update KB1234567 blocks this build.\n"
+                        b"Final Result: failed 5100 StopBlock\n"
+                        b"User path C:\\Users\\private\\old.exe\n")
+            (logs / "dd_dotNetFx40_previous.log").write_bytes(previous)
+            (logs / "NetFxSetupEvents.txt").write_bytes(previous)
+            (logs / "dd_msxml3_previous.log").write_bytes(previous)
+            result = evidence.scan_secondary_logs(prefix)
+            self.assertTrue(evidence.validate_secondary_report(result))
+            self.assertEqual(result["files_scanned"], 3)
+            self.assertEqual(result["prerequisite_files"], 0)
+            self.assertEqual(result["prerequisite"]["status"], "NOT_FOUND")
+            self.assertEqual(result["prerequisite"]["os_versions"], [])
+            self.assertEqual(result["prerequisite"]["blockers"], [])
+            self.assertNotIn("private", json.dumps(result))
+
+            (logs / "dd_ndp481_real.log").write_bytes(
+                b"OS Version = 10.0.19045\n"
+                b"Bytes Needed:[2000] Bytes Available:[1000]\n"
+                b"Final Result: error 5100 StopBlock\n")
+            filtered = evidence.scan_secondary_logs(prefix)
+            self.assertTrue(evidence.validate_secondary_report(filtered))
+            self.assertEqual(filtered["files_scanned"], 4)
+            self.assertEqual(filtered["prerequisite_files"], 1)
+            self.assertEqual(filtered["prerequisite"]["os_versions"], ["WINDOWS_10_SUPPORTED"])
+            self.assertEqual(filtered["prerequisite"]["blockers"], ["DISK_SPACE_BLOCK"])
+            self.assertTrue(filtered["prerequisite"]["5100_in_log"])
+            self.assertNotIn("BELOW_WINDOWS_10", str(filtered))
+
+    def test_prerequisite_census_cannot_be_forged(self):
+        report = {
+            "status": "CLASSIFIED", "files_scanned": 1, "prerequisite_files": 0,
+            "sources": {"BOOTSTRAPPER_TEMP": 1, "FRAMEWORK_SETUP": 0,
+                        "SETUP_EVENTS": 0, "SERVICING_CBS": 0},
+            "phase": "UNKNOWN", "codes": [],
+            "prerequisite": {"status": "NOT_FOUND", "os_versions": [],
+                             "blockers": [], "5100_in_log": False},
+        }
+        self.assertTrue(evidence.validate_secondary_report(report))
+        for tamper in (dict(report, prerequisite_files=2),
+                       dict(report, prerequisite_files=True),
+                       dict(report, prerequisite=dict(report["prerequisite"],
+                                                    blockers=["OS_VERSION_BLOCK"]))):
+            self.assertFalse(evidence.validate_secondary_report(tamper))
+
     def test_secondary_scan_limits_symlinks_and_missing_source(self):
         with tempfile.TemporaryDirectory() as temp:
             prefix = Path(temp)
@@ -166,6 +223,7 @@ class NetFxSetupEvidenceTests(unittest.TestCase):
             (prefix / trial.SENTINEL).write_text("")
             no_files = evidence.scan_secondary_logs(prefix)
             self.assertEqual(no_files["status"], "NOT_FOUND")
+            self.assertEqual(no_files["prerequisite_files"], 0)
             self.assertEqual(no_files["prerequisite"]["status"], "NOT_FOUND")
             self.assertTrue(evidence.validate_secondary_report(no_files))
             tempdir = prefix / "drive_c" / "users" / "runner" / "Temp"
@@ -185,10 +243,11 @@ class NetFxSetupEvidenceTests(unittest.TestCase):
         before = {"registry": "NOT_FOUND", "managed": "PASS", "clr_family": "MONO"}
         legit = {
             "status": "CLASSIFIED", "files_scanned": 1,
+            "prerequisite_files": 0,
             "sources": {"BOOTSTRAPPER_TEMP": 1, "FRAMEWORK_SETUP": 0,
                         "SETUP_EVENTS": 0, "SERVICING_CBS": 0},
             "phase": "MSI_INSTALL", "codes": ["MSI_FATAL_ERROR"],
-            "prerequisite": {"status": "CLASSIFIED", "os_versions": [],
+            "prerequisite": {"status": "NOT_FOUND", "os_versions": [],
                              "blockers": [], "5100_in_log": False},
         }
         result = trial.combine(before, before, "EXIT_NONZERO", 194,
