@@ -346,6 +346,13 @@ jobs:
           coherence = json.loads(Path("build/msi-scm-coherence.json").read_text())
           assert validate_coherence(coherence)
           assert coherence["trial"] in {"MEASURED", "NOT_APPLICABLE"}
+          if (api["trial"] == "MEASURED"
+              and api["installed_binary"] == "PRESENT_MATCH"
+              and api["api_register"] in {"ALREADY_EXISTS", "CREATED"}
+              and api["scm_after_register"] in {"ABSENT", "UNKNOWN"}
+              and api["scm_final"] in {"ABSENT", "UNKNOWN"}
+              and api["registry_final"] == "PRESENT"):
+              assert coherence["trial"] == "MEASURED"
           assert coherence["native_microsoft_clr"] is False
           assert coherence["solidworks_compatibility"] == "NOT_DEMONSTRATED"
           assert report["status"] == "MEASURED"
