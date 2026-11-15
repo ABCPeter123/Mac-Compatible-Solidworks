@@ -54,17 +54,21 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $status = Join-Path $env:windir 'Temp\swcompat-deferred-scm.status'
+          $created = Join-Path $env:windir 'Temp\swcompat-deferred-scm-create.status'
+          $serviceKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\SWCompatDeferredScmEphemeral'
           $marker = Join-Path $env:ProgramFiles 'SWCompatDeferredScmProbe\msi_deferred_scm_marker.txt'
-          if ((Test-Path $status) -or (Test-Path $marker)) { throw "Contaminated native control" }
+          if ((Test-Path $status) -or (Test-Path $created) -or (Test-Path $serviceKey) -or (Test-Path $marker)) { throw "Contaminated native control" }
           $msi = (Resolve-Path build/swcompat_deferred_scm_probe.msi).Path
           try {
             $p = Start-Process msiexec.exe -ArgumentList @('/i', ('"' + $msi + '"'), '/qn', '/norestart') -Wait -PassThru -NoNewWindow
             if ($p.ExitCode -ne 0) { throw "Native deferred SCM action did not complete" }
             if (!(Test-Path $status) -or (Get-Content $status -Raw) -ne 'PASS') { throw "Native deferred SCM query did not PASS" }
+            if (!(Test-Path $created) -or (Get-Content $created -Raw) -ne 'PASS') { throw "Native transient SCM registration failed" }
+            if (Test-Path $serviceKey) { throw "Transient service registry entry was not removed" }
             if (!(Test-Path $marker) -or (Get-Content $marker -Raw) -ne 'SWCOMPAT_DEFERRED_SCM_PROBE') { throw "Native MSI byte marker missing" }
             Write-Output 'Native deferred DLL opens SCM, msiserver and queries its status'
           } finally {
-            Remove-Item -LiteralPath $status -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $status, $created -Force -ErrorAction SilentlyContinue
             $p = Start-Process msiexec.exe -ArgumentList @('/x', ('"' + $msi + '"'), '/qn', '/norestart') -Wait -PassThru -NoNewWindow
           }
       - uses: actions/upload-artifact@v4

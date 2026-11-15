@@ -27,6 +27,7 @@ class DeferredScmTests(unittest.TestCase):
             marker.mkdir(parents=True)
             def run(*args, **kwargs):
                 (folder / p.STATUS_FILE).write_bytes(b"PASS")
+                (folder / p.CREATE_STATUS_FILE).write_bytes(b"PASS")
                 (marker / "msi_deferred_scm_marker.txt").write_bytes(p.MARKER)
                 return subprocess.CompletedProcess(args, 0)
             with mock.patch.object(p, "validate_prefix"), \
@@ -35,10 +36,11 @@ class DeferredScmTests(unittest.TestCase):
                 result = p.inspect(wine, root, msi, sha)
             self.assertTrue(p.valid(result))
             self.assertTrue(result["self_authored_transaction"])
+            self.assertEqual(result["deferred_create"], "PASS")
             self.assertFalse(result["native_microsoft_clr"])
 
     def test_no_success_on_missing_status_or_forged_clr(self):
-        r = dict(process="ZERO", deferred_scm="NO_REPORT", installed_file="PRESENT_MATCH",
+        r = dict(process="ZERO", deferred_scm="NO_REPORT", deferred_create="NO_REPORT", installed_file="PRESENT_MATCH",
                  self_authored_transaction=False, native_microsoft_clr=False,
                  solidworks_compatibility="NOT_DEMONSTRATED")
         self.assertTrue(p.valid(r))
@@ -56,8 +58,11 @@ class DeferredScmTests(unittest.TestCase):
             f = path / p.STATUS_FILE
             f.write_bytes(b"PASS")
             self.assertEqual(p._status(root), "PASS")
+            self.assertEqual(p._status(root, p.CREATE_STATUS_FILE), "NO_REPORT")
             f.write_bytes(b"X" * 256)
             self.assertEqual(p._status(root), "INVALID_REPORT")
+            with self.assertRaises(ValueError):
+                p._status(root, "../PRIVATE")
 
 
 if __name__ == "__main__":
