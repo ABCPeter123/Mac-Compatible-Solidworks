@@ -37,7 +37,8 @@ LAUNCHER_NAME = "netfx40_win32_launch.exe"
 # by Winetricks. Also checked for valid Microsoft Authenticode on Windows.
 OFFICIAL_SHA256 = "65e064258f2e418816b304f646ff9e87af101e4c9552ab064bb74d281c38659f"
 STAGES = {"MEASURED", "ALREADY_NATIVE", "BLOCKED_WINVER", "BLOCKED_REGISTRY",
-          "BLOCKED_MONO_REMOVAL", "BLOCKED_WIN32_SELFTEST", "BLOCKED_MEDIA", "BLOCKED_MSI_LOGGING"}
+          "BLOCKED_MONO_REMOVAL", "BLOCKED_WIN32_SELFTEST", "BLOCKED_MEDIA", "BLOCKED_MSI_LOGGING",
+          "BLOCKED_SCM_RESTART"}
 STATES_START = {"NOT_RUN", "EXIT_CAPTURED", "START_FAILED", "TIMEOUT", "BAD_REPORT",
                 "INVALID_ARGUMENT", "WAIT_FAILED", "PROCESS_FAILED"}
 MONO_STATES = {"NOT_RUN", "REMOVED", "MONO_NOT_REGISTERED", "INVENTORY_FAILED",
@@ -122,7 +123,7 @@ def _run(wine: Path, prefix: Path, fixture: Path, arguments: list[str],
 
 def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
             loader: Path, managed: Path, timeout: int = 210, *,
-            enable_verbose_msi: bool = False) -> dict:
+            enable_verbose_msi: bool = False, refresh_scm_after_mono: bool = False) -> dict:
     if os.name == "nt":
         raise ValueError("Wine experiment cannot modify native Windows")
     if any(p.is_symlink() for p in (wine, prefix, installer, launcher, loader, managed)):
@@ -151,6 +152,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
         "inner_msi": empty_msi(),
         "wine_msi_errors": empty_wine_msi(),
         "msi_logging_policy": blank_logging(),
+        "pre_setup_scm_restart": "NOT_REQUESTED",
         "reboot": "NOT_RUN",
         "clr64_before": disk_before["CLR64"][0],
         "clr64_after": disk_before["CLR64"][0],
@@ -190,6 +192,14 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
             return report
     else:
         report["mono"] = "MONO_NOT_REGISTERED"
+    if refresh_scm_after_mono:
+        # The original SCM MSI differential showed Wine's service database
+        # can rehydrate after a bounded restart; test that between *separate*
+        # native Microsoft prerequisite stages without modifying their bytes.
+        report["pre_setup_scm_restart"] = wineboot_restart(wine, prefix)
+        if report["pre_setup_scm_restart"] != "COMPLETED":
+            report["status"] = "BLOCKED_SCM_RESTART"
+            return report
     pre = _run(wine, prefix, launcher, ["--selftest-3010"], timeout=65)
     report["selftest"] = ("PASS" if pre["status"] == "EXIT_CAPTURED"
                           and pre["exit_hex"] == "00000BC2" else
@@ -261,7 +271,7 @@ def validate(r: dict) -> bool:
                        "installer_exit_hex", "installer_child_seen",
                        "installer_child_lifecycle", "installer_child_exit", "inner_msi",
                        "wine_msi_errors", "msi_logging_policy",
-                       "reboot", "clr64_before", "clr64_after",
+                       "pre_setup_scm_restart", "reboot", "clr64_before", "clr64_after",
                        "clr32_before", "clr32_after", "mscorlib64_after",
                        "native_loader", "runtime_family", "managed_functionality",
                        "candidate_native40", "netfx481_ready", "solidworks_compatibility"}
@@ -278,6 +288,11 @@ def validate(r: dict) -> bool:
         and validate_msi(r["inner_msi"])
         and validate_wine_msi(r["wine_msi_errors"])
         and validate_logging(r["msi_logging_policy"])
+        and r["pre_setup_scm_restart"] in {
+            "NOT_REQUESTED", "COMPLETED", "TIMED_OUT", "START_FAILED", "EXIT_NONZERO"
+        }
+        and (r["installer_status"] == "NOT_RUN"
+             or r["pre_setup_scm_restart"] in {"NOT_REQUESTED", "COMPLETED"})
         and (r["installer_status"] != "EXIT_CAPTURED" or
              ((r["installer_child_seen"] == "OBSERVED" and
                r["installer_child_lifecycle"] in {"ALL_EXITED", "PARTIAL", "STILL_ACTIVE"})
@@ -312,6 +327,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--timeout", type=int, default=210)
     p.add_argument("--agree-disposable-prefix", action="store_true", required=True)
     p.add_argument("--experiment-enable-verbose-msi", action="store_true")
+    p.add_argument("--experiment-restart-after-mono", action="store_true")
     args = p.parse_args(argv)
     if not 60 <= args.timeout <= 360:
         p.error("Invalid bounded runtime")
@@ -323,7 +339,8 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("Output cannot overwrite experiment")
         report = inspect(args.wine, args.prefix, args.installer, args.launcher,
                          args.loader, args.managed, args.timeout,
-                         enable_verbose_msi=args.experiment_enable_verbose_msi)
+                         enable_verbose_msi=args.experiment_enable_verbose_msi,
+                         refresh_scm_after_mono=args.experiment_restart_after_mono)
         if not validate(report):
             raise ValueError("Privacy-safe report invalid")
         args.output.parent.mkdir(parents=True, exist_ok=True)

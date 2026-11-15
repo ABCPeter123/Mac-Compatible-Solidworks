@@ -103,10 +103,14 @@ class Netfx40LegacyTests(unittest.TestCase):
                                   return_value={"clr_family": "MICROSOFT_CLR_CANDIDATE",
                                                 "managed": "PASS"}),
                 mock.patch.object(legacy, "clr_load", return_value="LOADED"),
+                mock.patch.object(legacy, "wineboot_restart", return_value="COMPLETED") as restart,
             ):
                 result = legacy.inspect(
                     *(Path(os.path.relpath(p, Path.cwd()))
-                      for p in (wine, prefix, *paths)))
+                      for p in (wine, prefix, *paths)),
+                    refresh_scm_after_mono=True)
+            restart.assert_called_once()
+            self.assertEqual(result["pre_setup_scm_restart"], "COMPLETED")
             self.assertTrue(legacy.validate(result))
             self.assertEqual(result["installer_exit"], "SUCCESS")
             self.assertEqual(result["installer_child_seen"], "OBSERVED")
@@ -135,6 +139,42 @@ class Netfx40LegacyTests(unittest.TestCase):
                 changed[key] = illegal
                 with self.subTest(key=key):
                     self.assertFalse(legacy.validate(changed))
+
+    @unittest.skipIf(os.name == "nt", "Only marked disposable Wine prefixes")
+    def test_failed_scm_refresh_blocks_original_microsoft_setup(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            prefix = root / "prefix"
+            (prefix / "drive_c").mkdir(parents=True)
+            (prefix / "system.reg").touch()
+            (prefix / ".swcompat-netfx481-disposable").touch()
+            wine = root / "wine"; wine.write_bytes(b"mock"); wine.chmod(0o700)
+            exe = root / "dotNetFx40_Full_x86_x64.exe"
+            launcher = root / "netfx40_win32_launch.exe"
+            loader = root / "netfx481_clr_load.exe"
+            managed = root / "netfx481_runtime_probe.exe"
+            for item in (exe, launcher, loader, managed):
+                item.write_bytes(b"fixture")
+            absent = {key: ("ABSENT", None) for key in ITEMS}
+            with (
+                mock.patch.object(legacy, "verify_media"),
+                mock.patch.object(legacy, "snapshot", return_value=absent),
+                mock.patch.object(legacy, "set_legacy_winver", return_value="APPLIED"),
+                mock.patch.object(legacy, "clear_unbacked_release", return_value="NOT_NEEDED"),
+                mock.patch.object(legacy, "inventory", return_value=()),
+                mock.patch.object(legacy, "wineboot_restart", return_value="TIMED_OUT") as restart,
+                mock.patch.object(legacy, "_run") as original,
+            ):
+                r = legacy.inspect(wine, prefix, exe, launcher, loader, managed,
+                                   refresh_scm_after_mono=True)
+                restart.assert_called_once()
+                original.assert_not_called()
+            self.assertEqual(r["status"], "BLOCKED_SCM_RESTART")
+            self.assertEqual(r["installer_status"], "NOT_RUN")
+            self.assertEqual(r["pre_setup_scm_restart"], "TIMED_OUT")
+            self.assertTrue(legacy.validate(r))
+            self.assertFalse(legacy.validate(dict(r, pre_setup_scm_restart="FORGED")))
+            self.assertFalse(legacy.validate(dict(r, installer_status="EXIT_CAPTURED")))
 
     def test_rejects_unmarked_prefix(self):
         with tempfile.TemporaryDirectory() as temp:
