@@ -29,6 +29,15 @@ class OriginalMsiActionTableTests(unittest.TestCase):
         self.assertEqual(stopped["status"], "BAD_EXIT")
         self.assertEqual(stopped["stage"], "INPUT_OK")
         self.assertTrue(table.validate(stopped))
+        dll_missing = table.parse(
+            b"SWCOMPAT_CA_TABLE_STAGE=ENTRY\n"
+            b"SWCOMPAT_CA_TABLE_STAGE=INPUT_OK\n"
+            b"SWCOMPAT_CA_TABLE_STATUS=MSI_DLL_UNAVAILABLE\n"
+            b"SWCOMPAT_CA_TABLE_TYPE=0\n", 0)
+        self.assertEqual(dll_missing["status"], "MSI_DLL_UNAVAILABLE")
+        self.assertEqual(dll_missing["stage"], "INPUT_OK")
+        self.assertTrue(table.validate(dll_missing))
+
         self.assertFalse(table.validate(dict(stopped, stage="PRIVATE_PATH")))
 
         self.assertEqual(table.parse(found.replace(b"3073", b"999999"), 0)["status"],
