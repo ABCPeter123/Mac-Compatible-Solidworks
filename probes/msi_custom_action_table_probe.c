@@ -8,6 +8,12 @@
 #include <msiquery.h>
 #include <stdio.h>
 
+static void stage(const char *phase)
+{
+    printf("SWCOMPAT_CA_TABLE_STAGE=%s\n", phase);
+    fflush(stdout);
+}
+
 static int result(const char *status, unsigned int type)
 {
     printf("SWCOMPAT_CA_TABLE_STATUS=%s\n", status);
@@ -24,6 +30,7 @@ int wmain(int argc, wchar_t **argv)
     MSIHANDLE db = 0, view = 0, param = 0, record = 0;
     UINT rc = 0;
     int type = MSI_NULL_INTEGER;
+    stage("ENTRY");
     if (argc != 2 || !argv[1] || !argv[1][0])
         return result("INVALID_ARGUMENT", 0);
     if (!ReadFile(GetStdHandle(STD_INPUT_HANDLE), utf8,
@@ -38,8 +45,10 @@ int wmain(int argc, wchar_t **argv)
     if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
                              (const char *)utf8, -1, action, 352))
         return result("INVALID_ARGUMENT", 0);
+    stage("INPUT_OK");
     rc = MsiOpenDatabaseW(argv[1], MSIDBOPEN_READONLY, &db);
     if (rc != ERROR_SUCCESS) return result("DATABASE_UNAVAILABLE", 0);
+    stage("DATABASE_OPEN");
     rc = MsiDatabaseOpenViewW(db,
             L"SELECT `Type` FROM `CustomAction` WHERE `Action` = ?", &view);
     if (rc != ERROR_SUCCESS)
@@ -47,6 +56,7 @@ int wmain(int argc, wchar_t **argv)
         MsiCloseHandle(db);
         return result("TABLE_UNAVAILABLE", 0);
     }
+    stage("VIEW_OPEN");
     param = MsiCreateRecord(1);
     if (!param || MsiRecordSetStringW(param, 1, action) != ERROR_SUCCESS)
     {
@@ -55,6 +65,7 @@ int wmain(int argc, wchar_t **argv)
         MsiCloseHandle(db);
         return result("QUERY_FAILED", 0);
     }
+    stage("PARAMETER_SET");
     rc = MsiViewExecute(view, param);
     if (rc != ERROR_SUCCESS)
     {
@@ -63,6 +74,7 @@ int wmain(int argc, wchar_t **argv)
         MsiCloseHandle(db);
         return result("QUERY_FAILED", 0);
     }
+    stage("VIEW_EXECUTED");
     rc = MsiViewFetch(view, &record);
     if (rc == ERROR_NO_MORE_ITEMS)
     {
@@ -80,6 +92,7 @@ int wmain(int argc, wchar_t **argv)
         MsiCloseHandle(db);
         return result("QUERY_FAILED", 0);
     }
+    stage("ROW_FETCHED");
     type = MsiRecordGetInteger(record, 1);
     MsiCloseHandle(record);
     MsiViewClose(view);
