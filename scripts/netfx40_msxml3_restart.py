@@ -13,17 +13,12 @@ from pathlib import Path
 from scripts.netfx40_legacy import validate as validate_original
 from scripts.netfx481_payload_audit import snapshot
 from scripts.netfx481_trial import validate_prefix, wineboot_restart, probe
-from scripts.netfx481_clr_load import run as clr_load
+from scripts.netfx481_clr_load import run as clr_load, STATUSES as LOAD_STATES
 
 STATUSES = {"NOT_ELIGIBLE", "RESTART_COMPLETED", "RESTART_FAILED"}
 RESTARTS = {"NOT_RUN", "COMPLETED", "TIMED_OUT", "START_FAILED", "EXIT_NONZERO"}
 STATES = {"NOT_VERIFIED", "ABSENT", "PE_AMD64", "PE_I386", "PE_OTHER",
           "NOT_PE", "LINKED", "IO_ERROR", "INVALID_SIZE"}
-LOADER = {"NOT_VERIFIED", "LOADED", "NOT_FOUND", "LOAD_FAILED", "BAD_REPORT",
-          "PROCESS_FAILED", "TIMEOUT", "INVALID_ARGUMENT", "ENTRY_MISSING",
-          "WRONG_RUNTIME", "NOT_PE", "NOT_NATIVE", "NOT_STARTED"}
-
-
 def blank() -> dict:
     return {"status": "NOT_ELIGIBLE", "restart": "NOT_RUN",
             "clr64": "NOT_VERIFIED", "mscorlib64": "NOT_VERIFIED",
@@ -37,7 +32,7 @@ def validate(r: dict) -> bool:
         return False
     if (r["status"] not in STATUSES or r["restart"] not in RESTARTS
             or r["clr64"] not in STATES or r["mscorlib64"] not in STATES
-            or not isinstance(r["native_loader"], str)
+            or r["native_loader"] not in (LOAD_STATES | {"NOT_VERIFIED"})
             or r["runtime_family"] not in {
                 "NOT_VERIFIED", "UNKNOWN", "MONO", "MICROSOFT_CLR_CANDIDATE"}
             or r["managed"] not in {"NOT_VERIFIED", "PASS", "FAIL"}
