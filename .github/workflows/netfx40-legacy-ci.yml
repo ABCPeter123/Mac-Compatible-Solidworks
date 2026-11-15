@@ -345,7 +345,11 @@ jobs:
                       f.write(f"{field}: **{r[field]}**\n\n")
                   for field in ("status", "classes", "msi_error_lines",
                                 "first_failed_action", "service_action_failures",
-                                "nonstandard_name_hint"):
+                                "nonstandard_name_hint",
+                                "first_failed_script_phase",
+                                "first_install_failed_action",
+                                "install_script_failures",
+                                "rollback_script_failures"):
                       f.write(f"wine_msi_{field}: **{r['wine_msi_errors'][field]}**\n\n")
                   for field in ("status", "family", "base_type", "execution",
                                 "impersonation", "asynchronous", "ts_aware",
