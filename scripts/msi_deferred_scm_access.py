@@ -18,29 +18,38 @@ from swcompat.wine_paths import windows_media_path
 MSI_NAME = "swcompat_deferred_scm_probe.msi"
 MARKER = b"SWCOMPAT_DEFERRED_SCM_PROBE"
 STATUS_FILE = "swcompat-deferred-scm.status"
+CREATE_STATUS_FILE = "swcompat-deferred-scm-create.status"
 STATES = {"PASS", "MANAGER_FAILED", "SERVICE_FAILED", "QUERY_FAILED", "NO_REPORT", "INVALID_REPORT"}
+CREATE_STATES = {"PASS", "CREATE_MANAGER_FAILED", "CREATE_PATH_FAILED",
+                 "CREATE_FAILED", "CONFIG_FAILED", "QUERY_FAILED", "DELETE_FAILED",
+                 "NO_REPORT", "INVALID_REPORT"}
 PROCESSES = {"ZERO", "NONZERO", "TIMED_OUT", "START_FAILED"}
 
 
 def valid(result: dict) -> bool:
     return (type(result) is dict
-            and set(result) == {"process", "deferred_scm", "installed_file",
+            and set(result) == {"process", "deferred_scm", "deferred_create", "installed_file",
                                 "self_authored_transaction", "native_microsoft_clr",
                                 "solidworks_compatibility"}
             and result["process"] in PROCESSES
             and result["deferred_scm"] in STATES
+            and result["deferred_create"] in CREATE_STATES
             and result["installed_file"] in {"ABSENT", "PRESENT_MATCH", "PRESENT_DIFFERENT"}
             and type(result["self_authored_transaction"]) is bool
             and result["self_authored_transaction"] ==
                 (result["process"] == "ZERO" and result["deferred_scm"] == "PASS"
+                 and result["deferred_create"] == "PASS"
                  and result["installed_file"] == "PRESENT_MATCH")
             and result["native_microsoft_clr"] is False
             and result["solidworks_compatibility"] == "NOT_DEMONSTRATED")
 
 
-def _status(prefix: Path) -> str:
+def _status(prefix: Path, filename: str = STATUS_FILE) -> str:
+    if filename not in {STATUS_FILE, CREATE_STATUS_FILE}:
+        raise ValueError("Unsupported fixed status path")
+    allowed = STATES if filename == STATUS_FILE else CREATE_STATES
     for name in ("Temp", "temp"):
-        path = prefix / "drive_c" / "windows" / name / STATUS_FILE
+        path = prefix / "drive_c" / "windows" / name / filename
         if path.is_symlink():
             return "INVALID_REPORT"
         if not path.is_file():
@@ -55,7 +64,7 @@ def _status(prefix: Path) -> str:
             state = raw.decode("ascii")
         except UnicodeDecodeError:
             return "INVALID_REPORT"
-        return state if state in STATES - {"NO_REPORT", "INVALID_REPORT"} else "INVALID_REPORT"
+        return state if state in allowed - {"NO_REPORT", "INVALID_REPORT"} else "INVALID_REPORT"
     return "NO_REPORT"
 
 
@@ -92,7 +101,9 @@ def inspect(wine: Path, prefix: Path, msi: Path, sha: Path, timeout: int = 120) 
             h.update(chunk)
     if h.hexdigest() != expected:
         raise ValueError("Fixture digest does not match Windows reference")
-    if _status(prefix) != "NO_REPORT" or _marker(prefix) != "ABSENT":
+    if (_status(prefix) != "NO_REPORT"
+            or _status(prefix, CREATE_STATUS_FILE) != "NO_REPORT"
+            or _marker(prefix) != "ABSENT"):
         raise ValueError("Probe evidence must not preexist")
     path = windows_media_path(wine, prefix, msi)
     env = {**os.environ, "WINEPREFIX": str(prefix), "WINEARCH": "win64",
@@ -108,11 +119,13 @@ def inspect(wine: Path, prefix: Path, msi: Path, sha: Path, timeout: int = 120) 
     except OSError:
         process = "START_FAILED"
     report = {"process": process, "deferred_scm": _status(prefix),
+              "deferred_create": _status(prefix, CREATE_STATUS_FILE),
               "installed_file": _marker(prefix),
               "native_microsoft_clr": False,
               "solidworks_compatibility": "NOT_DEMONSTRATED"}
     report["self_authored_transaction"] = (
         report["process"] == "ZERO" and report["deferred_scm"] == "PASS"
+        and report["deferred_create"] == "PASS"
         and report["installed_file"] == "PRESENT_MATCH")
     assert valid(report)
     return report
