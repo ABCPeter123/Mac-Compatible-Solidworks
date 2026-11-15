@@ -27,7 +27,9 @@ class OriginalPrerequisiteTests(unittest.TestCase):
     def test_modern_19045_and_22621_are_supported_but_not_installed(self):
         for version, expected in (
             ("10.0.19045", "WINDOWS_10_SUPPORTED"),
-            ("10.0.22621", "WINDOWS_11_SUPPORTED"),
+            ("10.0.22000", "WINDOWS_11_21H2_INSTALLABLE"),
+            ("10.0.22621", "WINDOWS_11_22H2_PLUS_INBOX_481"),
+            ("10.0.26100", "WINDOWS_11_22H2_PLUS_INBOX_481"),
             ("10.0.18362", "WINDOWS_10_TOO_OLD"),
         ):
             with self.subTest(version=version):
@@ -35,6 +37,17 @@ class OriginalPrerequisiteTests(unittest.TestCase):
                 self.assertEqual(report["os_versions"], [expected])
                 self.assertEqual(report["blockers"], [])
                 self.assertFalse(report["5100_in_log"])
+
+    def test_os_version_band_alone_never_asserts_prerequisite_root_cause(self):
+        for build in ("22000", "22621", "26100"):
+            raw = ("OS Version = 10.0." + build + "\n"
+                   "Error: blocked, result 5100\n"
+                   "Private path=C:\\\\Users\\\\secret\n").encode()
+            report = classify_text(raw)
+            self.assertTrue(validate(report))
+            self.assertIn("UNKNOWN_PREREQUISITE", report["blockers"])
+            self.assertTrue(report["5100_in_log"])
+            self.assertNotIn("secret", str(report))
 
     def test_prerequisite_taxonomy_has_no_log_text(self):
         report = classify_text(
