@@ -11,20 +11,17 @@ from pathlib import Path
 import subprocess
 from scripts.netfx481_trial import validate_prefix, verify_media, probe, wineboot_restart
 from scripts.netfx481_payload_audit import snapshot, compare
-from scripts.netfx481_clr_load import run as load_clr
+from scripts.netfx481_clr_load import run as load_clr, STATUSES as LOAD_STATES
 from scripts.netfx481_win32_exit import launch, blank as blank_launch, validate as valid_launch
 
 STATES = {"VERB_FAILED", "VERB_TIMED_OUT", "VERB_START_FAILED",
           "PREREQUISITE_NOT_READY", "MEASURED"}
 UPGRADE = {"NOT_RUN", "COMPLETED", "TIMED_OUT", "START_FAILED", "EXIT_NONZERO",
-           "SKIPPED_CHILD_UNVERIFIED"}
+           "SKIPPED_CHILD_UNVERIFIED", "WINEBOOT_MISSING"}
 FILE_STATES = {"NOT_VERIFIED", "ABSENT", "PE_AMD64", "PE_I386",
                "PE_OTHER", "NOT_PE", "LINKED", "IO_ERROR", "INVALID_SIZE"}
 CHANGE = {"NOT_VERIFIED", "CREATED", "REMOVED", "CHANGED", "UNCHANGED", "UNVERIFIED"}
-LOADER = {"NOT_VERIFIED", "LOADED", "NOT_FOUND", "LOAD_FAILED", "BAD_REPORT",
-          "PROCESS_FAILED", "TIMEOUT", "INVALID_ARGUMENT", "ENTRY_MISSING",
-          "WRONG_RUNTIME", "NOT_PE", "NOT_NATIVE", "NOT_STARTED", "EXIT_NONZERO",
-          "BAD_EXECUTABLE", "NOT_REQUESTED"}
+LOADER = LOAD_STATES | {"NOT_VERIFIED"}
 FAMILY = {"NOT_VERIFIED", "MONO", "UNKNOWN", "MICROSOFT_CLR_CANDIDATE"}
 REG = {"NOT_VERIFIED", "NOT_FOUND", "BELOW_481", "AT_LEAST_481", "UNAVAILABLE"}
 
