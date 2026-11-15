@@ -120,7 +120,7 @@ class OriginalMsiCustomTypeTests(unittest.TestCase):
     def test_opt_in_private_store_never_enters_result(self):
         original = (
             b'0140:err:msi:execute_script action '
-            b'L"[DATA<=>S-1-5<=>P]ServicePrivateReference" returned 1603\\n'
+            b'L"[DATA<=>S-1-5<=>P]ServicePrivateReference" returned 1603\n'
         )
         proc = mock.Mock()
         proc.stderr = io.BytesIO(original)
