@@ -1,0 +1,77 @@
+name: Inspect authenticated Microsoft .NET 4.8.1 original embedded manifest
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/netfx481-original-manifest-ci.yml'
+      - 'probes/netfx481_original_manifest.c'
+      - 'probes/winver_481_win10.manifest'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  authenticate-and-inspect:
+    name: Authenticate .NET 4.8.1 installer then classify RT_MANIFEST
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile read-only native manifest classifier and verify positive control
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force build | Out-Null
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw "MSVC tooling unavailable" }
+          $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+          $commands = 'call "' + $vcvars + '" && cl /nologo /W4 /O2 /DUNICODE /D_UNICODE /Fe:build\netfx481_original_manifest.exe probes\netfx481_original_manifest.c && copy /y build\netfx481_original_manifest.exe build\netfx481_manifest_positive.exe && mt /nologo -manifest probes\winver_481_win10.manifest -outputresource:build\netfx481_manifest_positive.exe;#1'
+          & cmd.exe /d /s /c $commands
+          if ($LASTEXITCODE -ne 0) { throw "Read-only native manifest probe compile/control failed" }
+          $proof = & build\netfx481_original_manifest.exe build\netfx481_manifest_positive.exe
+          if ($LASTEXITCODE -ne 0 -or $proof -notcontains 'SWCOMPAT_ORIGINAL_MANIFEST_STATUS=WIN10_SUPPORTED_OS_DECLARED') {
+            throw "Positive supportedOS RT_MANIFEST control failed"
+          }
+          Write-Output "Positive control: Windows 10 supportedOS resource recognized"
+      - name: Authenticate unchanged original Microsoft .NET 4.8.1 installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $url = "https://download.microsoft.com/download/4/b/2/cd00d4ed-ebdd-49ee-8a33-eabc3d1030e3/NDP481-x86-x64-AllOS-ENU.exe"
+          $exe = Join-Path (Resolve-Path build) "NDP481-x86-x64-AllOS-ENU.exe"
+          curl.exe --fail --location --retry 3 --max-time 600 --output $exe $url
+          if ($LASTEXITCODE -ne 0) { throw "Official .NET 4.8.1 installer download failed" }
+          $item = Get-Item -LiteralPath $exe
+          if ($item.Length -lt 15728640 -or $item.Length -gt 262144000) { throw "Unexpected original installer size" }
+          $sig = Get-AuthenticodeSignature -LiteralPath $exe
+          if ($sig.Status -ne [System.Management.Automation.SignatureStatus]::Valid) { throw "Microsoft setup signature invalid" }
+          if ($null -eq $sig.SignerCertificate -or $sig.SignerCertificate.Subject -notmatch '(^|, )O=Microsoft Corporation(,|$)') {
+            throw "Installer not signed by Microsoft Corporation"
+          }
+          Write-Output "Original Microsoft 4.8.1 redistributable signature verified"
+      - name: Read original executable RT_MANIFEST without modifying Microsoft code
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $lines = & build\netfx481_original_manifest.exe build\NDP481-x86-x64-AllOS-ENU.exe
+          if ($LASTEXITCODE -ne 0) { throw "Read-only original manifest inspection failed" }
+          if ($lines -notcontains "SWCOMPAT_ORIGINAL_MANIFEST_SCHEMA=1") { throw "Unexpected inspection schema" }
+          $matches = @($lines | Where-Object { $_ -match '^SWCOMPAT_ORIGINAL_MANIFEST_STATUS=' })
+          if ($matches.Count -ne 1) { throw "Original manifest status not uniquely measured" }
+          $status = $matches[0].Substring("SWCOMPAT_ORIGINAL_MANIFEST_STATUS=".Length)
+          $allowed = @("WIN10_SUPPORTED_OS_DECLARED", "WIN10_SUPPORTED_OS_ABSENT", "CREATEPROCESS_MANIFEST_ABSENT", "MANIFEST_UNREADABLE")
+          if ($status -notin $allowed) { throw "Original Microsoft manifest status not allowlisted" }
+          @{ scope = "AUTHENTIC_ORIGINAL_NETFX481_MANIFEST"; authenticated_microsoft = $true; status = $status } |
+            ConvertTo-Json -Compress | Set-Content -LiteralPath build/netfx481-original-manifest-status.json -Encoding utf8
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "## Authentic Microsoft .NET 4.8.1 embedded manifest"
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "Original executable CreateProcess RT_MANIFEST: **$status**"
+          Write-Output "Original .NET 4.8.1 manifest Windows 10 category: $status"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: authentic-netfx481-5100-original-manifest-categories
+          path: build/netfx481-original-manifest-status.json
+          if-no-files-found: warn
+          retention-days: 7
