@@ -154,6 +154,10 @@ def inspect(wine: Path, prefix: Path, installer: Path, manifest: Path,
     # Same official .NET 4.8.1 bootstrapper and scoped Fusion option
     # used in the separate fresh-prefix baseline.
     if capture_setup_evidence:
+        # Snapshot existing .NET 4.0/MSXML logs before launching signed 4.8.1.
+        # A generic dd_ log is attributable to this *stage* only if it
+        # appears or changes during the original 4.8.1 process.
+        stage_baseline = snapshot_secondary_logs(prefix)
         log_file = private_log_path(prefix)
         try:
             setup = launch(wine, prefix, installer, launcher,
@@ -162,7 +166,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, manifest: Path,
             setup_evidence = classify_log(log_file)
             prerequisite = classify_prerequisite(log_file)
             discard_log(log_file)
-        secondary_evidence = scan_secondary_logs(prefix)
+        secondary_evidence = scan_secondary_logs(prefix, baseline=stage_baseline)
     else:
         setup = launch(wine, prefix, installer, launcher,
                        timeout=245, fusion_builtin=True)
@@ -261,6 +265,12 @@ def main(argv: list[str] | None = None) -> int:
             print("Genuine Microsoft .NET secondary setup", key, outcome["secondary_evidence"][key])
         print("Genuine Microsoft .NET secondary setup error classes", ",".join(outcome["secondary_evidence"]["codes"]))
         print("Original .NET 4.8.1 attributable secondary log count", outcome["secondary_evidence"]["prerequisite_files"])
+        stage = outcome["secondary_evidence"]["stage_prerequisite"]
+        print("Original .NET 4.8.1 stage log scope", outcome["secondary_evidence"]["stage_scope"])
+        print("Original .NET 4.8.1 new or modified log count", outcome["secondary_evidence"]["stage_files"])
+        print("Original .NET 4.8.1 temporally associated prerequisite", stage["status"])
+        print("Original .NET 4.8.1 temporally associated blockers", ",".join(stage["blockers"]))
+        print("Original .NET 4.8.1 temporally associated OS classes", ",".join(stage["os_versions"]))
         stopblock = outcome["secondary_evidence"]["prerequisite"]
         print("Original .NET 4.8.1 secondary prerequisite status", stopblock["status"])
         print("Original .NET 4.8.1 secondary prerequisite 5100", stopblock["5100_in_log"])
