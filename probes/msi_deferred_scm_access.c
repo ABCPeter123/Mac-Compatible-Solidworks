@@ -9,7 +9,7 @@
 #include <wchar.h>
 #pragma comment(lib, "Advapi32.lib")
 
-static BOOL report(const char *state)
+static BOOL report_named(const char *state, const WCHAR *filename)
 {
     WCHAR path[MAX_PATH];
     DWORD count = GetWindowsDirectoryW(path, MAX_PATH);
@@ -17,7 +17,7 @@ static BOOL report(const char *state)
     DWORD wrote = 0;
     SIZE_T len;
     if (!count || count >= MAX_PATH - 48) return FALSE;
-    if (wcscat_s(path, MAX_PATH, L"\\Temp\\swcompat-deferred-scm.status")) return FALSE;
+    if (wcscat_s(path, MAX_PATH, L"\\Temp\\") || wcscat_s(path, MAX_PATH, filename)) return FALSE;
     out = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
     if (out == INVALID_HANDLE_VALUE) return FALSE;
     len = lstrlenA(state);
@@ -51,6 +51,60 @@ __declspec(dllexport) UINT __stdcall SWCompatReadOnlyScmAccess(MSIHANDLE session
         }
         CloseServiceHandle(manager);
     }
-    if (!report(result)) return ERROR_INSTALL_FAILURE;
+    if (!report_named(result, L"swcompat-deferred-scm.status")) return ERROR_INSTALL_FAILURE;
+    return lstrcmpA(result, "PASS") == 0 ? ERROR_SUCCESS : ERROR_INSTALL_FAILURE;
+}
+
+
+/* Targeted service-registry differential. The test never starts a service.
+ * The service executable path is the Windows command shell, but is never run.
+ * Cleanup is attempted regardless of configuration/query result.
+ * All names and status files are source-authored fixed constants.
+ */
+__declspec(dllexport) UINT __stdcall SWCompatTransientServiceRegistration(MSIHANDLE session)
+{
+    SC_HANDLE manager;
+    SC_HANDLE service;
+    WCHAR binary[MAX_PATH];
+    DWORD length;
+    DWORD needed = 0;
+    SERVICE_STATUS_PROCESS state;
+    SERVICE_DESCRIPTIONW description = { L"SWCompat read-only-safe lifecycle fixture" };
+    const char *result = "CREATE_FAILED";
+    BOOL config_ok = FALSE, query_ok = FALSE, delete_ok = FALSE;
+    (void)session;
+    manager = OpenSCManagerW(NULL, NULL, SC_MANAGER_CREATE_SERVICE);
+    if (!manager) {
+        result = "CREATE_MANAGER_FAILED";
+    } else {
+        length = GetSystemDirectoryW(binary, MAX_PATH);
+        if (!length || length >= MAX_PATH - 32 ||
+            wcscat_s(binary, MAX_PATH, L"\\cmd.exe")) {
+            result = "CREATE_PATH_FAILED";
+        } else {
+            service = CreateServiceW(manager,
+                L"SWCompatDeferredScmEphemeral", L"SWCompatDeferredScmEphemeral",
+                DELETE | SERVICE_CHANGE_CONFIG | SERVICE_QUERY_STATUS,
+                SERVICE_WIN32_OWN_PROCESS, SERVICE_DEMAND_START,
+                SERVICE_ERROR_IGNORE, binary, NULL, NULL, NULL, NULL, NULL);
+            if (!service) {
+                result = "CREATE_FAILED";
+            } else {
+                config_ok = ChangeServiceConfig2W(
+                    service, SERVICE_CONFIG_DESCRIPTION, &description);
+                query_ok = QueryServiceStatusEx(
+                    service, SC_STATUS_PROCESS_INFO, (LPBYTE)&state,
+                    sizeof(state), &needed);
+                delete_ok = DeleteService(service);
+                result = !config_ok ? "CONFIG_FAILED"
+                       : !query_ok ? "QUERY_FAILED"
+                       : !delete_ok ? "DELETE_FAILED" : "PASS";
+                CloseServiceHandle(service);
+            }
+        }
+        CloseServiceHandle(manager);
+    }
+    if (!report_named(result, L"swcompat-deferred-scm-create.status"))
+        return ERROR_INSTALL_FAILURE;
     return lstrcmpA(result, "PASS") == 0 ? ERROR_SUCCESS : ERROR_INSTALL_FAILURE;
 }
