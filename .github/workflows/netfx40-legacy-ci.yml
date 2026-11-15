@@ -131,6 +131,24 @@ jobs:
           }
           & build\netfx481_runtime_probe.exe
           if ($LASTEXITCODE -ne 0) { throw "Windows managed baseline failed" }
+      - name: Compile read-only .NET 4.8.1 disk-space prerequisite API probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw "MSVC x64 tools unavailable" }
+          $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+          $lines = @('@echo off', ('call "' + $vcvars + '"'),
+            'cl /nologo /W4 /O2 /Fe:build\netfx481_disk_space_gate.exe probes\netfx481_disk_space_gate.c',
+            'exit /b %errorlevel%')
+          [System.IO.File]::WriteAllLines((Join-Path (Get-Location) 'build\compile-481-disk.cmd'), $lines, [System.Text.Encoding]::ASCII)
+          & cmd.exe /d /c build\compile-481-disk.cmd
+          if ($LASTEXITCODE -ne 0) { throw "Original 4.8.1 disk API reference compilation failed" }
+          $lines = @(& build\netfx481_disk_space_gate.exe)
+          if ($LASTEXITCODE -ne 0 -or $lines -notcontains 'SWCOMPAT_DISK_SCHEMA=1') {
+            throw "Original 4.8.1 disk API reference failed"
+          }
       - name: Compile read-only original MSI CustomAction table inspector
         shell: pwsh
         run: |
@@ -221,6 +239,7 @@ jobs:
             build/netfx481_clr_load.exe
             build/netfx40_win32_launch.exe
             build/netfx481_win32_launch.exe
+            build/netfx481_disk_space_gate.exe
             build/msi_custom_action_table_probe.exe
             build/msi_original_binary_imports.exe
           compression-level: 0
@@ -569,6 +588,17 @@ jobs:
                   out.write("SWCOMPAT_NATIVE48_READY=yes\n")
           print("Real native Microsoft 4.8 intermediate candidate verified:", r["native48_candidate"])
           PY
+      - name: Read disk-space prerequisites on actual persistent native CLR 4.0 prefix
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && (!inputs.try_48_intermediate || env.SWCOMPAT_NATIVE48_READY == 'yes')
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx481_disk_space_gate \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --fixture build/netfx481_disk_space_gate.exe \
+            --output build/netfx481-disk-before-upgrade.json \
+            --agree-disposable-prefix
       - name: Select Windows 10 reported version for original Microsoft 4.8.1 upgrade
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && (!inputs.try_48_intermediate || env.SWCOMPAT_NATIVE48_READY == 'yes')
         shell: bash
@@ -677,6 +707,13 @@ jobs:
                                "clr64_changed", "release", "loader",
                                "native_only_managed", "native48_candidate"):
                       out.write(f"intermediate_48_{name}: **{step[name]}**\n\n")
+              disk_path = Path("build/netfx481-disk-before-upgrade.json")
+              if disk_path.is_file():
+                  from scripts.netfx481_disk_space_gate import valid as valid_disk
+                  disk = json.loads(disk_path.read_text(encoding="ascii"))
+                  assert valid_disk(disk)
+                  for field, category in disk.items():
+                      out.write(f"original_481_preupgrade_disk_{field}: **{category}**\n\n")
               upgrade_path = Path("build/netfx40-to-481-upgrade.json")
               if upgrade_path.is_file():
                   from scripts.netfx40_to_481_upgrade import validate as valid_upgrade
@@ -734,6 +771,7 @@ jobs:
             build/netfx40-msxml3-runtime.json
             build/netfx40-msxml3-restart.json
             build/netfx40-to-48-intermediate.json
+            build/netfx481-disk-before-upgrade.json
             build/netfx40-to-481-upgrade.json
             build/netfx40-to-481-win11.json
           if-no-files-found: warn
