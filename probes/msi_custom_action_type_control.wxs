@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  <Package Name="SWCompat MSI Custom Action Type 19 Reference"
+  <Package Name="SWCompat MSI Deferred Custom Action Reference"
            Manufacturer="SWCompat Open Compatibility Research"
            Version="1.0.0" Scope="perMachine"
            UpgradeCode="{7E8AA167-FC50-4CF9-B956-32A94301AB8B}">
@@ -15,13 +15,16 @@
     <Feature Id="ControlFeature" Level="1">
       <ComponentRef Id="SentinelComponent"/>
     </Feature>
-    <!-- Type 19 is a deliberate, safe MSI failure. No service, elevated
-         custom DLL or proprietary installer is present. The name contains
-         'Service' only to exercise the exact same Wine trace name filter
-         used by the original Microsoft .NET type telemetry. -->
-    <CustomAction Id="ServiceTypeControlSentinel" Error="Expected SWCompat synthetic MSI action failure"/>
+    <!-- Real deferred x64 Type 1 DLL custom action: returns 1603 without
+         registry/service/COM/filesystem side effects. Exact prefix/name
+         matches the original bounded Wine trace filter. -->
+    <Binary Id="SelfAuthoredCustomActionDll" SourceFile="build/msi_custom_action_fail.dll"/>
+    <CustomAction Id="ServiceTypeControlSentinel"
+                  BinaryRef="SelfAuthoredCustomActionDll"
+                  DllEntry="SWCompatIntentionalFailure"
+                  Execute="deferred" Return="check" Impersonate="no"/>
     <InstallExecuteSequence>
-      <Custom Action="ServiceTypeControlSentinel" After="InstallInitialize" Condition="NOT Installed"/>
+      <Custom Action="ServiceTypeControlSentinel" After="InstallFiles" Condition="NOT Installed"/>
     </InstallExecuteSequence>
   </Package>
 </Wix>
