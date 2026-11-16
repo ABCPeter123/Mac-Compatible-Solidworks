@@ -42,6 +42,8 @@ HOST_STATES = {"NOT_RUN", "INVALID_INPUT", "ORIGINAL_MISSING",
                "NO_HOST_EXPORT", "META_HOST_FAILED", "RUNTIME_DISCOVERY_FAILED",
                "RUNTIME_DIRECTORY_FAILED", "HOST_INTERFACE_FAILED",
                "OTHER_RUNTIME_SELECTED", "HOST_START_FAILED",
+               "ORIGINAL_SHIM_INVALID_INPUT", "ORIGINAL_SHIM_MISSING",
+               "ORIGINAL_SHIM_LOAD_FAILED", "ORIGINAL_SHIM_NO_HOST_EXPORT",
                "MANAGED_FIXTURE_MISSING", "MANAGED_EXECUTION_FAILED",
                "MANAGED_UNEXPECTED_RESULT", "MANAGED_ORIGINAL_PASS",
                "TIMEOUT", "PROBE_ERROR"}
@@ -109,6 +111,8 @@ def blank() -> dict:
         "loader_after_mzz": "NOT_RUN",
         "mzz_process": "NOT_RUN",
         "host_stage": "NOT_RUN", "host_process": "NOT_RUN",
+        "original_shim_staging": stage_blank(),
+        "original_shim_host": "NOT_RUN", "original_shim_process": "NOT_RUN",
     }
 
 
@@ -127,7 +131,30 @@ def valid(report: object) -> bool:
             or report["loader_after_mzz"] not in STATES
             or report["mzz_process"] not in PROCESSES
             or report["host_stage"] not in HOST_STATES
-            or report["host_process"] not in PROCESSES):
+            or report["host_process"] not in PROCESSES
+            or not stage_valid(report["original_shim_staging"])
+            or report["original_shim_host"] not in HOST_STATES
+            or report["original_shim_process"] not in PROCESSES):
+        return False
+    if report["original_shim_staging"]["missing_requested"] not in {0, 1}:
+        return False
+    if report["original_shim_staging"]["staged"] > 1:
+        return False
+    if ((report["original_shim_host"] == "NOT_RUN")
+            != (report["original_shim_process"] == "NOT_RUN")):
+        return False
+    if report["original_shim_host"] != "NOT_RUN" and (
+            report["original_shim_staging"]["staged"] != 1
+            or report["loader_after_mzz"] != "LOADED"):
+        return False
+    if report["original_shim_staging"]["status"] != "NOT_RUN" and (
+            report["loader_after_mzz"] != "LOADED"):
+        return False
+    if report["original_shim_host"] == "MANAGED_ORIGINAL_PASS" and (
+            report["original_shim_process"] != "EXIT_ZERO"):
+        return False
+    if report["host_stage"] == "MANAGED_ORIGINAL_PASS" and (
+            report["host_process"] != "EXIT_ZERO"):
         return False
     if (report["signed_mzz_staging"]["staged"] == 0
             and report["loader_after_mzz"] != "NOT_RUN"):
@@ -150,8 +177,10 @@ def valid(report: object) -> bool:
             and report["loader_after_mzz"] != "LOADED"):
         return False
     if report["managed_executed"] != (
-            report["host_stage"] == "MANAGED_ORIGINAL_PASS"
-            and report["host_process"] == "EXIT_ZERO"):
+            (report["host_stage"] == "MANAGED_ORIGINAL_PASS"
+             and report["host_process"] == "EXIT_ZERO")
+            or (report["original_shim_host"] == "MANAGED_ORIGINAL_PASS"
+                and report["original_shim_process"] == "EXIT_ZERO")):
         return False
     for key in ("installer_authenticode_preverified", "installer_sha256_verified",
                 "managed_executed", "runtime_installed", "original_payload_artifact"):
@@ -386,7 +415,8 @@ def parse_host(raw: bytes, exit_code: int) -> str:
 
 
 def host_check(wine: Path, prefix: Path, host_fixture: Path,
-               managed_fixture: Path, original: Path) -> tuple[str, str]:
+               managed_fixture: Path, original: Path,
+               original_shim: Path | None = None) -> tuple[str, str]:
     """Isolated hosting: no framework registration and no Mono success accepted."""
     z = prefix / "dosdevices" / "z:"
     if not z.is_symlink() or z.resolve() != Path("/"):
@@ -397,6 +427,13 @@ def host_check(wine: Path, prefix: Path, host_fixture: Path,
                 "WINEDEBUG": "-all", "WINEDLLOVERRIDES": "clr=n",
                 "SWCOMPAT_CLR_PATH": "Z:" + str(original.resolve(strict=True)).replace("/", "\\"),
                 "SWCOMPAT_MANAGED_DLL": "Z:" + str(managed_fixture.resolve(strict=True)).replace("/", "\\")})
+    if original_shim is not None:
+        if original_shim.name != "mscoreei.dll" or original_shim.is_symlink():
+            raise ValueError("Only original Microsoft signed-package host shim")
+        env["SWCOMPAT_ORIGINAL_SHIM_PATH"] = (
+            "Z:" + str(original_shim.resolve(strict=True)).replace("/", "\\"))
+    else:
+        env.pop("SWCOMPAT_ORIGINAL_SHIM_PATH", None)
     host_fixture = host_fixture.resolve(strict=True)
     with tempfile.TemporaryFile() as output:
         try:
@@ -477,9 +514,20 @@ def trial(installer: Path, expected_sha: str, wine: Path, prefix: Path,
                             and host_fixture is not None and managed_fixture is not None):
                         result["host_stage"], result["host_process"] = host_check(
                             wine, prefix, host_fixture, managed_fixture, original)
+                        # Compare the Wine-provided mscoree against the original
+                        # Microsoft shim from the independently signed MZZ.
+                        # No manual framework installation or registry spoofing.
+                        result["original_shim_staging"] = stage_from_mzz(
+                            private, sevenzip, ["mscoreei.dll"])
+                        if result["original_shim_staging"]["staged"] == 1:
+                            result["original_shim_host"], result["original_shim_process"] = host_check(
+                                wine, prefix, host_fixture, managed_fixture,
+                                original, original_shim=private / "mscoreei.dll")
                         result["managed_executed"] = (
-                            result["host_stage"] == "MANAGED_ORIGINAL_PASS"
-                            and result["host_process"] == "EXIT_ZERO")
+                            (result["host_stage"] == "MANAGED_ORIGINAL_PASS"
+                             and result["host_process"] == "EXIT_ZERO")
+                            or (result["original_shim_host"] == "MANAGED_ORIGINAL_PASS"
+                                and result["original_shim_process"] == "EXIT_ZERO"))
     assert valid(result)
     return result
 
@@ -507,6 +555,10 @@ def main(argv: list[str] | None = None) -> int:
         print("AUTHENTIC_NETFX48_ISOLATED", key, report[key])
     print("AUTHENTIC_NETFX48_HOST", report["host_stage"],
           report["host_process"], report["managed_executed"])
+    shim = report["original_shim_staging"]
+    print("AUTHENTIC_NETFX48_ORIGINAL_SHIM",
+          shim["status"], shim["located"], shim["staged"],
+          report["original_shim_host"], report["original_shim_process"])
     staging = report["signed_mzz_staging"]
     print("AUTHENTIC_NETFX48_MZZ_STAGE", staging["status"],
           staging["missing_requested"], staging["located"], staging["staged"])

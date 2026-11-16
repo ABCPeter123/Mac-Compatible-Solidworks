@@ -61,6 +61,19 @@ class HostBoundaryTests(unittest.TestCase):
         self.assertFalse(t.valid(dict(good, private_original_dll="vendor")))
         self.assertNotIn("original_file_path", json.dumps(good))
 
+    def test_original_shim_schema_rejects_unrelated_or_unstaged_success(self):
+        blank = t.blank()
+        self.assertTrue(t.valid(blank))
+        self.assertFalse(t.valid(dict(blank, original_shim_host="MANAGED_ORIGINAL_PASS")))
+        self.assertFalse(t.valid(dict(blank, original_shim_process="EXIT_ZERO")))
+        self.assertFalse(t.valid(dict(blank, original_shim_staging=dict(
+            blank["original_shim_staging"], original_vendor_path="private"))))
+        self.assertIn("ORIGINAL_SHIM_LOAD_FAILED", t.HOST_STATES)
+        self.assertIn("ORIGINAL_SHIM_NO_HOST_EXPORT", t.HOST_STATES)
+        self.assertIn("ORIGINAL_SHIM_MISSING", t.HOST_STATES)
+        self.assertEqual(t.parse_host(host_output("ORIGINAL_SHIM_NO_HOST_EXPORT"), 0),
+                         "ORIGINAL_SHIM_NO_HOST_EXPORT")
+
     def test_private_host_invocation_is_bounded_and_classified(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -79,6 +92,17 @@ class HostBoundaryTests(unittest.TestCase):
                 self.assertIn("clr.dll", kwargs["env"]["SWCOMPAT_CLR_PATH"])
                 kwargs["stdout"].write(host_output("RUNTIME_DISCOVERY_FAILED"))
                 return mock.Mock(returncode=0)
+            shim = root / "mscoreei.dll"
+            shim.write_bytes(b"synthetic")
+            def original_shim_case(argv, **kwargs):
+                self.assertEqual(kwargs["env"]["WINEDLLOVERRIDES"], "clr=n")
+                self.assertIn("mscoreei.dll", kwargs["env"]["SWCOMPAT_ORIGINAL_SHIM_PATH"])
+                kwargs["stdout"].write(host_output("ORIGINAL_SHIM_NO_HOST_EXPORT"))
+                return mock.Mock(returncode=0)
+            with mock.patch.object(t.subprocess, "run", side_effect=original_shim_case):
+                self.assertEqual(t.host_check(root/"wine", prefix, fixture, managed, dll,
+                                              original_shim=shim),
+                                 ("ORIGINAL_SHIM_NO_HOST_EXPORT", "EXIT_ZERO"))
             with mock.patch.object(t.subprocess, "run", side_effect=success):
                 self.assertEqual(t.host_check(root/"wine", prefix, fixture, managed, dll),
                                  ("RUNTIME_DISCOVERY_FAILED", "EXIT_ZERO"))
