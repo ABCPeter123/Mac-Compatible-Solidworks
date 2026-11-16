@@ -63,7 +63,7 @@ void WINAPI host_entry(void) {
     if (FAILED(hr) || meta == NULL) RESULT("META_HOST_FAILED");
     hr = ICLRMetaHost_GetRuntime(meta, L"v4.0.30319", &IID_ICLRRuntimeInfo,
                                 (void **)&info);
-    if (FAILED(hr) || info == NULL) RESULT("RUNTIME_NOT_REGISTERED");
+    if (FAILED(hr) || info == NULL) RESULT("RUNTIME_DISCOVERY_FAILED");
 
     dir_len = 4096;
     hr = ICLRRuntimeInfo_GetRuntimeDirectory(info, runtime_dir, &dir_len);
