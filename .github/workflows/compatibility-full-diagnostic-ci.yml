@@ -8,6 +8,8 @@ on:
       - '.github/workflows/compatibility-full-diagnostic-ci.yml'
       - 'scripts/netfx4x_mzz_evidence.py'
       - 'tests/test_netfx4x_mzz_evidence.py'
+      - 'scripts/netfx4x_mzz_pe_evidence.py'
+      - 'tests/test_netfx4x_mzz_pe_evidence.py'
   workflow_dispatch:
 
 permissions:
@@ -26,6 +28,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m unittest discover -s tests -p 'test_netfx4x_mzz_evidence.py' -v
+          python -m unittest discover -s tests -p 'test_netfx4x_mzz_pe_evidence.py' -v
           python -m unittest discover -s tests -p 'test_netfx481_archive_evidence.py' -v
           python -m unittest discover -s tests -p 'test_netfx481_nested_cab_evidence.py' -v
           python -m unittest discover -s tests -p 'test_netfx481_prereq_diagnostic.py' -v
@@ -108,6 +111,8 @@ jobs:
             }
             python -m scripts.netfx4x_mzz_evidence --directory $mzz --sevenzip $seven --output build/netfx-original-mzz.json
             if ($LASTEXITCODE -ne 0) { throw 'Original MZZ report failed validation' }
+            python -m scripts.netfx4x_mzz_pe_evidence --directory $mzz --sevenzip $seven --output build/netfx-original-pe.json
+            if ($LASTEXITCODE -ne 0) { throw 'Original MZZ PE architecture classifier failed' }
             python -c 'import json; from pathlib import Path; from scripts.netfx481_archive_evidence import validate as a; from scripts.netfx481_nested_cab_evidence import validate as c; from scripts.netfx4x_mzz_evidence import validate as m; p=Path("build"); assert a(json.loads((p/"netfx-original-outer.json").read_text())); assert c(json.loads((p/"netfx-original-cab.json").read_text())); assert m(json.loads((p/"netfx-original-mzz.json").read_text()))'
             if ($LASTEXITCODE -ne 0) { throw 'One original package census failed closed' }
           }
@@ -131,6 +136,10 @@ jobs:
           Add-Content $env:GITHUB_STEP_SUMMARY "Nested CAB CLR-like: **$($cab.features.CLR_MEMBER)**; MSCORLIB-like: **$($cab.features.MSCORLIB_MEMBER)**"
           Add-Content $env:GITHUB_STEP_SUMMARY "MZZ archives: **$($mzz.status)**, classified **$($mzz.mzz_listed)/$($mzz.mzz_found)**"
           Add-Content $env:GITHUB_STEP_SUMMARY "MZZ CLR-like: **$($mzz.signals.CLR_LIKE)**; x64-named: **$($mzz.signals.AMD64_NAMED)**; WPF-like: **$($mzz.signals.WPF_LIKE)**"
+          $pe = Get-Content -Raw build/netfx-original-pe.json | ConvertFrom-Json
+          Add-Content $env:GITHUB_STEP_SUMMARY "Exact original CLR AMD64 PE: **$($pe.members.CLR_AMD64)**"
+          Add-Content $env:GITHUB_STEP_SUMMARY "Exact original MSCORLIB AMD64 PE: **$($pe.members.MSCORLIB_AMD64)**"
+          Add-Content $env:GITHUB_STEP_SUMMARY "Original CLR member extraction status: **$($pe.status)**"
           Add-Content $env:GITHUB_STEP_SUMMARY "Native CLR installation and execution: **NOT_TESTED**"
       - uses: actions/upload-artifact@v4
         with:
@@ -139,6 +148,7 @@ jobs:
             build/netfx-original-outer.json
             build/netfx-original-cab.json
             build/netfx-original-mzz.json
+            build/netfx-original-pe.json
           retention-days: 7
           if-no-files-found: error
 
