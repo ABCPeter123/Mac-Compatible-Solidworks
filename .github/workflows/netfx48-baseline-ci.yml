@@ -77,7 +77,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $url = "https://go.microsoft.com/fwlink/?linkid=2088631"
+          $url = "https://download.microsoft.com/download/f/3/a/f3a6af84-da23-40a5-8d1c-49cc10c8e76f/NDP48-x86-x64-AllOS-ENU.exe"
           $exe = Join-Path (Resolve-Path build) "NDP48-x86-x64-AllOS-ENU.exe"
           curl.exe --fail --location --retry 3 --max-time 600 --output $exe $url
           if ($LASTEXITCODE -ne 0) { throw "Official .NET 4.8 offline download failed" }
