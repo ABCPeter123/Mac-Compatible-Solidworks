@@ -154,6 +154,36 @@ class IsolatedLoaderTests(unittest.TestCase):
             with mock.patch.object(t.subprocess, "run", return_value=mock.Mock(returncode=127)):
                 self.assertEqual(t._wine_system_control(root / "wine", root), "EXIT_127")
 
+    def test_genuine_import_checks_never_emit_original_dll_names(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            clr = root / "clr.dll"
+            clr.write_bytes(b"x" * 1024)
+            def parse_private(raw, *, _private_direct_names):
+                self.assertEqual(raw[:2], b"xx")
+                _private_direct_names.extend(
+                    ["kernel32.dll", "vcruntime140.dll", "private-hidden.dll"])
+                return {"pe": "PE_AMD64", "import_table": "READABLE",
+                        "import_count": 3}
+            def fake_invoke(wine, prefix, fixture, name, **kwargs):
+                self.assertTrue(kwargs["name_only"])
+                self.assertFalse(kwargs["original"])
+                return ("LOADED", "EXIT_ZERO") if name == "kernel32.dll" else (
+                    "MISSING_DEPENDENCY", "EXIT_ZERO")
+            with mock.patch.object(t, "parse_pe", side_effect=parse_private), \\
+                 mock.patch.object(t, "_invoke", side_effect=fake_invoke):
+                report = t.direct_import_check(root / "wine", root / "prefix",
+                                               root / "fixture", clr)
+            self.assertTrue(t.valid_dependencies(report))
+            self.assertEqual(report["checked"], 3)
+            self.assertEqual(report["loaded"], 1)
+            self.assertEqual(report["missing"], 2)
+            self.assertEqual(report["families"]["VCRUNTIME"]["missing"], 1)
+            self.assertEqual(report["families"]["OTHER"]["missing"], 1)
+            self.assertNotIn("private-hidden", json.dumps(report))
+            self.assertNotIn("vcruntime140.dll", json.dumps(report))
+            self.assertFalse(t.valid_dependencies(dict(report, vendor_name="secret")))
+
     def test_no_raw_filenames_returned_on_missing_mzz(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
