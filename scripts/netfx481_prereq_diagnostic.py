@@ -13,7 +13,9 @@ from scripts.netfx481_setup_evidence import _decode
 MAX_BYTES = 8 * 1024 * 1024
 OS_CLASSES = {"BELOW_WINDOWS_10", "WINDOWS_10_TOO_OLD", "WINDOWS_10_SUPPORTED",
               "WINDOWS_11_21H2_INSTALLABLE",
-              "WINDOWS_11_22H2_PLUS_INBOX_481", "UNKNOWN_VERSION"}
+              "WINDOWS_11_22H2_PLUS_INBOX_481", "UNKNOWN_VERSION",
+              "WINDOWS_7_SP1_REPORTED_48", "WINDOWS_7_SP0_REPORTED_48",
+              "WINDOWS_7_SP_UNVERIFIED_48", "WINDOWS_8_1_FAMILY_48"}
 CAUSES = {
     "OS_VERSION_BLOCK", "OS_EDITION_BLOCK", "WINDOWS_SERVICING_BLOCK",
     "MISSING_UPDATE_BLOCK", "PENDING_REBOOT_BLOCK", "ADMIN_RIGHTS_BLOCK",
@@ -24,6 +26,8 @@ CAUSES = {
 STATES = {"NOT_REQUESTED", "NOT_FOUND", "READ_FAILED", "TOO_LARGE",
           "INVALID_ENCODING", "CLASSIFIED"}
 OS_LINE = re.compile(r"(?i)\bOS\s+Version\s*[=:]\s*(\d{1,2})\.(\d{1,2})\.(\d{1,6})\b")
+SP_LINE = re.compile(r"(?i)\bSP\s*[=:]\s*(\d{1,2})\.(\d{1,2})\b")
+FAMILIES = {"NETFX481", "NETFX48"}
 FAIL_LINE = re.compile(
     r"(?i)\b(error|block(?:ed|ing)?|fail(?:ed|ure)?|unsupported|not supported|not applicable|"
     r"prerequisite|requirement|minimum|cannot (?:install|continue)|5100|stopblock|"
@@ -85,7 +89,17 @@ def validate(result: object) -> bool:
     return result["status"] == "CLASSIFIED" or result == empty(result["status"])
 
 
-def _os_class(major: int, minor: int, build: int) -> str:
+def _os_class(major: int, minor: int, build: int, *,
+              family: str = "NETFX481", sp_major: int | None = None) -> str:
+    if family == "NETFX48" and major == 6 and minor == 1:
+        # An original setup log's own SP field is more relevant than what
+        # our separate self-authored OS test executable reports.
+        if sp_major is None:
+            return "WINDOWS_7_SP_UNVERIFIED_48"
+        return ("WINDOWS_7_SP1_REPORTED_48" if sp_major >= 1
+                else "WINDOWS_7_SP0_REPORTED_48")
+    if family == "NETFX48" and major == 6 and minor == 3:
+        return "WINDOWS_8_1_FAMILY_48"
     if major == 10 and minor == 0:
         if 19042 <= build < 22000:
             return "WINDOWS_10_SUPPORTED"
@@ -99,7 +113,9 @@ def _os_class(major: int, minor: int, build: int) -> str:
     return "UNKNOWN_VERSION"
 
 
-def classify_text(raw: bytes) -> dict:
+def classify_text(raw: bytes, *, family: str = "NETFX481") -> dict:
+    if family not in FAMILIES:
+        raise ValueError("Untrusted framework classification family")
     if len(raw) > MAX_BYTES:
         return empty("TOO_LARGE")
     content = _decode(raw)
@@ -114,7 +130,10 @@ def classify_text(raw: bytes) -> dict:
             continue
         match = OS_LINE.search(line)
         if match:
-            versions.add(_os_class(*[int(n) for n in match.groups()]))
+            service_pack = SP_LINE.search(line)
+            sp_major = int(service_pack.group(1)) if service_pack else None
+            versions.add(_os_class(*[int(n) for n in match.groups()],
+                                   family=family, sp_major=sp_major))
         if not FAIL_LINE.search(line):
             continue
         if re.search(r"(?i)(?<!\d)5100(?!\d)|0x000013ec\b", line):
@@ -140,7 +159,9 @@ def classify_text(raw: bytes) -> dict:
     return result
 
 
-def classify_file(path: Path) -> dict:
+def classify_file(path: Path, *, family: str = "NETFX481") -> dict:
+    if family not in FAMILIES:
+        raise ValueError("Untrusted framework classification family")
     if path.is_symlink():
         return empty("READ_FAILED")
     try:
@@ -150,4 +171,4 @@ def classify_file(path: Path) -> dict:
             raw = stream.read(MAX_BYTES + 1)
     except OSError:
         return empty("READ_FAILED")
-    return classify_text(raw)
+    return classify_text(raw, family=family)
