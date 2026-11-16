@@ -14,8 +14,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from scripts.netfx48_isolated_loader_trial import parse_host, verify_original, exit_class
-from scripts.netfx48_signed_mzz_dependency_staging import stage, valid as stage_valid
+from scripts.netfx48_isolated_loader_trial import parse_host, verify_original
+from scripts.netfx48_signed_mzz_dependency_staging import stage, valid as stage_valid, blank as stage_blank
 
 ALLOWED = {"NOT_RUN", "ORIGINAL_SHIM_ONLY_LOADED", "ORIGINAL_SHIM_MISSING",
            "ORIGINAL_SHIM_INVALID_INPUT", "ORIGINAL_SHIM_LOAD_FAILED",
@@ -44,6 +44,8 @@ def valid(report: object) -> bool:
             and (report["native_shim"] != "NOT_RUN" or report["process"] != "NOT_RUN")):
         return False
     if ((report["native_shim"] == "NOT_RUN") != (report["process"] == "NOT_RUN")):
+        return False
+    if report["source"] == "STAGED" and report["native_shim"] == "NOT_RUN":
         return False
     if report["native_shim"] == "ORIGINAL_SHIM_ONLY_LOADED" and report["process"] != "EXIT_ZERO":
         return False
