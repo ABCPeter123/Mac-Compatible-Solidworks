@@ -82,6 +82,18 @@ jobs:
           set -euo pipefail
           python3 -m swcompat --prefix "$RUNNER_TEMP/winver-5100-prefix" --logs-dir "$RUNNER_TEMP/winver-5100-logs" init
           touch "$RUNNER_TEMP/winver-5100-prefix/.swcompat-netfx481-disposable"
+      - name: Check Windows 7 SP1 through original native Win32 and NT APIs
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The local CLI intentionally offers only Win10/Win11. This disposable
+          # Win7 prerequisite experiment uses Wine's native version setter.
+          WINEPREFIX="$RUNNER_TEMP/winver-5100-prefix" WINEARCH=win64 WINEDEBUG=-all \
+            "$SWCOMPAT_WINE" winecfg.exe -v win7 >/dev/null 2>&1
+          python3 -m scripts.netfx481_version_gate --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/winver-5100-prefix" \
+            --bare build/winver_481_bare.exe --manifested build/winver_481_supported.exe \
+            --output build/winver-win7.json --agree-disposable-prefix
       - name: Check Windows 10 APIs with and without manifest
         shell: bash
         run: |
@@ -131,14 +143,14 @@ jobs:
           from scripts.netfx481_version_gate import verify
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
               out.write("## Windows version reporting under Wine 11.21\n\n")
-              for win in ("win10", "win11", "sidecar-default", "sidecar-preferred"):
+              for win in ("win7", "win10", "win11", "sidecar-default", "sidecar-preferred"):
                   path = Path(f"build/winver-{win}.json")
                   assert path.is_file()
                   data = json.loads(path.read_text())
                   assert set(data) == {"bare", "manifested"}
                   for kind, r in data.items():
                       assert verify(r) and r["status"] == "MEASURED"
-                      for field in ("winapi", "ntdll", "registry", "arch"):
+                      for field in ("winapi", "ntdll", "registry", "arch", "sp_api", "sp_ntdll"):
                           out.write(f"{win}_{kind}_{field}: **{r[field]}**\n\n")
           PY
       - uses: actions/upload-artifact@v4
@@ -146,6 +158,7 @@ jobs:
         with:
           name: netfx481-winver-5100-allowlisted-results
           path: |
+            build/winver-win7.json
             build/winver-win10.json
             build/winver-win11.json
             build/winver-sidecar-default.json

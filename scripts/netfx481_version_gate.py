@@ -15,13 +15,16 @@ from scripts.netfx481_trial import validate_prefix
 CATEGORIES = {"WIN10_SUPPORTED", "WIN11_SUPPORTED", "WIN10_TOO_OLD",
               "BELOW_WIN10", "NOT_VERIFIED"}
 ARCH = {"AMD64", "X86", "ARM64", "UNKNOWN"}
-FIELDS = {"SCHEMA", "WINAPI", "NTDLL", "REGISTRY", "ARCH"}
-RE = re.compile(r"^SWCOMPAT_OS_([A-Z]+)=([A-Z0-9_]+)$")
+SERVICE_PACK = {"NOT_VERIFIED", "NOT_WIN7", "MISSING_SP1", "SP1_OR_LATER"}
+FIELDS = {"SCHEMA", "WINAPI", "NTDLL", "REGISTRY", "ARCH",
+          "SP_API", "SP_NTDLL"}
+RE = re.compile(r"^SWCOMPAT_OS_([A-Z_]+)=([A-Z0-9_]+)$")
 
 
 def decode(raw: bytes, rc: int) -> dict:
     empty = {"status": "INVALID", "winapi": "NOT_VERIFIED",
-             "ntdll": "NOT_VERIFIED", "registry": "NOT_VERIFIED", "arch": "UNKNOWN"}
+             "ntdll": "NOT_VERIFIED", "registry": "NOT_VERIFIED", "arch": "UNKNOWN",
+             "sp_api": "NOT_VERIFIED", "sp_ntdll": "NOT_VERIFIED"}
     if rc != 0 or len(raw) > 2048 or b"\x00" in raw:
         return empty
     try:
@@ -40,11 +43,13 @@ def decode(raw: bytes, rc: int) -> dict:
     if set(values) != FIELDS or values["SCHEMA"] != "1":
         return empty
     if (any(values[x] not in CATEGORIES for x in ("WINAPI", "NTDLL", "REGISTRY"))
-            or values["ARCH"] not in ARCH):
+            or values["ARCH"] not in ARCH
+            or any(values[k] not in SERVICE_PACK for k in ("SP_API", "SP_NTDLL"))):
         return empty
     return {"status": "MEASURED", "winapi": values["WINAPI"],
             "ntdll": values["NTDLL"], "registry": values["REGISTRY"],
-            "arch": values["ARCH"]}
+            "arch": values["ARCH"],
+            "sp_api": values["SP_API"], "sp_ntdll": values["SP_NTDLL"]}
 
 
 def verify(result: dict) -> bool:
@@ -53,6 +58,8 @@ def verify(result: dict) -> bool:
     return (result["status"] in {"MEASURED", "INVALID"}
             and all(result[k] in CATEGORIES for k in ("winapi", "ntdll", "registry"))
             and result["arch"] in ARCH
+            and result["sp_api"] in SERVICE_PACK
+            and result["sp_ntdll"] in SERVICE_PACK
             and (result["status"] == "MEASURED"
                  or result == decode(b"", 1)))
 
