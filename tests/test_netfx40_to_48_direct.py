@@ -7,6 +7,8 @@ from unittest import mock
 
 from scripts import netfx40_to_48_direct as p
 from scripts import netfx481_win32_exit as win32
+from scripts import netfx481_setup_evidence as evidence
+from scripts.netfx481_prereq_diagnostic import empty as empty_prerequisite
 
 
 class DirectNative48Tests(unittest.TestCase):
@@ -17,6 +19,18 @@ class DirectNative48Tests(unittest.TestCase):
             "category": category, "child_seen": "OBSERVED",
             "child_lifecycle": lifecycle,
             "child_exit": "ALL_ZERO" if lifecycle == "ALL_EXITED" else "NOT_VERIFIED",
+        }
+
+    @staticmethod
+    def secondary():
+        return {
+            "status": "NOT_FOUND", "files_scanned": 0,
+            "prerequisite_files": 0, "stage_files": 0,
+            "stage_scope": "CAPTURED",
+            "sources": {name: 0 for name in evidence.SECONDARY_SOURCE_NAMES},
+            "phase": "UNKNOWN", "codes": [],
+            "prerequisite": empty_prerequisite("NOT_FOUND"),
+            "stage_prerequisite": empty_prerequisite("NOT_FOUND"),
         }
 
     @staticmethod
@@ -50,12 +64,16 @@ class DirectNative48Tests(unittest.TestCase):
             mock.patch.object(p, "classify_log", return_value={
                 "status": "CLASSIFIED", "phase": "UNKNOWN", "codes": []}),
             mock.patch.object(p, "discard_log"),
+            mock.patch.object(p, "snapshot_secondary_logs", return_value={}),
+            mock.patch.object(p, "scan_secondary_logs", return_value=self.secondary()) as secondary_scan,
             mock.patch.object(p, "wineboot_restart", return_value="COMPLETED"),
             mock.patch.object(p, "launch", return_value=fake_setup) as started,
         ):
             result = p.inspect(*args, {"persistent_native_managed": True})
         self.assertTrue(p.validate(result))
         self.assertEqual(started.call_args.kwargs["setup_family"], "NETFX48")
+        self.assertEqual(secondary_scan.call_args.kwargs["family"], "NETFX48")
+        self.assertTrue(evidence.validate_secondary_report(result["secondary_evidence"]))
         self.assertTrue(started.call_args.kwargs["fusion_builtin"])
         self.assertNotIn(str(root), str(result))
         return result
@@ -97,6 +115,17 @@ class DirectNative48Tests(unittest.TestCase):
                 result = p.inspect(*args, {"persistent_native_managed": False})
             self.assertEqual(result, p.blank())
             launch.assert_not_called()
+
+    @unittest.skipIf(os.name == "nt", "POSIX Wine experiment")
+    def test_48_secondary_report_must_be_finite_and_current(self):
+        with TemporaryDirectory() as td:
+            result = self.run_case(Path(td))
+            corrupt = dict(result)
+            corrupt["secondary_evidence"] = dict(
+                result["secondary_evidence"], private_log="C:\\Users\\sensitive")
+            self.assertFalse(p.validate(corrupt))
+            corrupt["secondary_evidence"] = None
+            self.assertFalse(p.validate(corrupt))
 
     def test_requires_exact_sha_and_original_media_name(self):
         with TemporaryDirectory() as td:
