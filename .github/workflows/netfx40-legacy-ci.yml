@@ -141,6 +141,29 @@ jobs:
           Set-Content -LiteralPath build/compile-netfx40-host.cmd -Value $cmdText -Encoding ascii
           & cmd.exe /d /c build\compile-netfx40-host.cmd
           if ($LASTEXITCODE -ne 0) { throw "Native CLR hosting fixture compilation failed" }
+          # Prove this exact fixture works against installed genuine Microsoft
+          # .NET on native Windows before interpreting any Wine result.
+          $env:SWCOMPAT_MANAGED_DLL = (Resolve-Path 'build/netfx48_managed_host_check.dll').Path
+          try {
+            $env:SWCOMPAT_CLR_PATH = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\clr.dll'
+            if (!(Test-Path -LiteralPath $env:SWCOMPAT_CLR_PATH -PathType Leaf)) {
+              throw "Official Windows CLR baseline unavailable"
+            }
+            $positive = & build\netfx48_host_activation.exe
+            if ($LASTEXITCODE -ne 0 -or $positive -notcontains 'SWCOMPAT_NETFX48_HOST_STATUS=MANAGED_ORIGINAL_PASS') {
+              throw "Official Windows public CLR hosting positive control failed"
+            }
+            $env:SWCOMPAT_CLR_PATH = Join-Path $env:WINDIR 'System32\kernel32.dll'
+            $negative = & build\netfx48_host_activation.exe
+            if ($LASTEXITCODE -ne 0 -or $negative -notcontains 'SWCOMPAT_NETFX48_HOST_STATUS=OTHER_RUNTIME_SELECTED') {
+              throw "Public CLR host rejected-runtime negative control failed"
+            }
+            'AUTHENTIC_NETFX40_HOST_FIXTURE_WINDOWS_CONTROL POSITIVE_PASS WRONG_RUNTIME_REJECTED'
+          }
+          finally {
+            Remove-Item env:SWCOMPAT_CLR_PATH -ErrorAction SilentlyContinue
+            Remove-Item env:SWCOMPAT_MANAGED_DLL -ErrorAction SilentlyContinue
+          }
           $loader = & build\netfx481_clr_load.exe
           if ($LASTEXITCODE -ne 0 -or $loader -notcontains 'SWCOMPAT_CLR_LOAD_STATUS=LOADED') {
             throw "Windows native CLR baseline failed"
