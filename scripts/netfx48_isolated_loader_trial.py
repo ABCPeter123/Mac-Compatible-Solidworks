@@ -33,6 +33,8 @@ STATES = {"NOT_RUN", "NOT_FOUND", "LINKED", "LOADED", "MISSING_DEPENDENCY",
           "OTHER_LOAD_FAILURE", "INVALID_ARGUMENT", "TIMEOUT", "PROBE_ERROR"}
 EXTRACTIONS = {"NOT_STARTED", "NO_MZZ", "NO_CLR", "MZZ_ERROR", "EXTRACT_FAILED",
                "INVALID_CLR_PE", "PE_AMD64"}
+PROCESSES = {"NOT_RUN", "EXIT_ZERO", "EXIT_NONZERO", "SIGNALLED",
+             "TIMEOUT", "SPAWN_ERROR", "NO_Z_DRIVE"}
 LINES = {
     "SCHEMA": {"1"},
     "LOADER": STATES - {"NOT_RUN", "TIMEOUT", "PROBE_ERROR"},
@@ -45,7 +47,9 @@ def blank() -> dict:
     return {
         "status": "NOT_RUN", "installer_authenticode_preverified": False,
         "installer_sha256_verified": False, "extraction": "NOT_STARTED",
-        "loader": "NOT_RUN", "managed_executed": False,
+        "loader": "NOT_RUN", "selftest": "NOT_RUN",
+        "selftest_process": "NOT_RUN", "original_process": "NOT_RUN",
+        "managed_executed": False,
         "runtime_installed": False, "original_payload_artifact": False,
     }
 
@@ -55,7 +59,10 @@ def valid(report: object) -> bool:
         return False
     if (report["status"] not in {"NOT_RUN", "MEASURED", "PARTIAL"}
             or report["extraction"] not in EXTRACTIONS
-            or report["loader"] not in STATES):
+            or report["loader"] not in STATES
+            or report["selftest"] not in STATES
+            or report["selftest_process"] not in PROCESSES
+            or report["original_process"] not in PROCESSES):
         return False
     for key in ("installer_authenticode_preverified", "installer_sha256_verified",
                 "managed_executed", "runtime_installed", "original_payload_artifact"):
@@ -68,6 +75,8 @@ def valid(report: object) -> bool:
         return report == blank()
     if not (report["installer_authenticode_preverified"]
             and report["installer_sha256_verified"]):
+        return False
+    if report["selftest"] != "LOADED" and report["loader"] != "NOT_RUN":
         return False
     if report["extraction"] != "PE_AMD64" and report["loader"] != "NOT_RUN":
         return False
@@ -166,29 +175,40 @@ def extract_clr(installer: Path, sevenzip: Path, private: Path) -> tuple[str, Pa
     return "NO_CLR", None
 
 
-def _load(wine: Path, prefix: Path, fixture: Path, original: Path) -> str:
-    z = prefix / "dosdevices" / "z:"
-    if not z.is_symlink() or z.resolve() != Path("/"):
-        return "PROBE_ERROR"
-    windows_path = "Z:" + str(original.resolve(strict=True)).replace("/", "\\")
+def _invoke(wine: Path, prefix: Path, fixture: Path,
+            argument: str, *, original: bool) -> tuple[str, str]:
     env = os.environ.copy()
     env.pop("WINEDLLOVERRIDES", None)
     env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64",
-                "WINEDEBUG": "-all", "WINEDLLOVERRIDES": "clr=n"})
+                "WINEDEBUG": "-all"})
+    if original:
+        env["WINEDLLOVERRIDES"] = "clr=n"
     with tempfile.TemporaryFile() as out:
         try:
-            run = subprocess.run(
-                [str(wine), str(fixture), windows_path], cwd=fixture.parent,
+            proc = subprocess.run(
+                [str(wine), str(fixture), argument], cwd=fixture.parent,
                 env=env, stdin=subprocess.DEVNULL, stdout=out,
                 stderr=subprocess.DEVNULL, timeout=90, check=False)
-            code = run.returncode
         except subprocess.TimeoutExpired:
-            return "TIMEOUT"
+            return "TIMEOUT", "TIMEOUT"
         except OSError:
-            return "PROBE_ERROR"
+            return "PROBE_ERROR", "SPAWN_ERROR"
+        if proc.returncode < 0:
+            return "PROBE_ERROR", "SIGNALLED"
+        if proc.returncode != 0:
+            return "PROBE_ERROR", "EXIT_NONZERO"
         out.seek(0)
         raw = out.read(MAX_PROBE + 1)
-    return parse_loader(raw, code)
+    return parse_loader(raw, 0), "EXIT_ZERO"
+
+
+def _load(wine: Path, prefix: Path, fixture: Path,
+          original: Path) -> tuple[str, str]:
+    z = prefix / "dosdevices" / "z:"
+    if not z.is_symlink() or z.resolve() != Path("/"):
+        return "PROBE_ERROR", "NO_Z_DRIVE"
+    windows_path = "Z:" + str(original.resolve(strict=True)).replace("/", "\\\\")
+    return _invoke(wine, prefix, fixture, windows_path, original=True)
 
 
 def trial(installer: Path, expected_sha: str, wine: Path, prefix: Path,
@@ -208,6 +228,11 @@ def trial(installer: Path, expected_sha: str, wine: Path, prefix: Path,
     result["status"] = "PARTIAL"
     result["installer_authenticode_preverified"] = True
     result["installer_sha256_verified"] = True
+    result["selftest"], result["selftest_process"] = _invoke(
+        wine, prefix, fixture, "--selftest-windows", original=False)
+    if result["selftest"] != "LOADED":
+        assert valid(result)
+        return result
     with tempfile.TemporaryDirectory(prefix="swcompat-original-netfx48-") as private_name:
         private = Path(private_name).resolve()
         if private.is_relative_to(prefix.resolve()):
@@ -215,7 +240,8 @@ def trial(installer: Path, expected_sha: str, wine: Path, prefix: Path,
         extraction, original = extract_clr(installer, sevenzip, private)
         result["extraction"] = extraction
         if extraction == "PE_AMD64" and original is not None:
-            result["loader"] = _load(wine, prefix, fixture, original)
+            result["loader"], result["original_process"] = _load(
+                wine, prefix, fixture, original)
             if result["loader"] not in {"TIMEOUT", "PROBE_ERROR"}:
                 result["status"] = "MEASURED"
     assert valid(result)
@@ -236,7 +262,8 @@ def main(argv: list[str] | None = None) -> int:
     assert valid(report)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, sort_keys=True), encoding="utf-8")
-    for key in ("extraction", "loader", "managed_executed", "runtime_installed"):
+    for key in ("selftest", "selftest_process", "extraction", "loader",
+                "original_process", "managed_executed", "runtime_installed"):
         print("AUTHENTIC_NETFX48_ISOLATED", key, report[key])
     return 0
 
