@@ -1,0 +1,202 @@
+name: Full compatibility diagnostic - authenticated .NET payloads and Wine baseline
+
+# This workflow is read-only for Microsoft installers. It never runs their setup,
+# copies vendor payload into Wine, or publishes vendor files/logs.
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/compatibility-full-diagnostic-ci.yml'
+      - 'scripts/netfx4x_mzz_evidence.py'
+      - 'tests/test_netfx4x_mzz_evidence.py'
+      - 'scripts/netfx4x_mzz_pe_evidence.py'
+      - 'tests/test_netfx4x_mzz_pe_evidence.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  privacy-regressions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Strict no-leak original package and runtime evidence tests
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -p 'test_netfx4x_mzz_evidence.py' -v
+          python -m unittest discover -s tests -p 'test_netfx4x_mzz_pe_evidence.py' -v
+          python -m unittest discover -s tests -p 'test_netfx481_archive_evidence.py' -v
+          python -m unittest discover -s tests -p 'test_netfx481_nested_cab_evidence.py' -v
+          python -m unittest discover -s tests -p 'test_netfx481_prereq_diagnostic.py' -v
+          python -m unittest discover -s tests -p 'test_netfx40_to_48_intermediate.py' -v
+          python -m unittest discover -s tests -p 'test_solidworks_runtime_gate.py' -v
+
+  signed-payload-anatomy:
+    needs: privacy-regressions
+    name: Authenticated original Microsoft .NET ${{ matrix.framework }} file anatomy
+    strategy:
+      fail-fast: false
+      matrix:
+        framework: ['48', '481']
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download and cryptographically authenticate unchanged Microsoft media
+        shell: pwsh
+        env:
+          FRAMEWORK: ${{ matrix.framework }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force build | Out-Null
+          if ($env:FRAMEWORK -eq '48') {
+            $url = 'https://download.microsoft.com/download/f/3/a/f3a6af84-da23-40a5-8d1c-49cc10c8e76f/NDP48-x86-x64-AllOS-ENU.exe'
+          } else {
+            $url = 'https://download.microsoft.com/download/4/b/2/cd00d4ed-ebdd-49ee-8a33-eabc3d1030e3/NDP481-x86-x64-AllOS-ENU.exe'
+          }
+          $file = Join-Path (Resolve-Path build) 'original-netfx-setup-private.exe'
+          curl.exe --fail --location --retry 3 --max-time 600 --output $file $url
+          if ($LASTEXITCODE -ne 0) { throw 'Original Microsoft offline installer download failed' }
+          $size = (Get-Item -LiteralPath $file).Length
+          if ($size -lt 15728640 -or $size -gt 262144000) { throw 'Original Microsoft media size invalid' }
+          $sig = Get-AuthenticodeSignature -LiteralPath $file
+          if ($sig.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+              $null -eq $sig.SignerCertificate -or
+              $sig.SignerCertificate.Subject -notmatch '(^|, )O=Microsoft Corporation(,|$)') {
+            throw 'Original Microsoft setup Authenticode authentication failed'
+          }
+          'Authenticated original Microsoft installer; no installation invoked'
+      - name: Inspect outer CAB and MZZ package members without copying any vendor bytes out
+        shell: pwsh
+        env:
+          FRAMEWORK: ${{ matrix.framework }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $seven = Join-Path $env:ProgramFiles '7-Zip\7z.exe'
+          if (!(Test-Path -LiteralPath $seven)) { throw 'Windows 7z package reader missing' }
+          $installer = Join-Path (Resolve-Path build) 'original-netfx-setup-private.exe'
+          $listing = Join-Path (Resolve-Path build) 'private-original-list.txt'
+          $private = Join-Path $env:RUNNER_TEMP 'swcompat-netfx-full-diagnostic'
+          $cabs = Join-Path $private 'cabs'
+          $mzz = Join-Path $private 'mzz'
+          New-Item -ItemType Directory -Force $cabs, $mzz | Out-Null
+          try {
+            & $seven l -slt $installer > $listing 2>$null
+            $listed = $LASTEXITCODE
+            python -m scripts.netfx481_archive_evidence --listing $listing --reader-exit $listed --output build/netfx-original-outer.json
+            if ($LASTEXITCODE -ne 0) { throw 'Original .NET outer classifier failed' }
+            & $seven e -y $installer '-ir!*.cab' "-o$cabs" > $null 2>$null
+            $cabExit = $LASTEXITCODE
+            if ($cabExit -gt 1) { throw 'Original Microsoft CAB extraction unavailable' }
+            python -m scripts.netfx481_nested_cab_evidence --cab-directory $cabs --sevenzip $seven --output build/netfx-original-cab.json
+            if ($LASTEXITCODE -ne 0) { throw 'Original .NET CAB census invalid' }
+            & $seven e -y $installer '-ir!*.mzz' "-o$mzz" > $null 2>$null
+            $mzzExit = $LASTEXITCODE
+            if ($mzzExit -gt 1) { throw 'Original Microsoft MZZ extraction unavailable' }
+            # Some MZZ payloads may be inside the signed CAB layer.
+            # The bounded classifier remains explicit if none can be listed.
+            $foundCab = @(Get-ChildItem -LiteralPath $cabs -Filter '*.cab' -File)
+            if ($foundCab.Count -le 12) {
+              foreach ($cab in $foundCab) {
+                & $seven e -y -aos $cab.FullName '-ir!*.mzz' "-o$mzz" > $null 2>$null
+                if ($LASTEXITCODE -gt 2) { throw 'Nested original .NET MZZ inspection failed' }
+              }
+            }
+            python -m scripts.netfx4x_mzz_evidence --directory $mzz --sevenzip $seven --output build/netfx-original-mzz.json
+            if ($LASTEXITCODE -ne 0) { throw 'Original MZZ report failed validation' }
+            python -m scripts.netfx4x_mzz_pe_evidence --directory $mzz --sevenzip $seven --output build/netfx-original-pe.json
+            if ($LASTEXITCODE -ne 0) { throw 'Original MZZ PE architecture classifier failed' }
+            python -c 'import json; from pathlib import Path; from scripts.netfx481_archive_evidence import validate as a; from scripts.netfx481_nested_cab_evidence import validate as c; from scripts.netfx4x_mzz_evidence import validate as m; p=Path("build"); assert a(json.loads((p/"netfx-original-outer.json").read_text())); assert c(json.loads((p/"netfx-original-cab.json").read_text())); assert m(json.loads((p/"netfx-original-mzz.json").read_text()))'
+            if ($LASTEXITCODE -ne 0) { throw 'One original package census failed closed' }
+          }
+          finally {
+            Remove-Item -LiteralPath $listing -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $private -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
+          }
+      - name: Report fixed diagnostic classes, not proprietary data
+        shell: pwsh
+        env:
+          FRAMEWORK: ${{ matrix.framework }}
+        run: |
+          $outer = Get-Content -Raw build/netfx-original-outer.json | ConvertFrom-Json
+          $cab = Get-Content -Raw build/netfx-original-cab.json | ConvertFrom-Json
+          $mzz = Get-Content -Raw build/netfx-original-mzz.json | ConvertFrom-Json
+          Add-Content $env:GITHUB_STEP_SUMMARY "## Authenticated original Microsoft .NET $($env:FRAMEWORK) archive diagnosis"
+          Add-Content $env:GITHUB_STEP_SUMMARY "Installer signed by Microsoft Corporation: **VERIFIED**"
+          Add-Content $env:GITHUB_STEP_SUMMARY "Outer archive: **$($outer.status)**, entries **$($outer.entries)**"
+          Add-Content $env:GITHUB_STEP_SUMMARY "Nested CABs: **$($cab.status)**, classified **$($cab.cabs_listed)/$($cab.cab_count)**"
+          Add-Content $env:GITHUB_STEP_SUMMARY "Nested CAB CLR-like: **$($cab.features.CLR_MEMBER)**; MSCORLIB-like: **$($cab.features.MSCORLIB_MEMBER)**"
+          Add-Content $env:GITHUB_STEP_SUMMARY "MZZ archives: **$($mzz.status)**, classified **$($mzz.mzz_listed)/$($mzz.mzz_found)**"
+          Add-Content $env:GITHUB_STEP_SUMMARY "MZZ CLR-like: **$($mzz.signals.CLR_LIKE)**; x64-named: **$($mzz.signals.AMD64_NAMED)**; WPF-like: **$($mzz.signals.WPF_LIKE)**"
+          $pe = Get-Content -Raw build/netfx-original-pe.json | ConvertFrom-Json
+          Add-Content $env:GITHUB_STEP_SUMMARY "Exact original CLR AMD64 PE: **$($pe.members.CLR_AMD64)**"
+          Add-Content $env:GITHUB_STEP_SUMMARY "Exact original MSCORLIB AMD64 PE: **$($pe.members.MSCORLIB_AMD64)**"
+          Add-Content $env:GITHUB_STEP_SUMMARY "Original CLR member extraction status: **$($pe.status)**"
+          Add-Content $env:GITHUB_STEP_SUMMARY "Native CLR installation and execution: **NOT_TESTED**"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: authentic-netfx-${{ matrix.framework }}-diagnostic-categories-only
+          path: |
+            build/netfx-original-outer.json
+            build/netfx-original-cab.json
+            build/netfx-original-mzz.json
+            build/netfx-original-pe.json
+          retention-days: 7
+          if-no-files-found: error
+
+  apple-silicon-wine-baseline:
+    needs: privacy-regressions
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download independently pinned Wine Staging 11.21
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-staging-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-staging-11.21-osx64.tar.xz"
+          echo "d7bcd5abf4df27aae397a7898aef074fea4a2e0b51e0a55aa9659517bbf9d452  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wine-staging-diagnostic"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/wine-staging-diagnostic"
+          WINE_BIN="$(find "$RUNNER_TEMP/wine-staging-diagnostic" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_DIAG_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Establish genuine Apple Silicon Wine base and safely test DISM negative contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          PREFIX="$RUNNER_TEMP/swcompat-full-diagnostic-wine-prefix"
+          python3 -m swcompat --wine "$SWCOMPAT_DIAG_WINE" --prefix "$PREFIX" --logs-dir "$RUNNER_TEMP/swcompat-full-diagnostic-logs" init
+          touch "$PREFIX/.swcompat-netfx481-disposable"
+          python3 -m scripts.netfx481_dism_contract \
+            --wine "$SWCOMPAT_DIAG_WINE" --prefix "$PREFIX" \
+            --output build/full-diagnostic-dism.json --agree-disposable-prefix
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.netfx481_dism_contract import validate
+          r = json.loads(Path("build/full-diagnostic-dism.json").read_text())
+          assert validate(r)
+          print("APPLE_SILICON_DISM_NEGATIVE_CONTRACT", r["status"])
+          print("ORIGINAL_DOTNET48_INSTALLED", "NOT_TESTED")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: apple-silicon-wine-negative-servicing-diagnostic-only
+          path: build/full-diagnostic-dism.json
+          if-no-files-found: warn
+          retention-days: 7
