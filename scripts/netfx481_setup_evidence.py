@@ -141,7 +141,7 @@ SECONDARY_MAX_FILES = 24
 SECONDARY_MAX_DIRS = 120
 SECONDARY_MAX_PER_FILE = 2 * 1024 * 1024
 _SECONDARY_FILENAME = re.compile(
-    r"(?i)^(?:dd_[a-z0-9_.() -]{1,120}\.(?:txt|log)"
+    r"(?i)^(?:dd_[a-z0-9_.() -]{1,120}\.(?:txt|log|html)"
     r"|NetFxSetupEvents\.txt"
     r"|Microsoft \.NET Framework 4(?:\.8(?:\.1)?)? Setup_[a-z0-9_.() -]{1,100}\.(?:txt|html)"
     r"|CBS\.log)$"
@@ -150,6 +150,7 @@ SECONDARY_SOURCE_NAMES = {
     "BOOTSTRAPPER_TEMP", "FRAMEWORK_SETUP", "SETUP_EVENTS", "SERVICING_CBS"
 }
 SECONDARY_STATUSES = {"NOT_REQUESTED", "NOT_FOUND", "CLASSIFIED", "PARTIAL_SCAN", "INVALID_ROOT"}
+SECONDARY_FAMILIES = {"NETFX481", "NETFX48"}
 
 
 def _source_group(name: str) -> str:
@@ -172,6 +173,19 @@ def _is_481_log_name(name: str) -> bool:
     lower = name.casefold()
     return (lower.startswith("microsoft .net framework 4.8.1 setup_")
             or lower.startswith(("dd_ndp481", "dd_netfx481", "dd_dotnetfx481")))
+
+
+def _is_target_log_name(name: str, family: str) -> bool:
+    """Only attribute a setup-named blocker to its original framework family."""
+    if family not in SECONDARY_FAMILIES:
+        raise ValueError("Unsupported original setup family")
+    if family == "NETFX481":
+        return _is_481_log_name(name)
+    lower = name.casefold()
+    return (lower.startswith("microsoft .net framework 4.8 setup_")
+            or lower.startswith(("dd_ndp48-", "dd_ndp48_", "dd_netfx48-",
+                                 "dd_netfx48_", "dd_dotnetfx48-",
+                                 "dd_dotnetfx48_")))
 
 
 def _secondary_roots(prefix: Path) -> list[Path]:
@@ -232,7 +246,8 @@ def snapshot_secondary_logs(prefix: Path) -> dict[Path, tuple[int, int, int]]:
 
 
 def scan_secondary_logs(prefix: Path, *,
-                        baseline: dict[Path, tuple[int, int, int]] | None = None) -> dict[str, object]:
+                        baseline: dict[Path, tuple[int, int, int]] | None = None,
+                        family: str = "NETFX481") -> dict[str, object]:
     """Bounded local classification of Microsoft logs in a disposable prefix.
 
     Never returns any source filename or raw log content. Directory enumeration
@@ -247,6 +262,8 @@ def scan_secondary_logs(prefix: Path, *,
 
     from scripts.netfx481_trial import validate_prefix
     validate_prefix(prefix)
+    if family not in SECONDARY_FAMILIES:
+        raise ValueError("Unsupported original setup family")
     roots = _secondary_roots(prefix)
     if baseline is not None and (type(baseline) is not dict
             or any(not isinstance(k, Path) or type(v) is not tuple
@@ -310,21 +327,31 @@ def scan_secondary_logs(prefix: Path, *,
                     continue
                 new_or_changed = baseline is not None and (
                     file not in baseline or _metadata(file) != baseline[file])
-                if _is_481_log_name(name) or new_or_changed:
+                named_for_family = _is_target_log_name(name, family)
+                # Do not classify a preceding original .NET 4.0 / 4.8.1
+                # setup log as a .NET 4.8 failure merely because the file
+                # already existed before the 4.8 attempt.
+                family_stage_file = new_or_changed and (
+                    family == "NETFX481" or not _is_481_log_name(name))
+                if named_for_family or family_stage_file:
                     prereq = classify_prerequisite_text(raw)
                     if prereq["status"] != "CLASSIFIED":
                         partial = True
                     else:
-                        if _is_481_log_name(name):
+                        if named_for_family:
                             prerequisite_files += 1
                             prereq_os.update(prereq["os_versions"])
                             prereq_blockers.update(prereq["blockers"])
                             prereq_5100 = prereq_5100 or prereq["5100_in_log"]
-                        if new_or_changed:
+                        if family_stage_file:
                             stage_files += 1
                             stage_os.update(prereq["os_versions"])
                             stage_blockers.update(prereq["blockers"])
                             stage_5100 = stage_5100 or prereq["5100_in_log"]
+                # For the .NET 4.8 direct setup, prior msxml3 / .NET 4.0
+                # logs are not evidence of the current installer outcome.
+                if family == "NETFX48" and not (named_for_family or family_stage_file):
+                    continue
                 result = classify_text(raw)
                 if result["status"] != "CLASSIFIED":
                     partial = True
