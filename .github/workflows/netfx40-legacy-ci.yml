@@ -46,6 +46,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_prerequisite.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_restart.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_native_mscoree_provenance.py' -v
+          python -m unittest discover -s tests -p 'test_netfx40_host_api_diagnostic.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_to_481_upgrade.py' -v
           python -m unittest discover -s tests -p 'test_netfx481_prereq_diagnostic.py' -v
           python -m unittest discover -s tests -p 'test_netfx4x_authenticated_media_fetch.py' -v
@@ -134,6 +135,12 @@ jobs:
           if (!(Test-Path $csc)) { throw "Microsoft C# compiler missing" }
           & $csc /nologo /target:exe /reference:System.Core.dll /reference:System.Xml.dll /out:build\netfx481_runtime_probe.exe probes\netfx481_runtime_probe.cs
           if ($LASTEXITCODE -ne 0) { throw "C# fixture compilation failed" }
+          & $csc /nologo /target:library /reference:System.Core.dll /reference:System.Xml.dll /out:build\netfx48_managed_host_check.dll probes\netfx48_managed_host_check.cs
+          if ($LASTEXITCODE -ne 0) { throw "Native CLR hosting managed library compilation failed" }
+          $cmdText = "@echo off`r`ncall `"$vcvars`"`r`ncl /nologo /W4 /O2 /GS- /Zl /Fe:build\netfx48_host_activation.exe probes\netfx48_host_activation.c /link /NODEFAULTLIB kernel32.lib /ENTRY:host_entry /SUBSYSTEM:CONSOLE`r`nexit /b %errorlevel%`r`n"
+          Set-Content -LiteralPath build/compile-netfx40-host.cmd -Value $cmdText -Encoding ascii
+          & cmd.exe /d /c build\compile-netfx40-host.cmd
+          if ($LASTEXITCODE -ne 0) { throw "Native CLR hosting fixture compilation failed" }
           $loader = & build\netfx481_clr_load.exe
           if ($LASTEXITCODE -ne 0 -or $loader -notcontains 'SWCOMPAT_CLR_LOAD_STATUS=LOADED') {
             throw "Windows native CLR baseline failed"
@@ -294,6 +301,8 @@ jobs:
             build/netfx40_win32_launch.exe
             build/netfx481_win32_launch.exe
             build/netfx481_disk_space_gate.exe
+            build/netfx48_host_activation.exe
+            build/netfx48_managed_host_check.dll
             build/msi_custom_action_table_probe.exe
             build/msi_original_binary_imports.exe
           compression-level: 0
@@ -654,6 +663,30 @@ jobs:
                 report["mscoree"], report["clr"],
                 report["managed"], report["native_host_confirmed"])
           PY
+      - name: Test original installed .NET 4.0 public CLRCreateInstance hosting API against Wine shim
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx40_host_api_diagnostic \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --fixture build/netfx48_host_activation.exe \
+            --managed build/netfx48_managed_host_check.dll \
+            --restart build/netfx40-msxml3-restart.json \
+            --output build/netfx40-public-host-api.json \
+            --agree-disposable-prefix
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx40_host_api_diagnostic import valid
+          r = json.loads(Path("build/netfx40-public-host-api.json").read_text())
+          assert valid(r) and r["status"] == "MEASURED"
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write("## Genuine installed .NET 4.0 public CLR hosting API\n\n")
+              for field in ("native", "builtin", "native_managed_pass"):
+                  out.write(field + ": **" + str(r[field]) + "**\n\n")
+          PY
       - name: Reject combining host-provenance-only with any 4.8 installer experiment
         if: inputs.host_provenance_only && (inputs.try_48_intermediate || inputs.try_48_direct)
         run: |
@@ -929,6 +962,7 @@ jobs:
             build/netfx40-msxml3-runtime.json
             build/netfx40-msxml3-restart.json
             build/netfx40-mscoree-provenance.json
+            build/netfx40-public-host-api.json
             build/netfx40-to-48-intermediate.json
             build/netfx40-to-48-direct.json
             build/netfx481-disk-before-upgrade.json
