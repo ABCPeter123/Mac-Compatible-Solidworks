@@ -13,10 +13,14 @@ import subprocess
 import tempfile
 from scripts.netfx481_payload_audit import pe_type
 
+# Original MZZ archives may encode the extension before the architecture
+# ("clr_dll_amd64") or after it ("clr_amd64.dll"). Accept only these
+# explicit CLR-related x64 shapes, not arbitrary Microsoft member names.
 TARGETS = {
-    "CLR_AMD64": "clr_amd64.dll",
-    "MSCORLIB_AMD64": "mscorlib_amd64.dll",
-    "WPF_NATIVE_AMD64": "presentationnative_v0400_amd64.dll",
+    "CLR_AMD64": re.compile(r"^clr(?:[-_.]dll)?[-_.](?:amd64|x64)(?:[-_.]dll)?$", re.I),
+    "MSCORLIB_AMD64": re.compile(r"^mscorlib(?:[-_.]dll)?[-_.](?:amd64|x64)(?:[-_.]dll)?$", re.I),
+    "WPF_NATIVE_AMD64": re.compile(
+        r"^presentationnative[-_.]v0400(?:[-_.]dll)?[-_.](?:amd64|x64)(?:[-_.]dll)?$", re.I),
 }
 KINDS = {"NOT_FOUND", "PE_AMD64", "PE_I386", "PE_OTHER", "NOT_PE",
          "EXTRACT_FAILED", "INVALID_SIZE"}
@@ -43,16 +47,17 @@ def validate(report: object) -> bool:
             and (report["status"] != "NO_MZZ" or report == empty()))
 
 
-def matching_names(raw: bytes) -> set[str]:
-    if len(raw) > MAX_LIST or b"\x00" in raw:
-        return set()
+def matching_names(raw: bytes) -> dict[str, str]:
+    """Keep original member names only inside the disposable process."""
+    if len(raw) > MAX_LIST or b"\\x00" in raw:
+        return {}
     try:
         lines = raw.decode("utf-8-sig").splitlines()
     except UnicodeError:
-        return set()
+        return {}
     if not any(line.startswith("----------") for line in lines):
-        return set()
-    result = set()
+        return {}
+    result: dict[str, str] = {}
     started = False
     for line in lines:
         if line.startswith("----------"):
@@ -63,14 +68,22 @@ def matching_names(raw: bytes) -> set[str]:
         m = NAME.fullmatch(line)
         if not m:
             continue
-        value = m.group(1).replace("\\", "/").casefold().rsplit("/", 1)[-1]
-        if value in TARGETS.values():
-            result.add(value)
+        # No path components, traversal syntax, arbitrary extensions, or
+        # unbounded names may be supplied to the private archive reader.
+        name = m.group(1).replace("\\\\", "/").rsplit("/", 1)[-1]
+        if not name or len(name) > 96 or "/" in name or "\\\\" in name:
+            continue
+        for key, pattern in TARGETS.items():
+            if key not in result and pattern.fullmatch(name):
+                result[key] = name
     return result
 
 
 def _read_member(sevenzip: Path, archive: Path, member: str) -> str:
-    # member is selected from a hard-coded whitelist, never raw archive text.
+    # An original member is permitted only if a fixed x64 name pattern
+    # matched it. Neither the selected name nor the original bytes are logged.
+    if not any(p.fullmatch(member) for p in TARGETS.values()):
+        raise ValueError("Unsafe original MZZ PE member selection")
     with tempfile.TemporaryFile() as private:
         try:
             child = subprocess.run(
@@ -117,8 +130,8 @@ def scan(directory: Path, sevenzip: Path) -> dict:
         if not names:
             result["status"] = "PARTIAL"
             continue
-        for key, member in TARGETS.items():
-            if member not in names or result["members"][key] != "NOT_FOUND":
+        for key, member in names.items():
+            if result["members"][key] != "NOT_FOUND":
                 continue
             outcome = _read_member(sevenzip, archive, member)
             result["members"][key] = outcome
