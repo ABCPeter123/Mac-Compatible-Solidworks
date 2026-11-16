@@ -1,6 +1,8 @@
 name: Genuine Microsoft .NET Framework 4.8.1 on Apple Silicon Wine
 
 # Signed Microsoft installers run only on explicit operator request.
+# Microsoft redistributable binaries stay on ephemeral Windows/Mac runners.
+# Artifacts contain only verified digests and independently compiled probes.
 # Python regression tests are covered by compatibility-ci.yml on each PR.
 on:
   workflow_dispatch:
@@ -112,9 +114,8 @@ jobs:
           Write-Output "Actual Microsoft .NET Framework 4.8.1 offline installer publisher and full SHA256 verified"
       - uses: actions/upload-artifact@v4
         with:
-          name: signed-netfx481-original-microsoft-runtime
+          name: self-authored-netfx481-probes-signed-digest
           path: |
-            build/NDP481-x86-x64-AllOS-ENU.exe
             build/netfx481.sha256
             build/netfx481_runtime_probe.exe
             build/netfx481_win32_launch.exe
@@ -134,8 +135,13 @@ jobs:
           python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
-          name: signed-netfx481-original-microsoft-runtime
+          name: self-authored-netfx481-probes-signed-digest
           path: build
+      - name: Download original Microsoft .NET 4.8.1 independently; verify Windows Authenticode-bound digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx4x_authenticated_media_fetch --version 481
       - name: Fetch and verify fixed Wine 11.21 Apple Silicon-compatible x64 build
         shell: bash
         run: |
@@ -323,8 +329,13 @@ jobs:
           python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
-          name: signed-netfx481-original-microsoft-runtime
+          name: self-authored-netfx481-probes-signed-digest
           path: build
+      - name: Download original Microsoft .NET 4.8.1 independently; verify Windows Authenticode-bound digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx4x_authenticated_media_fetch --version 481
       - name: Prepare verified Winetricks msxml3 command and cabextract
         shell: bash
         run: |
@@ -582,8 +593,13 @@ jobs:
           python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
-          name: signed-netfx481-original-microsoft-runtime
+          name: self-authored-netfx481-probes-signed-digest
           path: build
+      - name: Download original Microsoft .NET 4.8.1 independently; verify Windows Authenticode-bound digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx4x_authenticated_media_fetch --version 481
       - name: Install real Winetricks 20260125 prerequisite recipes
         shell: bash
         run: |
