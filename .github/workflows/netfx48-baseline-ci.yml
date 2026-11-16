@@ -1,6 +1,8 @@
 name: Genuine Microsoft .NET Framework 4.8 Apple Silicon CLR baseline
 
 # Historical authentic .NET 4.8 baseline: explicit dispatch only. Native 4.8.1 prerequisite investigation is active.
+# Microsoft redistributable binaries stay on ephemeral Windows/Mac runners.
+# Artifacts contain only verified digests and independently compiled probes.
 on:
   workflow_dispatch:
 
@@ -75,7 +77,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $url = "https://go.microsoft.com/fwlink/?linkid=2088631"
+          $url = "https://download.microsoft.com/download/f/3/a/f3a6af84-da23-40a5-8d1c-49cc10c8e76f/NDP48-x86-x64-AllOS-ENU.exe"
           $exe = Join-Path (Resolve-Path build) "NDP48-x86-x64-AllOS-ENU.exe"
           curl.exe --fail --location --retry 3 --max-time 600 --output $exe $url
           if ($LASTEXITCODE -ne 0) { throw "Official .NET 4.8 offline download failed" }
@@ -91,9 +93,8 @@ jobs:
           Write-Output "Original .NET Framework 4.8 signed by Microsoft and digest bound"
       - uses: actions/upload-artifact@v4
         with:
-          name: authenticated-original-microsoft-netfx48-private
+          name: self-authored-netfx48-probes-signed-digest
           path: |
-            build/NDP48-x86-x64-AllOS-ENU.exe
             build/netfx48.sha256
             build/netfx481_runtime_probe.exe
             build/netfx481_clr_load.exe
@@ -113,8 +114,13 @@ jobs:
           python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
-          name: authenticated-original-microsoft-netfx48-private
+          name: self-authored-netfx48-probes-signed-digest
           path: build
+      - name: Download original Microsoft .NET 4.8 independently; verify Windows Authenticode-bound digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx4x_authenticated_media_fetch --version 48
       - name: Download and hash-check fixed Apple Silicon Wine 11.21 build
         shell: bash
         run: |
