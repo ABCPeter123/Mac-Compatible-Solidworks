@@ -25,7 +25,7 @@ STATES = {"NOT_REQUESTED", "NOT_FOUND", "READ_FAILED", "TOO_LARGE",
           "INVALID_ENCODING", "CLASSIFIED"}
 OS_LINE = re.compile(r"(?i)\bOS\s+Version\s*[=:]\s*(\d{1,2})\.(\d{1,2})\.(\d{1,6})\b")
 FAIL_LINE = re.compile(
-    r"(?i)\b(block(?:ed|ing)?|fail(?:ed|ure)?|unsupported|not supported|not applicable|"
+    r"(?i)\b(error|block(?:ed|ing)?|fail(?:ed|ure)?|unsupported|not supported|not applicable|"
     r"prerequisite|requirement|minimum|cannot (?:install|continue)|5100|stopblock|"
     r"compatibility mode|not enough disk space|insufficient disk space|"
     r"bytes needed|windows update service|bits is not available)\b"
