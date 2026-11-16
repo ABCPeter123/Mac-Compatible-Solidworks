@@ -33,8 +33,18 @@ STATES = {"NOT_RUN", "NOT_FOUND", "LINKED", "LOADED", "MISSING_DEPENDENCY",
           "OTHER_LOAD_FAILURE", "INVALID_ARGUMENT", "TIMEOUT", "PROBE_ERROR"}
 EXTRACTIONS = {"NOT_STARTED", "NO_MZZ", "NO_CLR", "MZZ_ERROR", "EXTRACT_FAILED",
                "INVALID_CLR_PE", "PE_AMD64"}
-PROCESSES = {"NOT_RUN", "EXIT_ZERO", "EXIT_NONZERO", "SIGNALLED",
-             "TIMEOUT", "SPAWN_ERROR", "NO_Z_DRIVE"}
+PROCESSES = {"NOT_RUN", "EXIT_ZERO", "EXIT_1", "EXIT_2", "EXIT_5",
+             "EXIT_126", "EXIT_127", "EXIT_193", "EXIT_NONZERO_OTHER",
+             "SIGNALLED", "TIMEOUT", "SPAWN_ERROR", "NO_Z_DRIVE"}
+
+
+def exit_class(code: int) -> str:
+    if code == 0:
+        return "EXIT_ZERO"
+    if code < 0:
+        return "SIGNALLED"
+    return "EXIT_" + str(code) if code in {1, 2, 5, 126, 127, 193} else "EXIT_NONZERO_OTHER"
+
 LINES = {
     "SCHEMA": {"1"},
     "LOADER": STATES - {"NOT_RUN", "TIMEOUT", "PROBE_ERROR"},
@@ -48,6 +58,7 @@ def blank() -> dict:
         "status": "NOT_RUN", "installer_authenticode_preverified": False,
         "installer_sha256_verified": False, "extraction": "NOT_STARTED",
         "loader": "NOT_RUN", "selftest": "NOT_RUN",
+        "wine_system_process": "NOT_RUN",
         "selftest_process": "NOT_RUN", "original_process": "NOT_RUN",
         "managed_executed": False,
         "runtime_installed": False, "original_payload_artifact": False,
@@ -61,6 +72,7 @@ def valid(report: object) -> bool:
             or report["extraction"] not in EXTRACTIONS
             or report["loader"] not in STATES
             or report["selftest"] not in STATES
+            or report["wine_system_process"] not in PROCESSES
             or report["selftest_process"] not in PROCESSES
             or report["original_process"] not in PROCESSES):
         return False
@@ -193,13 +205,27 @@ def _invoke(wine: Path, prefix: Path, fixture: Path,
             return "TIMEOUT", "TIMEOUT"
         except OSError:
             return "PROBE_ERROR", "SPAWN_ERROR"
-        if proc.returncode < 0:
-            return "PROBE_ERROR", "SIGNALLED"
         if proc.returncode != 0:
-            return "PROBE_ERROR", "EXIT_NONZERO"
+            return "PROBE_ERROR", exit_class(proc.returncode)
         out.seek(0)
         raw = out.read(MAX_PROBE + 1)
     return parse_loader(raw, 0), "EXIT_ZERO"
+
+
+def _wine_system_control(wine: Path, prefix: Path) -> str:
+    env = os.environ.copy()
+    env.pop("WINEDLLOVERRIDES", None)
+    env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64", "WINEDEBUG": "-all"})
+    try:
+        proc = subprocess.run(
+            [str(wine), "cmd.exe", "/c", "ver"], cwd=prefix, env=env,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, timeout=35, check=False)
+        return exit_class(proc.returncode)
+    except subprocess.TimeoutExpired:
+        return "TIMEOUT"
+    except OSError:
+        return "SPAWN_ERROR"
 
 
 def _load(wine: Path, prefix: Path, fixture: Path,
@@ -228,6 +254,10 @@ def trial(installer: Path, expected_sha: str, wine: Path, prefix: Path,
     result["status"] = "PARTIAL"
     result["installer_authenticode_preverified"] = True
     result["installer_sha256_verified"] = True
+    result["wine_system_process"] = _wine_system_control(wine, prefix)
+    if result["wine_system_process"] != "EXIT_ZERO":
+        assert valid(result)
+        return result
     result["selftest"], result["selftest_process"] = _invoke(
         wine, prefix, fixture, "--selftest-windows", original=False)
     if result["selftest"] != "LOADED":
@@ -262,7 +292,8 @@ def main(argv: list[str] | None = None) -> int:
     assert valid(report)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, sort_keys=True), encoding="utf-8")
-    for key in ("selftest", "selftest_process", "extraction", "loader",
+    for key in ("wine_system_process", "selftest", "selftest_process",
+                "extraction", "loader",
                 "original_process", "managed_executed", "runtime_installed"):
         print("AUTHENTIC_NETFX48_ISOLATED", key, report[key])
     return 0
