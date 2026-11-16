@@ -199,6 +199,9 @@ def _invoke(wine: Path, prefix: Path, fixture: Path,
         r"C:\Windows\System32\kernel32.dll" if argument == "--selftest-windows"
         else argument
     )
+    # Resolve before changing cwd. Otherwise build/fixture.exe with cwd=build
+    # becomes build/build/fixture.exe, which makes Wine fail before the test.
+    fixture = fixture.resolve(strict=True)
     with tempfile.TemporaryFile() as out:
         try:
             proc = subprocess.run(
