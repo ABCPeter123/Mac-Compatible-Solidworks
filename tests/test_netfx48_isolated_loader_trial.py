@@ -170,7 +170,7 @@ class IsolatedLoaderTests(unittest.TestCase):
                 self.assertFalse(kwargs["original"])
                 return ("LOADED", "EXIT_ZERO") if name == "kernel32.dll" else (
                     "MISSING_DEPENDENCY", "EXIT_ZERO")
-            with mock.patch.object(t, "parse_pe", side_effect=parse_private), \\
+            with mock.patch.object(t, "parse_pe", side_effect=parse_private), \
                  mock.patch.object(t, "_invoke", side_effect=fake_invoke):
                 report = t.direct_import_check(root / "wine", root / "prefix",
                                                root / "fixture", clr)
