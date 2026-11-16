@@ -50,17 +50,24 @@ jobs:
           $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           if (!$vs) { throw 'Windows x64 compiler unavailable' }
           $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
-          $cmdText = "@echo off`r`ncall `"$vcvars`"`r`ncl /nologo /W4 /O2 /MT /Fe:build\netfx48_isolated_loader.exe probes\netfx48_isolated_loader.c`r`nexit /b %errorlevel%`r`n"
+          $cmdText = "@echo off`r`ncall `"$vcvars`"`r`ncl /nologo /W4 /O2 /GS- /Zl /Fe:build\netfx48_isolated_loader.exe probes\netfx48_isolated_loader.c /link /NODEFAULTLIB /ENTRY:isolated_entry /SUBSYSTEM:CONSOLE`r`nexit /b %errorlevel%`r`n"
           Set-Content -LiteralPath build/compile-isolated-loader.cmd -Value $cmdText -Encoding ascii
           & cmd.exe /d /c build\compile-isolated-loader.cmd
           if ($LASTEXITCODE -ne 0) { throw 'Self-authored Windows loader fixture did not compile' }
-          $missing = & build\netfx48_isolated_loader.exe --selftest-missing
-          if ($LASTEXITCODE -ne 0 -or $missing -notcontains 'SWCOMPAT_NETFX48_ISOLATED_LOADER=NOT_FOUND') {
-            throw 'Independent Windows missing-file control failed'
+          try {
+            $env:SWCOMPAT_LOAD_DLL_PATH = 'C:\swcompat-definitely-missing\nonexistent.dll'
+            $missing = & build\netfx48_isolated_loader.exe
+            if ($LASTEXITCODE -ne 0 -or $missing -notcontains 'SWCOMPAT_NETFX48_ISOLATED_LOADER=NOT_FOUND') {
+              throw 'Independent Windows missing-file control failed'
+            }
+            $env:SWCOMPAT_LOAD_DLL_PATH = Join-Path $env:WINDIR 'System32\kernel32.dll'
+            $system = & build\netfx48_isolated_loader.exe
+            if ($LASTEXITCODE -ne 0 -or $system -notcontains 'SWCOMPAT_NETFX48_ISOLATED_LOADER=LOADED') {
+              throw 'Independent Windows native LoadLibraryExW control failed'
+            }
           }
-          $system = & build\netfx48_isolated_loader.exe --selftest-windows
-          if ($LASTEXITCODE -ne 0 -or $system -notcontains 'SWCOMPAT_NETFX48_ISOLATED_LOADER=LOADED') {
-            throw 'Independent Windows native LoadLibraryExW control failed'
+          finally {
+            Remove-Item env:SWCOMPAT_LOAD_DLL_PATH -ErrorAction SilentlyContinue
           }
       - name: Verify original Microsoft 4.8 Authenticode and emit only same-run digest
         id: auth
