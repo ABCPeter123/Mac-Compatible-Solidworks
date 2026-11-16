@@ -59,11 +59,27 @@ class OriginalNativeHostProvenanceTests(unittest.TestCase):
         self.assertFalse(t.valid(dict(d, framework48_installed=True)))
         self.assertFalse(t.valid(dict(d, native_host_confirmed=True)))
         self.assertFalse(t.valid(dict(d, status="MEASURED",
+                                       native40_persistent=True, process="EXIT_ZERO",
+                                       mscoree="NATIVE_ONLY", clr="NATIVE_ONLY",
+                                       managed="PASS", family="MICROSOFT_CLR_CANDIDATE",
+                                       native_host_confirmed=True)))
+        self.assertFalse(t.valid(dict(d, builtin_process="EXIT_ZERO",
+                                       builtin_mscoree="BUILTIN_ONLY",
+                                       builtin_clr="NOT_OBSERVED",
+                                       builtin_managed="PASS",
+                                       builtin_family="MONO")))
+        self.assertFalse(t.valid(dict(d, status="MEASURED",
                                       native40_persistent=True, process="EXIT_ZERO",
                                       mscoree="NATIVE_ONLY", clr="NATIVE_ONLY",
                                       family="MICROSOFT_CLR_CANDIDATE",
                                       managed="PASS", framework48_installed=True)))
         self.assertNotIn("mscoree.dll", json.dumps(d))
+
+    def test_host_comparison_accepts_only_two_explicit_modes(self):
+        with self.assertRaises(ValueError):
+            t.execute_private(Path("wine"), Path("prefix"), Path("fixture"), "mscoree=n,b")
+        with self.assertRaises(ValueError):
+            t.execute_private(Path("wine"), Path("prefix"), Path("fixture"), "mscoree=b;clr=b")
 
     def test_native_host_must_be_both_native_dlls_and_real_managed_pass(self):
         with tempfile.TemporaryDirectory() as td:
@@ -79,10 +95,19 @@ class OriginalNativeHostProvenanceTests(unittest.TestCase):
             managed.write_bytes(b"self authored")
             raw = (event("mscoree.dll", "native") +
                    event("clr.dll", "native") + fixture())
+            invoked = []
             def fake(argv, **kwargs):
-                self.assertEqual(kwargs["env"]["WINEDLLOVERRIDES"], "mscoree=n;clr=n")
+                override = kwargs["env"]["WINEDLLOVERRIDES"]
+                invoked.append(override)
                 self.assertEqual(kwargs["env"]["WINEDEBUG"], "-all,+loaddll")
-                kwargs["stdout"].write(raw)
+                if override == "mscoree=n;clr=n":
+                    kwargs["stdout"].write(raw)
+                elif override == "mscoree=b;clr=n":
+                    kwargs["stdout"].write(
+                        event("mscoree.dll", "builtin") +
+                        fixture().replace(b"MICROSOFT_CLR_CANDIDATE", b"MONO"))
+                else:
+                    self.fail("Unknown managed CLR host control")
                 return mock.Mock(returncode=0)
             with mock.patch.object(t, "validate_native40", return_value=True), \
                  mock.patch.object(t.subprocess, "run", side_effect=fake):
@@ -91,6 +116,12 @@ class OriginalNativeHostProvenanceTests(unittest.TestCase):
                 })
             self.assertTrue(t.valid(r))
             self.assertTrue(r["native_host_confirmed"])
+            self.assertEqual(invoked, ["mscoree=n;clr=n", "mscoree=b;clr=n"])
+            self.assertEqual(r["builtin_process"], "EXIT_ZERO")
+            self.assertEqual(r["builtin_mscoree"], "BUILTIN_ONLY")
+            self.assertEqual(r["builtin_clr"], "NOT_OBSERVED")
+            self.assertEqual(r["builtin_managed"], "PASS")
+            self.assertEqual(r["builtin_family"], "MONO")
             self.assertFalse(r["framework48_installed"])
             for sensitive in (str(root), "C:\\windows", "mscoree.dll"):
                 self.assertNotIn(sensitive, json.dumps(r))
