@@ -31,7 +31,7 @@ static void report(const char *line, DWORD length) {
 } while (0)
 
 void WINAPI isolated_entry(void) {
-    wchar_t path[32768];
+    static wchar_t path[32768];
     DWORD length;
     DWORD attrs;
     DWORD error;
