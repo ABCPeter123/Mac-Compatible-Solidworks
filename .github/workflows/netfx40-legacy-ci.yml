@@ -48,6 +48,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx40_native_mscoree_provenance.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_to_481_upgrade.py' -v
           python -m unittest discover -s tests -p 'test_netfx481_prereq_diagnostic.py' -v
+          python -m unittest discover -s tests -p 'test_netfx4x_authenticated_media_fetch.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msi_evidence.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msi_inventory.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_offline_extract.py' -v
@@ -79,6 +80,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_restart.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_to_481_upgrade.py' -v
           python -m unittest discover -s tests -p 'test_netfx481_prereq_diagnostic.py' -v
+          python -m unittest discover -s tests -p 'test_netfx4x_authenticated_media_fetch.py' -v
           if ($LASTEXITCODE -ne 0) { throw "Post-setup CLR restart persistence safety regression failed" }
           if ($LASTEXITCODE -ne 0) { throw "Original Microsoft .NET in-place upgrade safety regression failed" }
           python -m unittest discover -s tests -p 'test_netfx40_msi_evidence.py' -v
@@ -209,7 +211,7 @@ jobs:
           }
           (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant() |
             Set-Content -LiteralPath build/netfx40.sha256 -NoNewline -Encoding ascii
-          Write-Output "Original .NET Framework 4.8 signed by Microsoft and digest bound"
+          Write-Output "Original .NET Framework 4.0 signed by Microsoft and digest bound"
       - name: Download and authenticate original Microsoft .NET Framework 4.8.1 upgrade media
         if: '!inputs.host_provenance_only'
         shell: pwsh
@@ -274,15 +276,17 @@ jobs:
           $ErrorActionPreference = "Stop"
           python -m scripts.netfx40_windows_extract_reference --installer build/dotNetFx40_Full_x86_x64.exe
           if ($LASTEXITCODE -ne 0) { throw "Original .NET 4.0 native Windows extraction control failed" }
+      # NEVER include original Microsoft .NET installers in GitHub Actions
+      # artifacts. These are downloadable from public-repo runs even when the
+      # artifact name contains "private". Transfer only signed SHA256 digests
+      # and self-authored diagnostic executables; each Mac runner fetches
+      # originals again from Microsoft's fixed URL and verifies byte equality.
       - uses: actions/upload-artifact@v4
         with:
-          name: authenticated-original-microsoft-netfx40-private
+          name: self-authored-netfx40-probes-and-signed-digests
           path: |
-            build/dotNetFx40_Full_x86_x64.exe
             build/netfx40.sha256
-            build/NDP481-x86-x64-AllOS-ENU.exe
             build/netfx481.sha256
-            build/NDP48-x86-x64-AllOS-ENU.exe
             build/netfx48.sha256
             build/netfx48_win32_launch.exe
             build/netfx481_runtime_probe.exe
@@ -308,8 +312,13 @@ jobs:
           python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
-          name: authenticated-original-microsoft-netfx40-private
+          name: self-authored-netfx40-probes-and-signed-digests
           path: build
+      - name: Fetch original .NET 4.0 privately and independently verify Windows signed digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx4x_authenticated_media_fetch --version 40
       - name: Download and hash-check fixed Apple Silicon Wine 11.21 build
         shell: bash
         run: |
@@ -508,8 +517,23 @@ jobs:
           python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
-          name: authenticated-original-microsoft-netfx40-private
+          name: self-authored-netfx40-probes-and-signed-digests
           path: build
+      - name: Fetch selected Microsoft media privately using Windows authenticated SHA256
+        shell: bash
+        env:
+          SWCOMPAT_PROVENANCE_ONLY: ${{ inputs.host_provenance_only }}
+          SWCOMPAT_DIRECT_48: ${{ inputs.try_48_direct }}
+        run: |
+          set -euo pipefail
+          versions=(--version 40)
+          if [ "$SWCOMPAT_PROVENANCE_ONLY" != "true" ]; then
+            versions+=(--version 481)
+          fi
+          if [ "$SWCOMPAT_DIRECT_48" = "true" ]; then
+            versions+=(--version 48)
+          fi
+          python3 -m scripts.netfx4x_authenticated_media_fetch "${versions[@]}"
       - name: Install supported Winetricks 20260125 and its cabextract dependencies
         shell: bash
         run: |
