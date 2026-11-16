@@ -22,6 +22,9 @@ from scripts.netfx481_payload_audit import pe_type
 from scripts.netfx481_trial import validate_prefix
 from scripts.netfx4x_mzz_pe_evidence import matching_names
 from scripts.netfx4x_mzz_import_evidence import FAMILIES, MAX_IMPORTS, family, parse_pe
+from scripts.netfx48_signed_mzz_dependency_staging import (
+    blank as stage_blank, valid as stage_valid, stage as stage_from_mzz,
+)
 
 SHA = re.compile(r"[0-9a-fA-F]{64}\Z")
 MAX_INSTALLER = 250 * 1024 * 1024
@@ -93,6 +96,9 @@ def blank() -> dict:
         "managed_executed": False,
         "runtime_installed": False, "original_payload_artifact": False,
         "direct_imports": empty_dependencies(),
+        "signed_mzz_staging": stage_blank(),
+        "loader_after_mzz": "NOT_RUN",
+        "mzz_process": "NOT_RUN",
     }
 
 
@@ -106,7 +112,25 @@ def valid(report: object) -> bool:
             or report["wine_system_process"] not in PROCESSES
             or report["selftest_process"] not in PROCESSES
             or report["original_process"] not in PROCESSES
-            or not valid_dependencies(report["direct_imports"])):
+            or not valid_dependencies(report["direct_imports"])
+            or not stage_valid(report["signed_mzz_staging"])
+            or report["loader_after_mzz"] not in STATES
+            or report["mzz_process"] not in PROCESSES):
+        return False
+    if (report["signed_mzz_staging"]["staged"] == 0
+            and report["loader_after_mzz"] != "NOT_RUN"):
+        return False
+    if (report["loader_after_mzz"] != "NOT_RUN"
+            and report["extraction"] != "PE_AMD64"):
+        return False
+    if (report["loader_after_mzz"] != "NOT_RUN"
+            and (report["loader"] not in {"MISSING_DEPENDENCY", "MISSING_EXPORT",
+                                          "OTHER_LOAD_FAILURE"}
+                 or report["signed_mzz_staging"]["staged"] < 1
+                 or report["mzz_process"] == "NOT_RUN")):
+        return False
+    if (report["loader_after_mzz"] == "NOT_RUN"
+            and report["mzz_process"] != "NOT_RUN"):
         return False
     for key in ("installer_authenticode_preverified", "installer_sha256_verified",
                 "managed_executed", "runtime_installed", "original_payload_artifact"):
@@ -282,9 +306,12 @@ def _load(wine: Path, prefix: Path, fixture: Path,
 
 
 def direct_import_check(wine: Path, prefix: Path, fixture: Path,
-                        original: Path) -> dict:
+                        original: Path,
+                        _private_missing: list[str] | None = None) -> dict:
     """The exact original names stay in private memory and are never reported."""
     report = empty_dependencies()
+    if _private_missing is not None:
+        _private_missing.clear()
     if not 512 <= original.stat().st_size <= MAX_CLR:
         report["status"] = "PARTIAL"
         return report
@@ -305,6 +332,8 @@ def direct_import_check(wine: Path, prefix: Path, fixture: Path,
         report["checked"] += 1
         report[bucket] += 1
         report["families"][family(name)][bucket] += 1
+        if bucket == "missing" and _private_missing is not None:
+            _private_missing.append(name)
         if bucket == "other":
             report["status"] = "PARTIAL"
     assert valid_dependencies(report)
@@ -348,8 +377,15 @@ def trial(installer: Path, expected_sha: str, wine: Path, prefix: Path,
                 wine, prefix, fixture, original)
             if result["loader"] not in {"TIMEOUT", "PROBE_ERROR"}:
                 result["status"] = "MEASURED"
+            missing_names: list[str] = []
             result["direct_imports"] = direct_import_check(
-                wine, prefix, fixture, original)
+                wine, prefix, fixture, original, _private_missing=missing_names)
+            if missing_names and result["loader"] == "MISSING_DEPENDENCY":
+                result["signed_mzz_staging"] = stage_from_mzz(
+                    private, sevenzip, missing_names)
+                if result["signed_mzz_staging"]["staged"] > 0:
+                    result["loader_after_mzz"], result["mzz_process"] = _load(
+                        wine, prefix, fixture, original)
     assert valid(result)
     return result
 
@@ -372,6 +408,16 @@ def main(argv: list[str] | None = None) -> int:
                 "extraction", "loader",
                 "original_process", "managed_executed", "runtime_installed"):
         print("AUTHENTIC_NETFX48_ISOLATED", key, report[key])
+    staging = report["signed_mzz_staging"]
+    print("AUTHENTIC_NETFX48_MZZ_STAGE", staging["status"],
+          staging["missing_requested"], staging["located"], staging["staged"])
+    print("AUTHENTIC_NETFX48_MZZ_RELOAD",
+          report["loader_after_mzz"], report["mzz_process"])
+    for family_name in FAMILIES:
+        values = staging["families"][family_name]
+        if values["located"]:
+            print("AUTHENTIC_NETFX48_MZZ_FAMILY", family_name,
+                  values["located"], values["staged"])
     dep = report["direct_imports"]
     print("AUTHENTIC_NETFX48_DIRECT", dep["status"],
           dep["checked"], dep["loaded"], dep["missing"], dep["other"])
