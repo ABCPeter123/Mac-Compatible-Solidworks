@@ -10,6 +10,8 @@ from pathlib import Path
 import re
 import unittest
 
+from scripts.netfx4x_authenticated_media_fetch import MEDIA
+
 WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
 PROPRIETARY_INSTALLERS = (
     "dotNetFx40_Full_x86_x64.exe",
@@ -68,6 +70,7 @@ class PublicArtifactPrivacyTests(unittest.TestCase):
                 )
                 self.assertIn("build/netfx" + version + ".sha256", text)
                 self.assertIn("Get-AuthenticodeSignature", text)
+                self.assertIn(MEDIA[version][2], text)  # fixed Windows source = Mac source
                 blocks = uploads(text)
                 self.assertTrue(blocks, "Must inspect the original workflow artifact")
                 for block in blocks:
