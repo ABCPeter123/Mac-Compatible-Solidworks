@@ -98,6 +98,20 @@ class HostBoundaryTests(unittest.TestCase):
         self.assertEqual(blank["original_shim_dependency_stage"]["status"], "NOT_RUN")
         self.assertEqual(blank["original_shim_direct_imports"]["status"], "NOT_RUN")
 
+    def test_native_runtime_identity_guard_uses_equal_counted_directories(self):
+        source = (Path(__file__).resolve().parents[1]
+                  / "probes/netfx48_host_activation.c").read_text(encoding="utf-8")
+        # Comparing a whole zero-terminated path to the prefix of a longer
+        # filename is not a valid CLR provenance test. The known-good native
+        # Windows runtime must pass; unrelated CLR directories must not.
+        self.assertIn("i != slash", source)
+        self.assertIn("CompareStringOrdinal(runtime_dir, (int)i, mapped_path, (int)slash, TRUE)",
+                      source)
+        self.assertNotIn("CompareStringOrdinal(runtime_dir, -1,", source)
+        self.assertLess(source.index("CompareStringOrdinal(runtime_dir"),
+                        source.index("hr = ICLRRuntimeInfo_GetInterface(info"))
+        self.assertIn('RESULT("OTHER_RUNTIME_SELECTED")', source)
+
     def test_private_host_invocation_is_bounded_and_classified(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
