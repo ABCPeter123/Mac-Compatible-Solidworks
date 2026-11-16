@@ -4,6 +4,11 @@
 
 Authentic 4.8.1 in-place attempts on the native 4.0 prefix returned **5100**, a Microsoft **system-requirements** code, under Wine-reported Windows 10 and Windows 11 **21H2**. Microsoft supports separate 4.8.1 installation on both corresponding real Windows OS generations. The installer-specific prerequisite condition is **unknown** and Wine's DISM/CBS compatibility is **not proven**. `clr.dll` remained from 4.0, 4.8.1 Release registration was absent, and `framework481_confirmed` remained false.
 
+**November 15 diagnostic update:** [Original signed setup run 43772523756](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43772523756) confirmed 5100 again despite installer-observed supported Windows 10 and >5 GB available in each tested Windows disk-space API. Original 4.8.1 CLR still did not install. This rules out a simple disk-space shortfall, not all installer disk or servicing conditions. The Winetricks original .NET 4.8 recipe previously timed out after 840 seconds, before any 4.8 CLR could be verified. The default Microsoft setup test remains manual-only.
+
+**One controlled intermediate candidate:** [PR #127](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/pull/127) adds manual-dispatch input `try_48_direct` that fetches the signed original .NET 4.8 offline installer on Windows, runs it after independently verified native 4.0 under isolated Wine Windows 7 profile, restores Windows 10, and gates subsequent original 4.8.1 strictly on an actually changed native CLR, authentic 4.8 Release range, successful setup lifecycle, and native-only managed execution. This is **not** a substitute for 4.8.1. Never select `try_48_direct` and `try_48_intermediate` together. No direct signed 4.8 experiment outcome is yet verified.
+
+
 ## Next actions, in order
 
 1. **Diagnose the authentic 5100 condition** using one short-lived, sanitized prerequisite report from the original installer. Measure which setup condition rejected Wine, rather than changing winver again. A Wine-reported supported version is not proof of the real Windows servicing environment.
