@@ -5,6 +5,14 @@ name: Isolated genuine Microsoft .NET 4.8 x64 CLR loader on Apple Silicon
 # same-run SHA256 equality binds the Mac payload to the signed Windows original.
 # This does not install .NET, spoof Release, or run a managed application.
 on:
+  push:
+    branches:
+      - test-authentic-netfx48-host-activation
+    paths:
+      - '.github/workflows/netfx48-isolated-clr-load-ci.yml'
+      - 'scripts/netfx48_isolated_loader_trial.py'
+      - 'probes/netfx48_host_activation.c'
+      - 'tests/test_netfx48_host_activation.py'
   pull_request:
     paths:
       - '.github/workflows/netfx48-isolated-clr-load-ci.yml'
