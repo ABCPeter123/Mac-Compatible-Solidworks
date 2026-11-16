@@ -133,6 +133,36 @@ jobs:
             --prefix "$RUNNER_TEMP/winver-5100-prefix" \
             --bare build/winver_481_bare.exe --manifested build/winver_481_supported.exe \
             --output build/winver-sidecar-preferred.json --agree-disposable-prefix
+      - name: Verify Winetricks uses the pinned Wine engine without installing Microsoft media
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install winetricks
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import shutil
+          import subprocess
+          import tempfile
+          from scripts.netfx40_to_48_intermediate import _env
+          wine = Path(os.environ["SWCOMPAT_WINE"]).resolve(strict=True)
+          prefix = Path(os.environ["RUNNER_TEMP"]) / "winver-5100-prefix"
+          winetricks = shutil.which("winetricks")
+          assert winetricks is not None
+          env = _env(wine, prefix)
+          assert env["WINE_BIN"] == str(wine)
+          assert env["WINE_BINDIR"] == str(wine.parent)
+          assert env["WINESERVER_BIN"] == str(wine.parent / "wineserver"), (
+              "Pinned Wine bundle missing native wineserver")
+          with tempfile.TemporaryFile() as private:
+              result = subprocess.run(
+                  ["bash", winetricks, "list-installed"],
+                  cwd=prefix, env=env, stdin=subprocess.DEVNULL,
+                  stdout=private, stderr=subprocess.STDOUT,
+                  timeout=100, check=False)
+          print("WINETRICKS_ENGINE_PINNED", result.returncode == 0)
+          assert result.returncode == 0, "Winetricks pinned-engine preflight failed"
+          PY
       - name: Report strictly finite real Windows version API results
         if: always()
         shell: bash
