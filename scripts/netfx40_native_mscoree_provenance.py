@@ -36,6 +36,9 @@ def blank() -> dict:
         "native40_persistent": False,
         "mscoree": "NOT_RUN", "clr": "NOT_RUN",
         "managed": "NOT_VERIFIED", "family": "NOT_VERIFIED",
+        "builtin_process": "NOT_RUN", "builtin_mscoree": "NOT_RUN",
+        "builtin_clr": "NOT_RUN", "builtin_managed": "NOT_VERIFIED",
+        "builtin_family": "NOT_VERIFIED",
         "native_host_confirmed": False,
         "framework48_installed": False,
     }
@@ -45,9 +48,15 @@ def valid(report: object) -> bool:
     if type(report) is not dict or set(report) != set(blank()):
         return False
     if (report["status"] not in STATES or report["process"] not in PROCESSES
+            or report["builtin_process"] not in PROCESSES
             or report["mscoree"] not in SOURCES or report["clr"] not in SOURCES
+            or report["builtin_mscoree"] not in SOURCES
+            or report["builtin_clr"] not in SOURCES
             or report["managed"] not in {"NOT_VERIFIED", "PASS", "FAIL"}
+            or report["builtin_managed"] not in {"NOT_VERIFIED", "PASS", "FAIL"}
             or report["family"] not in {
+                "NOT_VERIFIED", "MONO", "MICROSOFT_CLR_CANDIDATE", "UNKNOWN"}
+            or report["builtin_family"] not in {
                 "NOT_VERIFIED", "MONO", "MICROSOFT_CLR_CANDIDATE", "UNKNOWN"}
             or type(report["native40_persistent"]) is not bool
             or type(report["native_host_confirmed"]) is not bool
@@ -55,7 +64,16 @@ def valid(report: object) -> bool:
         return False
     if report["status"] == "NOT_ELIGIBLE":
         return report == blank()
-    if not report["native40_persistent"] or report["process"] == "NOT_RUN":
+    if (not report["native40_persistent"] or report["process"] == "NOT_RUN"
+            or report["builtin_process"] == "NOT_RUN"
+            or report["mscoree"] == "NOT_RUN" or report["clr"] == "NOT_RUN"
+            or report["builtin_mscoree"] == "NOT_RUN"
+            or report["builtin_clr"] == "NOT_RUN"):
+        return False
+    if ((report["process"] != "EXIT_ZERO"
+         and report["managed"] == "PASS")
+        or (report["builtin_process"] != "EXIT_ZERO"
+            and report["builtin_managed"] == "PASS")):
         return False
     expected = (report["mscoree"] == "NATIVE_ONLY"
                 and report["clr"] == "NATIVE_ONLY"
@@ -108,6 +126,40 @@ def managed_only(raw: bytes, code: int) -> dict[str, str]:
     return {"clr_family": parsed["clr_family"], "managed": parsed["managed"]}
 
 
+def execute_private(wine: Path, prefix: Path, fixture: Path,
+                    override: str) -> tuple[str, dict[str, str], dict[str, str]]:
+    """Run one fixed-host variant, erase full Wine trace, return enums only."""
+    if override not in {"mscoree=n;clr=n", "mscoree=b;clr=n"}:
+        raise ValueError("Unknown native CLR host comparison mode")
+    env = os.environ.copy()
+    env.pop("WINEDLLOVERRIDES", None)
+    env.update({
+        "WINEPREFIX": str(prefix), "WINEARCH": "win64",
+        "WINEDLLOVERRIDES": override,
+        "WINEDEBUG": "-all,+loaddll",
+    })
+    with tempfile.TemporaryFile() as out:
+        try:
+            proc = subprocess.run(
+                [str(wine), str(fixture)], cwd=fixture.parent,
+                env=env, stdin=subprocess.DEVNULL,
+                stdout=out, stderr=subprocess.STDOUT,
+                timeout=85, check=False)
+            code = proc.returncode
+            process = "EXIT_ZERO" if code == 0 else "EXIT_NONZERO"
+        except subprocess.TimeoutExpired:
+            process = "TIMEOUT"
+            code = 124
+        except OSError:
+            process = "SPAWN_ERROR"
+            code = 124
+        out.seek(0)
+        raw = out.read(MAX_OUTPUT + 1)
+    sources = classify_loads(raw)
+    state = managed_only(raw, code)
+    return process, sources, state
+
+
 def audit(wine: Path, prefix: Path, fixture: Path, native40: dict) -> dict:
     validate_prefix(prefix)
     if not validate_native40(native40):
@@ -125,34 +177,20 @@ def audit(wine: Path, prefix: Path, fixture: Path, native40: dict) -> dict:
     wine = wine.resolve(strict=True)
     result = blank()
     result.update(status="MEASURED", native40_persistent=True)
-    env = os.environ.copy()
-    env.pop("WINEDLLOVERRIDES", None)
-    env.update({
-        "WINEPREFIX": str(prefix), "WINEARCH": "win64",
-        "WINEDLLOVERRIDES": "mscoree=n;clr=n",
-        "WINEDEBUG": "-all,+loaddll",
-    })
-    with tempfile.TemporaryFile() as out:
-        try:
-            proc = subprocess.run(
-                [str(wine), str(fixture)], cwd=fixture.parent,
-                env=env, stdin=subprocess.DEVNULL,
-                stdout=out, stderr=subprocess.STDOUT,
-                timeout=85, check=False)
-            code = proc.returncode
-            result["process"] = "EXIT_ZERO" if code == 0 else "EXIT_NONZERO"
-        except subprocess.TimeoutExpired:
-            result["process"] = "TIMEOUT"
-            code = 124
-        except OSError:
-            result["process"] = "SPAWN_ERROR"
-            code = 124
-        out.seek(0)
-        raw = out.read(MAX_OUTPUT + 1)
-    sources = classify_loads(raw)
-    state = managed_only(raw, code)
-    result.update(mscoree=sources["mscoree"], clr=sources["clr"],
+    process, sources, state = execute_private(
+        wine, prefix, fixture, "mscoree=n;clr=n")
+    result.update(process=process, mscoree=sources["mscoree"], clr=sources["clr"],
                   managed=state["managed"], family=state["clr_family"])
+    # Negative control in the same known-working prefix. Never reinstall .NET.
+    # Wine's builtin host may select Mono, fail to host, or not be available.
+    builtin_process, builtin_sources, builtin_state = execute_private(
+        wine, prefix, fixture, "mscoree=b;clr=n")
+    result.update(
+        builtin_process=builtin_process,
+        builtin_mscoree=builtin_sources["mscoree"],
+        builtin_clr=builtin_sources["clr"],
+        builtin_managed=builtin_state["managed"],
+        builtin_family=builtin_state["clr_family"])
     result["native_host_confirmed"] = (
         result["mscoree"] == "NATIVE_ONLY"
         and result["clr"] == "NATIVE_ONLY"
@@ -179,6 +217,9 @@ def main(argv: list[str] | None = None) -> int:
     print("AUTHENTIC_NETFX40_MSCOREE_PROVENANCE",
           report["status"], report["mscoree"], report["clr"],
           report["managed"], report["family"], report["native_host_confirmed"])
+    print("AUTHENTIC_NETFX40_BUILTIN_HOST_CONTROL",
+          report["builtin_process"], report["builtin_mscoree"],
+          report["builtin_clr"], report["builtin_managed"], report["builtin_family"])
     return 0
 
 
