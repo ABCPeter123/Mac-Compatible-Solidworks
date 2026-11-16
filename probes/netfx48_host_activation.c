@@ -13,6 +13,7 @@
 
 typedef HRESULT (STDAPICALLTYPE *CreateCLRFn)(REFCLSID, REFIID, LPVOID *);
 static wchar_t clr_path[4096];
+static wchar_t shim_path[4096];
 static wchar_t managed_path[4096];
 static wchar_t runtime_dir[4096];
 static wchar_t mapped_path[4096];
@@ -54,10 +55,27 @@ void WINAPI host_entry(void) {
     if (!mapped_len || mapped_len >= 4096)
         RESULT("ORIGINAL_PATH_MISMATCH");
 
-    shim = LoadLibraryW(L"mscoree.dll");
-    if (shim == NULL) RESULT("NO_MSCOREE");
-    create = (CreateCLRFn)GetProcAddress(shim, "CLRCreateInstance");
-    if (create == NULL) RESULT("NO_HOST_EXPORT");
+    /* The optional original Microsoft shim must be a genuinely staged
+       PE_AMD64 member of the independently authenticated .NET 4.8 archive.
+       Never silently fall back to Wine mscoree if the original shim fails. */
+    n = GetEnvironmentVariableW(L"SWCOMPAT_ORIGINAL_SHIM_PATH", shim_path, 4096);
+    if (n >= 4096) RESULT("ORIGINAL_SHIM_INVALID_INPUT");
+    if (n != 0) {
+        DWORD attrs = GetFileAttributesW(shim_path);
+        if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY))
+            RESULT("ORIGINAL_SHIM_MISSING");
+        if (attrs & FILE_ATTRIBUTE_REPARSE_POINT)
+            RESULT("ORIGINAL_SHIM_INVALID_INPUT");
+        shim = LoadLibraryExW(shim_path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+        if (shim == NULL) RESULT("ORIGINAL_SHIM_LOAD_FAILED");
+        create = (CreateCLRFn)GetProcAddress(shim, "CLRCreateInstance");
+        if (create == NULL) RESULT("ORIGINAL_SHIM_NO_HOST_EXPORT");
+    } else {
+        shim = LoadLibraryW(L"mscoree.dll");
+        if (shim == NULL) RESULT("NO_MSCOREE");
+        create = (CreateCLRFn)GetProcAddress(shim, "CLRCreateInstance");
+        if (create == NULL) RESULT("NO_HOST_EXPORT");
+    }
 
     hr = create(&CLSID_CLRMetaHost, &IID_ICLRMetaHost, (void **)&meta);
     if (FAILED(hr) || meta == NULL) RESULT("META_HOST_FAILED");
