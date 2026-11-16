@@ -28,10 +28,23 @@ class OriginalPeTests(unittest.TestCase):
             b"Path = mscorlib_amd64.dll\n"
             b"Path = secret.dll\n"
             b"Path = PresentationNative_v0400_amd64.dll\n")
-        self.assertEqual(p.matching_names(raw), set(p.TARGETS.values()))
+        self.assertEqual(p.matching_names(raw), {
+            "CLR_AMD64": "clr_amd64.dll",
+            "MSCORLIB_AMD64": "mscorlib_amd64.dll",
+            "WPF_NATIVE_AMD64": "PresentationNative_v0400_amd64.dll",
+        })
         self.assertFalse(p.matching_names(b"Path = clr_amd64.dll\n"))
-        self.assertEqual(p.matching_names(b"----------\nPath = secret.dll\n"), set())
+        self.assertEqual(p.matching_names(
+            b"----------\nPath = clr_dll_amd64\nPath = mscorlib_dll_amd64\n"),
+            {"CLR_AMD64": "clr_dll_amd64",
+             "MSCORLIB_AMD64": "mscorlib_dll_amd64"})
+        self.assertEqual(p.matching_names(b"----------\nPath = secret.dll\n"), {})
         self.assertNotIn("secret", json.dumps(p.empty()))
+        self.assertEqual(p.matching_names(
+            b"----------\nPath = C:\\\\Users\\\\secret\\\\clr_amd64.dll\n"),
+            {"CLR_AMD64": "clr_amd64.dll"})
+        self.assertFalse(p.matching_names(b"----------\nPath = ..\\\\clr_amd64.dll\n").get(
+            "UNTRUSTED"))
 
     def test_honest_pe_classifier_and_absence(self):
         self.assertTrue(p.validate(p.empty()))
@@ -45,8 +58,8 @@ class OriginalPeTests(unittest.TestCase):
             source = private / "original.mzz"
             source.write_bytes(b"fixture")
             list_bytes = (
-                b"----------\nPath = clr_amd64.dll\n"
-                b"Path = mscorlib_amd64.dll\n")
+                b"----------\nPath = clr_dll_amd64\n"
+                b"Path = mscorlib_dll_amd64\n")
             def fake_run(argv, **kwargs):
                 if "l" in argv:
                     kwargs["stdout"].write(list_bytes)
