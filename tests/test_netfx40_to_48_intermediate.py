@@ -50,12 +50,12 @@ class Native40To48IntermediateTests(unittest.TestCase):
         before = {"CLR64": ("PE_AMD64", hash_before)}
         after = {"CLR64": ("PE_AMD64", hash_after)}
         def runner(args, env, cwd, timeout):
-            self.assertEqual(args, ["bash", str(paths[2]), "-q", "dotnet48"])
-            self.assertEqual(env["WINE"], str(paths[0]))
-            self.assertEqual(env["WINE_BIN"], str(paths[0]))
-            self.assertEqual(env["WINE_BINDIR"], str(paths[0].parent))
-            self.assertEqual(env["WINESERVER"], str(paths[0].parent / "wineserver"))
-            self.assertEqual(env["WINESERVER_BIN"], str(paths[0].parent / "wineserver"))
+            self.assertEqual(args, ["bash", str(paths[2].resolve()), "-q", "dotnet48"])
+            self.assertEqual(env["WINE"], str(paths[0].resolve()))
+            self.assertEqual(env["WINE_BIN"], str(paths[0].resolve()))
+            self.assertEqual(env["WINE_BINDIR"], str(paths[0].resolve().parent))
+            self.assertEqual(env["WINESERVER"], str(paths[0].resolve().parent / "wineserver"))
+            self.assertEqual(env["WINESERVER_BIN"], str(paths[0].resolve().parent / "wineserver"))
             self.assertEqual(env["WINEARCH"], "win64")
             self.assertEqual(env["WINEDEBUG"], "-all")
             self.assertNotIn("WINEDLLOVERRIDES", env)
