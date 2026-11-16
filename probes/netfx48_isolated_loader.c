@@ -32,6 +32,7 @@ static void report(const char *line, DWORD length) {
 
 void WINAPI isolated_entry(void) {
     static wchar_t path[32768];
+    wchar_t mode[3];
     DWORD length;
     DWORD attrs;
     DWORD error;
@@ -42,15 +43,22 @@ void WINAPI isolated_entry(void) {
     if (length == 0 || length >= (DWORD)(sizeof(path) / sizeof(path[0]))) {
         RESULT("INVALID_ARGUMENT");
     }
-    attrs = GetFileAttributesW(path);
-    if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
-        RESULT("NOT_FOUND");
+    length = GetEnvironmentVariableW(L"SWCOMPAT_LOAD_NAME_ONLY", mode, 3);
+    if (length == 1 && mode[0] == L'1') {
+        /* Direct imports use ordinary DLL search, not altered-path loading. */
+        SetLastError(0);
+        loaded = LoadLibraryW(path);
+    } else {
+        attrs = GetFileAttributesW(path);
+        if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+            RESULT("NOT_FOUND");
+        }
+        if (attrs & FILE_ATTRIBUTE_REPARSE_POINT) {
+            RESULT("LINKED");
+        }
+        SetLastError(0);
+        loaded = LoadLibraryExW(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
     }
-    if (attrs & FILE_ATTRIBUTE_REPARSE_POINT) {
-        RESULT("LINKED");
-    }
-    SetLastError(0);
-    loaded = LoadLibraryExW(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
     if (loaded != NULL) {
         FreeLibrary(loaded);
         RESULT("LOADED");

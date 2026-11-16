@@ -118,8 +118,14 @@ def validate(result: object) -> bool:
     return True
 
 
-def parse_pe(data: bytes) -> dict:
-    """Read standard PE32+ import and delay-import descriptor tables by RVA."""
+def parse_pe(data: bytes, *, _private_direct_names: list[str] | None = None) -> dict:
+    """Parse PE32+ imports; optional raw names stay in private caller memory only.
+
+    Never store, print, serialize or upload _private_direct_names. The returned
+    schema remains finite, allowlisted dependency-family counts.
+    """
+    if _private_direct_names is not None:
+        _private_direct_names.clear()
     out = empty_member()
     try:
         if not 512 <= len(data) <= MAX_BYTES or data[:2] != b"MZ":
@@ -193,6 +199,8 @@ def parse_pe(data: bytes) -> dict:
                         raise ValueError("unrecognized PE import name")
                     if dll not in seen:
                         counts[family(dll)] += 1
+                        if index == 1 and _private_direct_names is not None:
+                            _private_direct_names.append(dll)
                         seen.add(dll)
                 raise ValueError("no PE import terminator")
             except (ValueError, UnicodeError, struct.error):
@@ -204,6 +212,8 @@ def parse_pe(data: bytes) -> dict:
         out["import_count"] = sum(out["import_families"].values())
         out["delay_import_count"] = sum(out["delay_families"].values())
         if out["import_table"] == "INVALID" or out["delay_import_table"] == "INVALID":
+            if _private_direct_names is not None:
+                _private_direct_names.clear()
             out["pe"] = "INVALID_IMPORT_TABLE"
             # Do not claim CLI readiness from a malformed PE.
             out["cli_metadata_directory"] = False
@@ -213,6 +223,8 @@ def parse_pe(data: bytes) -> dict:
             out["delay_families"] = {k: 0 for k in FAMILIES}
             out["import_count"] = out["delay_import_count"] = 0
     except (ValueError, struct.error, IndexError, OverflowError):
+        if _private_direct_names is not None:
+            _private_direct_names.clear()
         out = empty_member()
         out["pe"] = "INVALID_IMPORT_TABLE"
         out["import_table"] = "INVALID"

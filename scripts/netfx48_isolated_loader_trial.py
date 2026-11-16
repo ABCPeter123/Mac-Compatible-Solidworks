@@ -21,6 +21,7 @@ import tempfile
 from scripts.netfx481_payload_audit import pe_type
 from scripts.netfx481_trial import validate_prefix
 from scripts.netfx4x_mzz_pe_evidence import matching_names
+from scripts.netfx4x_mzz_import_evidence import FAMILIES, MAX_IMPORTS, family, parse_pe
 
 SHA = re.compile(r"[0-9a-fA-F]{64}\Z")
 MAX_INSTALLER = 250 * 1024 * 1024
@@ -53,6 +54,35 @@ LINES = {
 LINE = re.compile(r"^SWCOMPAT_NETFX48_ISOLATED_([A-Z]+)=([A-Z0-9_]+)$")
 
 
+def empty_dependencies() -> dict:
+    return {"status": "NOT_RUN", "checked": 0, "loaded": 0, "missing": 0,
+            "other": 0, "families": {
+                key: {"loaded": 0, "missing": 0, "other": 0} for key in FAMILIES}}
+
+
+def valid_dependencies(r: object) -> bool:
+    if type(r) is not dict or set(r) != set(empty_dependencies()):
+        return False
+    if r["status"] not in {"NOT_RUN", "SCANNED", "PARTIAL"}:
+        return False
+    for key in ("checked", "loaded", "missing", "other"):
+        if type(r[key]) is not int or not 0 <= r[key] <= MAX_IMPORTS:
+            return False
+    if r["loaded"] + r["missing"] + r["other"] != r["checked"]:
+        return False
+    if type(r["families"]) is not dict or set(r["families"]) != set(FAMILIES):
+        return False
+    for item in r["families"].values():
+        if type(item) is not dict or set(item) != {"loaded", "missing", "other"}:
+            return False
+        if any(type(v) is not int or v < 0 for v in item.values()):
+            return False
+    if any(sum(i[k] for i in r["families"].values()) != r[k]
+           for k in ("loaded", "missing", "other")):
+        return False
+    return r["status"] != "NOT_RUN" or r == empty_dependencies()
+
+
 def blank() -> dict:
     return {
         "status": "NOT_RUN", "installer_authenticode_preverified": False,
@@ -62,6 +92,7 @@ def blank() -> dict:
         "selftest_process": "NOT_RUN", "original_process": "NOT_RUN",
         "managed_executed": False,
         "runtime_installed": False, "original_payload_artifact": False,
+        "direct_imports": empty_dependencies(),
     }
 
 
@@ -74,7 +105,8 @@ def valid(report: object) -> bool:
             or report["selftest"] not in STATES
             or report["wine_system_process"] not in PROCESSES
             or report["selftest_process"] not in PROCESSES
-            or report["original_process"] not in PROCESSES):
+            or report["original_process"] not in PROCESSES
+            or not valid_dependencies(report["direct_imports"])):
         return False
     for key in ("installer_authenticode_preverified", "installer_sha256_verified",
                 "managed_executed", "runtime_installed", "original_payload_artifact"):
@@ -188,13 +220,18 @@ def extract_clr(installer: Path, sevenzip: Path, private: Path) -> tuple[str, Pa
 
 
 def _invoke(wine: Path, prefix: Path, fixture: Path,
-            argument: str, *, original: bool) -> tuple[str, str]:
+            argument: str, *, original: bool,
+            name_only: bool = False) -> tuple[str, str]:
     env = os.environ.copy()
     env.pop("WINEDLLOVERRIDES", None)
     env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64",
                 "WINEDEBUG": "-all"})
     if original:
         env["WINEDLLOVERRIDES"] = "clr=n"
+    if name_only:
+        env["SWCOMPAT_LOAD_NAME_ONLY"] = "1"
+    else:
+        env.pop("SWCOMPAT_LOAD_NAME_ONLY", None)
     env["SWCOMPAT_LOAD_DLL_PATH"] = (
         r"C:\Windows\System32\kernel32.dll" if argument == "--selftest-windows"
         else argument
@@ -244,6 +281,36 @@ def _load(wine: Path, prefix: Path, fixture: Path,
     return _invoke(wine, prefix, fixture, windows_path, original=True)
 
 
+def direct_import_check(wine: Path, prefix: Path, fixture: Path,
+                        original: Path) -> dict:
+    """The exact original names stay in private memory and are never reported."""
+    report = empty_dependencies()
+    if not 512 <= original.stat().st_size <= MAX_CLR:
+        report["status"] = "PARTIAL"
+        return report
+    names: list[str] = []
+    pe = parse_pe(original.read_bytes(), _private_direct_names=names)
+    if (pe["pe"] != "PE_AMD64" or pe["import_table"] != "READABLE"
+            or not 1 <= len(names) <= MAX_IMPORTS
+            or len(names) != pe["import_count"]):
+        report["status"] = "PARTIAL"
+        return report
+    report["status"] = "SCANNED"
+    for name in names:
+        outcome, process = _invoke(
+            wine, prefix, fixture, name, original=False, name_only=True)
+        bucket = ("loaded" if outcome == "LOADED" and process == "EXIT_ZERO"
+                  else "missing" if outcome in {"MISSING_DEPENDENCY", "NOT_FOUND"}
+                      and process == "EXIT_ZERO" else "other")
+        report["checked"] += 1
+        report[bucket] += 1
+        report["families"][family(name)][bucket] += 1
+        if bucket == "other":
+            report["status"] = "PARTIAL"
+    assert valid_dependencies(report)
+    return report
+
+
 def trial(installer: Path, expected_sha: str, wine: Path, prefix: Path,
           sevenzip: Path, fixture: Path) -> dict:
     validate_prefix(prefix)
@@ -281,6 +348,8 @@ def trial(installer: Path, expected_sha: str, wine: Path, prefix: Path,
                 wine, prefix, fixture, original)
             if result["loader"] not in {"TIMEOUT", "PROBE_ERROR"}:
                 result["status"] = "MEASURED"
+            result["direct_imports"] = direct_import_check(
+                wine, prefix, fixture, original)
     assert valid(result)
     return result
 
@@ -303,6 +372,14 @@ def main(argv: list[str] | None = None) -> int:
                 "extraction", "loader",
                 "original_process", "managed_executed", "runtime_installed"):
         print("AUTHENTIC_NETFX48_ISOLATED", key, report[key])
+    dep = report["direct_imports"]
+    print("AUTHENTIC_NETFX48_DIRECT", dep["status"],
+          dep["checked"], dep["loaded"], dep["missing"], dep["other"])
+    for key in FAMILIES:
+        item = dep["families"][key]
+        if sum(item.values()):
+            print("AUTHENTIC_NETFX48_IMPORT_FAMILY", key,
+                  item["loaded"], item["missing"], item["other"])
     return 0
 
 
