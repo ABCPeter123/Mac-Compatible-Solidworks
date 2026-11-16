@@ -195,10 +195,14 @@ def _invoke(wine: Path, prefix: Path, fixture: Path,
                 "WINEDEBUG": "-all"})
     if original:
         env["WINEDLLOVERRIDES"] = "clr=n"
+    env["SWCOMPAT_LOAD_DLL_PATH"] = (
+        r"C:\Windows\System32\kernel32.dll" if argument == "--selftest-windows"
+        else argument
+    )
     with tempfile.TemporaryFile() as out:
         try:
             proc = subprocess.run(
-                [str(wine), str(fixture), argument], cwd=fixture.parent,
+                [str(wine), str(fixture)], cwd=fixture.parent,
                 env=env, stdin=subprocess.DEVNULL, stdout=out,
                 stderr=subprocess.DEVNULL, timeout=90, check=False)
         except subprocess.TimeoutExpired:
