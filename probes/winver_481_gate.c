@@ -12,6 +12,13 @@ static const char *cat(DWORD major,DWORD minor,DWORD build) {
     if (major==10 && minor==0) return "WIN10_TOO_OLD";
     return "BELOW_WIN10";
 }
+/* .NET 4.8 requires Windows 7 SP1. Do not infer SP1 from build
+ * numbers or a different process's OS profile. Measure both OS APIs. */
+static const char *service_pack(const OSVERSIONINFOEXW *os) {
+    if (os->dwMajorVersion != 6 || os->dwMinorVersion != 1)
+        return "NOT_WIN7";
+    return os->wServicePackMajor >= 1 ? "SP1_OR_LATER" : "MISSING_SP1";
+}
 static const char *registry_build(void) {
     HKEY key; WCHAR buffer[64]; DWORD size=sizeof(buffer), type=0; long build;
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,L"Software\\Microsoft\\Windows NT\\CurrentVersion",0,
@@ -34,16 +41,21 @@ int main(void) {
     GET_NT_VERSION get_nt=ntdll?(GET_NT_VERSION)GetProcAddress(ntdll,"RtlGetVersion"):NULL;
     SYSTEM_INFO system={0};
     const char *api="NOT_VERIFIED", *nt="NOT_VERIFIED", *arch="UNKNOWN";
+    const char *app_sp="NOT_VERIFIED", *native_sp="NOT_VERIFIED";
     app.dwOSVersionInfoSize=sizeof(app); native.dwOSVersionInfoSize=sizeof(native);
-    if(GetVersionExW((OSVERSIONINFOW*)&app))
+    if(GetVersionExW((OSVERSIONINFOW*)&app)) {
         api=cat(app.dwMajorVersion,app.dwMinorVersion,app.dwBuildNumber);
-    if(get_nt && get_nt(&native)==0)
+        app_sp=service_pack(&app);
+    }
+    if(get_nt && get_nt(&native)==0) {
         nt=cat(native.dwMajorVersion,native.dwMinorVersion,native.dwBuildNumber);
+        native_sp=service_pack(&native);
+    }
     GetNativeSystemInfo(&system);
     if(system.wProcessorArchitecture==PROCESSOR_ARCHITECTURE_AMD64) arch="AMD64";
     else if(system.wProcessorArchitecture==PROCESSOR_ARCHITECTURE_INTEL) arch="X86";
     else if(system.wProcessorArchitecture==PROCESSOR_ARCHITECTURE_ARM64) arch="ARM64";
-    printf("SWCOMPAT_OS_SCHEMA=1\nSWCOMPAT_OS_WINAPI=%s\nSWCOMPAT_OS_NTDLL=%s\nSWCOMPAT_OS_REGISTRY=%s\nSWCOMPAT_OS_ARCH=%s\n",
-           api,nt,registry_build(),arch);
+    printf("SWCOMPAT_OS_SCHEMA=1\nSWCOMPAT_OS_WINAPI=%s\nSWCOMPAT_OS_NTDLL=%s\nSWCOMPAT_OS_REGISTRY=%s\nSWCOMPAT_OS_ARCH=%s\nSWCOMPAT_OS_SP_API=%s\nSWCOMPAT_OS_SP_NTDLL=%s\n",
+           api,nt,registry_build(),arch,app_sp,native_sp);
     return 0;
 }
