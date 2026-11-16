@@ -87,14 +87,18 @@ def parse_release(raw: bytes, exit_code: int) -> str:
 
 def _env(wine: Path, prefix: Path) -> dict[str, str]:
     env = os.environ.copy()
-    for name in ("WINEDLLOVERRIDES", "WINESERVER", "WINETRICKS_FORCE"):
+    for name in ("WINEDLLOVERRIDES", "WINESERVER", "WINETRICKS_FORCE",
+                 "WINE_BIN", "WINESERVER_BIN", "WINE_BINDIR"):
         env.pop(name, None)
     env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64",
-                "WINE": str(wine), "WINEDEBUG": "-all",
+                "WINE": str(wine), "WINE_BIN": str(wine),
+                "WINE_BINDIR": str(wine.parent), "WINEDEBUG": "-all",
                 "PATH": str(wine.parent) + os.pathsep + env.get("PATH", ""),
                 "WINETRICKS_LATEST_VERSION_CHECK": "disabled"})
-    if (wine.parent / "wineserver").is_file():
-        env["WINESERVER"] = str(wine.parent / "wineserver")
+    wineserver = wine.parent / "wineserver"
+    if wineserver.is_file() and os.access(wineserver, os.X_OK):
+        env["WINESERVER"] = str(wineserver)
+        env["WINESERVER_BIN"] = str(wineserver)
     return env
 
 
@@ -226,7 +230,7 @@ def inspect(wine: Path, prefix: Path, winetricks: Path, loader: Path,
     try:
         if win7 == "APPLIED":
             verb, verb_progress = _run_winetricks(
-                [str(winetricks), "-q", "dotnet48"], env, prefix, timeout)
+                ["bash", str(winetricks), "-q", "dotnet48"], env, prefix, timeout)
     finally:
         win10 = _set_winver(wine, prefix, env, "win10")
     restart = wineboot_restart(wine, prefix) if win10 == "APPLIED" else "NOT_RUN"
