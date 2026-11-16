@@ -75,6 +75,18 @@ jobs:
             throw 'Independent host missing-original control failed'
           }
           Remove-Item env:SWCOMPAT_CLR_PATH -ErrorAction SilentlyContinue
+          $env:SWCOMPAT_CLR_PATH = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\clr.dll'
+          $env:SWCOMPAT_ORIGINAL_SHIM_PATH = 'C:\swcompat-host-missing\mscoreei.dll'
+          try {
+            $missingShim = & build\netfx48_host_activation.exe
+            if ($LASTEXITCODE -ne 0 -or $missingShim -notcontains 'SWCOMPAT_NETFX48_HOST_STATUS=ORIGINAL_SHIM_MISSING') {
+              throw 'Independent original-shim strict non-fallback control failed'
+            }
+          }
+          finally {
+            Remove-Item env:SWCOMPAT_ORIGINAL_SHIM_PATH -ErrorAction SilentlyContinue
+            Remove-Item env:SWCOMPAT_CLR_PATH -ErrorAction SilentlyContinue
+          }
           try {
             $env:SWCOMPAT_LOAD_DLL_PATH = 'C:\swcompat-definitely-missing\nonexistent.dll'
             $missing = & build\netfx48_isolated_loader.exe
@@ -194,11 +206,18 @@ jobs:
           assert valid(report)
           assert report["installer_sha256_verified"]
           assert not report["runtime_installed"]
-          assert report["managed_executed"] == (report["host_stage"] == "MANAGED_ORIGINAL_PASS"
-                                                   and report["host_process"] == "EXIT_ZERO")
+          assert report["managed_executed"] == (
+              (report["host_stage"] == "MANAGED_ORIGINAL_PASS"
+               and report["host_process"] == "EXIT_ZERO")
+              or (report["original_shim_host"] == "MANAGED_ORIGINAL_PASS"
+                  and report["original_shim_process"] == "EXIT_ZERO"))
           assert not report["original_payload_artifact"]
           print("Isolated original .NET 4.8 x64 loader:", report["loader"])
-          print("Authentic CLR 4.8 host activation:", report["host_stage"])
+          print("Authentic CLR 4.8 Wine shim:", report["host_stage"])
+          print("Original Microsoft shim from signed MZZ:",
+                report["original_shim_staging"]["status"],
+                report["original_shim_host"],
+                report["original_shim_process"])
           print("Genuine full .NET 4.8 runtime: NOT_INSTALLED_OR_VERIFIED")
           PY
       - uses: actions/upload-artifact@v4
