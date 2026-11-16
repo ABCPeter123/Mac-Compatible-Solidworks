@@ -127,18 +127,23 @@ void WINAPI host_entry(void) {
     if (FAILED(hr) || !dir_len || dir_len >= 4096)
         RESULT("RUNTIME_DIRECTORY_FAILED");
 
-    hr = ICLRRuntimeInfo_GetInterface(info, &CLSID_CLRRuntimeHost,
-                                     &IID_ICLRRuntimeHost, (void **)&host);
-    if (FAILED(hr) || host == NULL) RESULT("HOST_INTERFACE_FAILED");
-
-    /* Reject a different installed CLR or Wine Mono as original 4.8 evidence.
-       Neither this test nor its file staging changes framework registration. */
+    /* First check the selected CLR directory BEFORE asking it to instantiate
+       a runtime host. GetRuntimeDirectory's counted result can include NUL;
+       never compare that zero-terminated whole string against a substring.
+       The original module identity came from the full-path LoadLibraryExW.
+       A different Wine Mono or Microsoft CLR is not acceptable. */
     for (i = 0; i < mapped_len; ++i)
         if (mapped_path[i] == L'\\' || mapped_path[i] == L'/')
             slash = i + 1;
-    if (!slash || CompareStringOrdinal(runtime_dir, -1, mapped_path, (int)slash, TRUE)
-                       != CSTR_EQUAL)
+    for (i = 0; i < dir_len && runtime_dir[i] != L'\0'; ++i) { }
+    if (!slash || i != slash ||
+        CompareStringOrdinal(runtime_dir, (int)i, mapped_path, (int)slash, TRUE)
+            != CSTR_EQUAL)
         RESULT("OTHER_RUNTIME_SELECTED");
+
+    hr = ICLRRuntimeInfo_GetInterface(info, &CLSID_CLRRuntimeHost,
+                                     &IID_ICLRRuntimeHost, (void **)&host);
+    if (FAILED(hr) || host == NULL) RESULT("HOST_INTERFACE_FAILED");
 
     hr = ICLRRuntimeHost_Start(host);
     if (FAILED(hr)) RESULT("HOST_START_FAILED");
