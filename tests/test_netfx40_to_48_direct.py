@@ -78,6 +78,7 @@ class DirectNative48Tests(unittest.TestCase):
         self.assertEqual(started.call_args.kwargs["setup_family"], "NETFX48")
         self.assertEqual(secondary_scan.call_args.kwargs["family"], "NETFX48")
         self.assertEqual(primary_scan.call_count, 1)
+        self.assertEqual(primary_scan.call_args.kwargs["family"], "NETFX48")
         self.assertEqual(result["primary_prerequisite"]["blockers"], ["MISSING_UPDATE_BLOCK"])
         self.assertTrue(result["primary_prerequisite"]["5100_in_log"])
         self.assertTrue(evidence.validate_secondary_report(result["secondary_evidence"]))

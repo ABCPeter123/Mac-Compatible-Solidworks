@@ -179,7 +179,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
                 # Both classifiers read the short-lived original /log inside
                 # the marked Wine prefix. Never print or retain raw text.
                 evidence = classify_log(log)
-                primary = classify_primary_prerequisite(log)
+                primary = classify_primary_prerequisite(log, family="NETFX48")
                 discard_log(log)
                 secondary = scan_secondary_logs(
                     prefix, baseline=secondary_before, family="NETFX48")
