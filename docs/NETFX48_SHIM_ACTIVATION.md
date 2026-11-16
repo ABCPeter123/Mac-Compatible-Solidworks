@@ -30,6 +30,10 @@ See Microsoft CLR team's [description of mscoree vs mscoreei](https://devblogs.m
 - Do not rerun identical Microsoft 4.8/4.8.1 setup attempts that returned prerequisite code 5100, the Winetricks 840s timeout, or Wine DISM tests that returned false success for nonexistent CABs.
 - Never export Microsoft or SOLIDWORKS proprietary binaries, MZZ members, paths, registry dumps or license data from CI.
 
+## Focused next run: native .NET 4.0 host provenance only
+
+The [manual .NET 4.0 workflow](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/workflows/netfx40-legacy-ci.yml) now exposes `host_provenance_only` (merged PR #148). To test the already established native-4.0 hosting route without the repeated 4.8/4.8.1 prerequisites, explicitly dispatch from `main` with `host_provenance_only=true`, `try_48_intermediate=false`, and `try_48_direct=false`. This still authenticates and tests original Microsoft .NET 4.0 in marked disposable hosted Apple Silicon Wine and may encounter the known intermittent 4.0 MSI 1603 or timeout. The opt-in change skips the duplicate fresh baseline, original 4.8/4.8.1 media or installer path, Winetricks 4.8, and irrelevant upgrade disk/version gates. It reports the actual loaded mscoree and clr implementation as only `NATIVE_ONLY`, `BUILTIN_ONLY`, `MIXED`, `NOT_OBSERVED`, or `TOO_LARGE`, alongside managed execution class. No raw Wine loader trace leaves the runner. Static code tests are passing; this manual actual-native-4.0 provenance experiment has not yet been re-run with the new option.
+
 ## Next falsifiable work
 
 1. **Activation provenance on a working native .NET 4.0 Wine prefix.** Prior original .NET 4.0 probes confirmed native-only managed execution and restart persistence. Determine which `mscoree.dll` (native vs Wine builtin) and which CLR path the genuinely working configuration selects, with fixed enum-only source-authored probes and no change to its installation state. This is a useful positive Wine-side control before considering an authentic 4.8 upgrade.
