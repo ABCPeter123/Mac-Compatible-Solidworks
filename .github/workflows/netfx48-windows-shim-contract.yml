@@ -1,0 +1,96 @@
+name: Windows .NET Framework shim initialization contract
+
+# No downloaded proprietary media and no installer execution.
+# Compare the same already-installed Microsoft shim in its normal directory
+# against a temporary exact copy on real Windows, plus official mscoree hosting.
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/netfx48-windows-shim-contract.yml'
+      - 'probes/netfx48_system_shim_contract.c'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-windows-shim-contract:
+    runs-on: windows-2025
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile standalone Win32 shim differential without CRT
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force build | Out-Null
+          $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (!(Test-Path -LiteralPath $vswhere)) { throw 'Windows MSVC locator missing' }
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw 'Windows x64 compiler unavailable' }
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $cmdText = "@echo off`r`ncall `"$vcvars`"`r`ncl /nologo /W4 /O2 /GS- /Zl /Febuild\netfx48_system_shim_contract.exe probes\netfx48_system_shim_contract.c /link /NODEFAULTLIB kernel32.lib /ENTRY:shim_contract_entry /SUBSYSTEM:CONSOLE`r`nexit /b %errorlevel%`r`n"
+          Set-Content -LiteralPath build/compile-shim-contract.cmd -Value $cmdText -Encoding ascii
+          & cmd.exe /d /c build\compile-shim-contract.cmd
+          if ($LASTEXITCODE -ne 0) { throw 'Self-authored native shim control did not compile' }
+      - name: Compare authentic installed shim, identical relocated copy, and shell-hosting API
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $fixture = (Resolve-Path build/netfx48_system_shim_contract.exe).Path
+          $results = @{}
+          function Invoke-ShimControl([string]$path, [bool]$shell = $false) {
+            $env:SWCOMPAT_SHIM_CONTRACT_SHELL = if ($shell) { '1' } else { '0' }
+            if ($shell) {
+              Remove-Item Env:SWCOMPAT_SHIM_CONTRACT_PATH -ErrorAction SilentlyContinue
+            } else {
+              $env:SWCOMPAT_SHIM_CONTRACT_PATH = $path
+            }
+            $lines = @(& $fixture)
+            if ($LASTEXITCODE -ne 0) { throw 'Native control exited abnormally' }
+            if ($lines.Count -ne 2 -or $lines[0] -ne 'SWCOMPAT_SHIM_CONTRACT_SCHEMA=1') {
+              throw 'Invalid native shim control output schema'
+            }
+            if ($lines[1] -notmatch '^SWCOMPAT_SHIM_CONTRACT_STATUS=([A-Z_]+)$') {
+              throw 'Unknown native shim status schema'
+            }
+            $status = $Matches[1]
+            $allowed = @('INVALID_INPUT','SHIM_ABSENT','SHIM_LINKED','SHIM_LOADED',
+                         'MISSING_DEPENDENCY','MISSING_EXPORT','BAD_IMAGE',
+                         'INIT_FAILED','ACCESS_DENIED','OTHER_FAILURE',
+                         'SHELL_MISSING','SHELL_NO_EXPORT',
+                         'SHELL_ACTIVATION_FAILED','SHELL_ACTIVATION_OK')
+            if ($allowed -notcontains $status) { throw 'Unrecognized native shim outcome' }
+            return $status
+          }
+          $original = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\mscoreei.dll'
+          $tempCopy = Join-Path $env:RUNNER_TEMP 'mscoreei.dll'
+          try {
+            $results['original_present'] = [bool](Test-Path -LiteralPath $original -PathType Leaf)
+            $results['installed'] = 'NOT_RUN'
+            $results['relocated'] = 'NOT_RUN'
+            if ($results['original_present']) {
+              $results['installed'] = Invoke-ShimControl $original
+              Copy-Item -LiteralPath $original -Destination $tempCopy -Force
+              $results['relocated'] = Invoke-ShimControl $tempCopy
+            }
+            $results['shell'] = Invoke-ShimControl '' $true
+          }
+          finally {
+            Remove-Item Env:SWCOMPAT_SHIM_CONTRACT_SHELL -ErrorAction SilentlyContinue
+            Remove-Item Env:SWCOMPAT_SHIM_CONTRACT_PATH -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $tempCopy -Force -ErrorAction SilentlyContinue
+          }
+          $results | ConvertTo-Json -Compress | Set-Content -LiteralPath build/shim-contract-categories.json -Encoding ascii
+          Write-Host ('AUTHENTIC_NETFX48_INSTALLED_SHIM_AB ' +
+              $results['original_present'] + ' ' + $results['installed'] + ' ' +
+              $results['relocated'] + ' ' + $results['shell'])
+          if ($results['original_present'] -and $results['installed'] -eq 'NOT_RUN') {
+            throw 'Original Windows shim comparison incomplete'
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-netfx48-shim-contract-categories-only
+          path: build/shim-contract-categories.json
+          if-no-files-found: error
+          retention-days: 5
