@@ -123,7 +123,14 @@ def valid(report: object) -> bool:
     if (report["loader_after_mzz"] != "NOT_RUN"
             and report["extraction"] != "PE_AMD64"):
         return False
-    if False:
+    if (report["loader_after_mzz"] != "NOT_RUN"
+            and (report["loader"] not in {"MISSING_DEPENDENCY", "MISSING_EXPORT",
+                                          "OTHER_LOAD_FAILURE"}
+                 or report["signed_mzz_staging"]["staged"] < 1
+                 or report["mzz_process"] == "NOT_RUN")):
+        return False
+    if (report["loader_after_mzz"] == "NOT_RUN"
+            and report["mzz_process"] != "NOT_RUN"):
         return False
     for key in ("installer_authenticode_preverified", "installer_sha256_verified",
                 "managed_executed", "runtime_installed", "original_payload_artifact"):
@@ -373,7 +380,7 @@ def trial(installer: Path, expected_sha: str, wine: Path, prefix: Path,
             missing_names: list[str] = []
             result["direct_imports"] = direct_import_check(
                 wine, prefix, fixture, original, _private_missing=missing_names)
-            if missing_names:
+            if missing_names and result["loader"] == "MISSING_DEPENDENCY":
                 result["signed_mzz_staging"] = stage_from_mzz(
                     private, sevenzip, missing_names)
                 if result["signed_mzz_staging"]["staged"] > 0:
