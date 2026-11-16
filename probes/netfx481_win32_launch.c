@@ -14,7 +14,12 @@
 #include <wchar.h>
 #include <stdio.h>
 
+#if defined(SWCOMPAT_NETFX48)
+/* The original 4.8 prerequisite receives a dedicated bounded wait. */
+#define WAIT_LIMIT_MS 420000u
+#else
 #define WAIT_LIMIT_MS 210000u
+#endif
 #if defined(SWCOMPAT_NETFX40)
 /* Only the opt-in msxml3 experiment may extend original setup monitoring.
  * The other .NET harnesses and the .NET 4.0 baseline keep 210 seconds. */

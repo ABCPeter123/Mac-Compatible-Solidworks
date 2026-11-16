@@ -142,15 +142,23 @@ def validate(report: dict) -> bool:
 
 
 def launch(wine: Path, prefix: Path, setup: Path, fixture: Path,
-           *, timeout: int = 245, fusion_builtin: bool = False) -> dict:
+           *, timeout: int = 245, fusion_builtin: bool = False,
+           setup_family: str = "NETFX481") -> dict:
     from scripts.netfx481_trial import validate_prefix
     from swcompat.wine_paths import windows_media_path
 
     validate_prefix(prefix)
+    allowed = {
+        "NETFX481": ("netfx481_win32_launch.exe", "ndp481-x86-x64-allos-enu.exe"),
+        "NETFX48": ("netfx48_win32_launch.exe", "ndp48-x86-x64-allos-enu.exe"),
+    }
+    if setup_family not in allowed:
+        raise ValueError("Unrecognized original Microsoft Framework setup family")
+    expected_fixture, expected_setup = allowed[setup_family]
     if (fixture.is_symlink() or not fixture.is_file()
-            or fixture.name.casefold() != "netfx481_win32_launch.exe"):
+            or fixture.name.casefold() != expected_fixture):
         raise ValueError("Signed-on-Windows original launch fixture missing")
-    if setup.is_symlink() or setup.name.casefold() != "ndp481-x86-x64-allos-enu.exe":
+    if setup.is_symlink() or setup.name.casefold() != expected_setup:
         raise ValueError("Unrecognized Microsoft setup executable")
     win_path = windows_media_path(wine, prefix, setup)
     env = os.environ.copy()
