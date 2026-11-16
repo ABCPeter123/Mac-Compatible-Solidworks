@@ -40,6 +40,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx40_launcher_timeout.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_prerequisite.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_restart.py' -v
+          python -m unittest discover -s tests -p 'test_netfx40_native_mscoree_provenance.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_to_481_upgrade.py' -v
           python -m unittest discover -s tests -p 'test_netfx481_prereq_diagnostic.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msi_evidence.py' -v
@@ -600,6 +601,29 @@ jobs:
                   f.write("SWCOMPAT_NATIVE40_READY=yes\n")
           print("Original native .NET 4.0 prerequisites passed:", r["persistent_native_managed"])
           PY
+      - name: Capture genuine 4.0 Wine mscoree CLR native-loader provenance without vendor logs
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx40_native_mscoree_provenance \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --fixture build/netfx481_runtime_probe.exe \
+            --native40-report build/netfx40-msxml3-restart.json \
+            --output build/netfx40-mscoree-provenance.json \
+            --agree-disposable-prefix
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.netfx40_native_mscoree_provenance import valid
+          report = json.loads(Path("build/netfx40-mscoree-provenance.json").read_text())
+          assert valid(report) and report["status"] == "MEASURED"
+          assert not report["framework48_installed"]
+          print("Native Microsoft .NET 4.0 mscoree host provenance:",
+                report["mscoree"], report["clr"],
+                report["managed"], report["native_host_confirmed"])
+          PY
       - name: Reject conflicting 4.8 intermediate experiment selections
         if: inputs.try_48_intermediate && inputs.try_48_direct
         shell: bash
@@ -869,6 +893,7 @@ jobs:
             build/netfx40-msxml3-prerequisite.json
             build/netfx40-msxml3-runtime.json
             build/netfx40-msxml3-restart.json
+            build/netfx40-mscoree-provenance.json
             build/netfx40-to-48-intermediate.json
             build/netfx40-to-48-direct.json
             build/netfx481-disk-before-upgrade.json
