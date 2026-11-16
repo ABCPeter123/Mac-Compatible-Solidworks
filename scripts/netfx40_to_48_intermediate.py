@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import tempfile
 
@@ -20,6 +21,10 @@ from scripts.netfx481_trial import validate_prefix, probe, wineboot_restart
 
 STATES = {"NOT_ELIGIBLE", "MEASURED"}
 VERB = {"SUCCESS", "EXIT_NONZERO", "TIMED_OUT", "START_FAILED", "NOT_RUN"}
+# Only bounded milestones derived from private Winetricks output may leave CI.
+PROGRESS = {"NOT_RUN", "NO_OUTPUT", "WINETRICKS_ACTIVE", "DOTNET48_VERB_SEEN",
+            "DOTNET48_PACKAGE_MENTIONED", "OUTPUT_TOO_LARGE"}
+MAX_PRIVATE_OUTPUT = 1024 * 1024
 BOOT = {"COMPLETED", "TIMED_OUT", "START_FAILED", "EXIT_NONZERO", "NOT_RUN"}
 WINVER = {"APPLIED", "FAILED", "NOT_RUN"}
 RELEASE = {"NOT_FOUND", "BELOW_48", "NETFX48_RANGE", "AT_LEAST_481", "UNAVAILABLE"}
@@ -28,7 +33,8 @@ RELEASE_PATTERN = re.compile(rb"(?i)\bRelease\s+REG_DWORD\s+0x([0-9a-f]{1,8})\b"
 
 def blank() -> dict:
     return {"status": "NOT_ELIGIBLE", "native40_persistent": False,
-            "verb": "NOT_RUN", "win7": "NOT_RUN", "win10": "NOT_RUN",
+            "verb": "NOT_RUN", "verb_progress": "NOT_RUN",
+            "win7": "NOT_RUN", "win10": "NOT_RUN",
             "restart": "NOT_RUN", "clr64_changed": False,
             "release": "UNAVAILABLE", "loader": "NOT_VERIFIED",
             "native_only_managed": "NOT_VERIFIED",
@@ -40,7 +46,8 @@ def validate(result: object) -> bool:
     if type(result) is not dict or set(result) != set(blank()):
         return False
     if (result["status"] not in STATES
-            or result["verb"] not in VERB or result["restart"] not in BOOT
+            or result["verb"] not in VERB or result["verb_progress"] not in PROGRESS
+            or result["restart"] not in BOOT
             or result["win7"] not in WINVER or result["win10"] not in WINVER
             or result["release"] not in RELEASE
             or result["loader"] not in LOADER_STATES
@@ -105,6 +112,68 @@ def _run(command: list[str], env: dict[str, str], cwd: Path,
     return "SUCCESS" if child.returncode == 0 else "EXIT_NONZERO"
 
 
+
+def classify_progress(raw: bytes) -> str:
+    """Return fixed milestones, never raw Winetricks or Microsoft setup text.
+
+    A package mention does not prove that the package installer executed.
+    """
+    if len(raw) > MAX_PRIVATE_OUTPUT:
+        return "OUTPUT_TOO_LARGE"
+    if not raw:
+        return "NO_OUTPUT"
+    if re.search(rb"(?i)(?:dotnetfx48[_-]full|ndp48[-_].*?\.exe)", raw):
+        return "DOTNET48_PACKAGE_MENTIONED"
+    if re.search(rb"(?i)(?:load_dotnet48|install_dotnet48)", raw):
+        return "DOTNET48_VERB_SEEN"
+    return "WINETRICKS_ACTIVE"
+
+
+def _terminate_group(child: subprocess.Popen) -> None:
+    """Timeout must kill the whole installer session, not just its shell."""
+    try:
+        os.killpg(child.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        child.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+    # A parent shell can exit while an installer descendant is still alive.
+    # Send SIGKILL to the group regardless of the parent's status.
+    try:
+        os.killpg(child.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        child.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def _run_winetricks(command: list[str], env: dict[str, str],
+                    cwd: Path, timeout: int) -> tuple[str, str]:
+    """Bound the verb and keep its entire diagnostic stream private."""
+    with tempfile.TemporaryFile() as output:
+        try:
+            child = subprocess.Popen(
+                command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                stdout=output, stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        except OSError:
+            return "START_FAILED", "NOT_RUN"
+        try:
+            rc = child.wait(timeout=timeout)
+            status = "SUCCESS" if rc == 0 else "EXIT_NONZERO"
+        except subprocess.TimeoutExpired:
+            _terminate_group(child)
+            status = "TIMED_OUT"
+        output.seek(0)
+        progress = classify_progress(output.read(MAX_PRIVATE_OUTPUT + 1))
+    return status, progress
+
+
 def _set_winver(wine: Path, prefix: Path, env: dict[str, str],
                 value: str) -> str:
     if value not in {"win7", "win10"}:
@@ -153,16 +222,19 @@ def inspect(wine: Path, prefix: Path, winetricks: Path, loader: Path,
     env = _env(wine, prefix)
     win7 = _set_winver(wine, prefix, env, "win7")
     verb = "NOT_RUN"
+    verb_progress = "NOT_RUN"
     try:
         if win7 == "APPLIED":
-            verb = _run([str(winetricks), "-q", "dotnet48"], env, prefix, timeout)
+            verb, verb_progress = _run_winetricks(
+                [str(winetricks), "-q", "dotnet48"], env, prefix, timeout)
     finally:
         win10 = _set_winver(wine, prefix, env, "win10")
     restart = wineboot_restart(wine, prefix) if win10 == "APPLIED" else "NOT_RUN"
     after = snapshot(prefix)
     same = before["CLR64"][1] == after["CLR64"][1]
     output = {"status": "MEASURED", "native40_persistent": True,
-              "verb": verb, "win7": win7, "win10": win10,
+              "verb": verb, "verb_progress": verb_progress,
+              "win7": win7, "win10": win10,
               "restart": restart,
               "clr64_changed": (not same and after["CLR64"][0] == "PE_AMD64"),
               "release": _release(wine, prefix, env),
