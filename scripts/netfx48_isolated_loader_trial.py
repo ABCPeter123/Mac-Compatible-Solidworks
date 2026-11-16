@@ -44,6 +44,9 @@ HOST_STATES = {"NOT_RUN", "INVALID_INPUT", "ORIGINAL_MISSING",
                "OTHER_RUNTIME_SELECTED", "HOST_START_FAILED",
                "ORIGINAL_SHIM_INVALID_INPUT", "ORIGINAL_SHIM_MISSING",
                "ORIGINAL_SHIM_LOAD_FAILED", "ORIGINAL_SHIM_NO_HOST_EXPORT",
+               "ORIGINAL_SHIM_MISSING_DEPENDENCY", "ORIGINAL_SHIM_MISSING_EXPORT",
+               "ORIGINAL_SHIM_BAD_IMAGE", "ORIGINAL_SHIM_INIT_FAILED",
+               "ORIGINAL_SHIM_ACCESS_DENIED",
                "MANAGED_FIXTURE_MISSING", "MANAGED_EXECUTION_FAILED",
                "MANAGED_UNEXPECTED_RESULT", "MANAGED_ORIGINAL_PASS",
                "TIMEOUT", "PROBE_ERROR"}
@@ -113,6 +116,10 @@ def blank() -> dict:
         "host_stage": "NOT_RUN", "host_process": "NOT_RUN",
         "original_shim_staging": stage_blank(),
         "original_shim_host": "NOT_RUN", "original_shim_process": "NOT_RUN",
+        "original_shim_direct_imports": empty_dependencies(),
+        "original_shim_dependency_stage": stage_blank(),
+        "original_shim_reused": 0,
+        "original_shim_retry": "NOT_RUN", "original_shim_retry_process": "NOT_RUN",
     }
 
 
@@ -134,7 +141,33 @@ def valid(report: object) -> bool:
             or report["host_process"] not in PROCESSES
             or not stage_valid(report["original_shim_staging"])
             or report["original_shim_host"] not in HOST_STATES
-            or report["original_shim_process"] not in PROCESSES):
+            or report["original_shim_process"] not in PROCESSES
+            or not valid_dependencies(report["original_shim_direct_imports"])
+            or not stage_valid(report["original_shim_dependency_stage"])
+            or type(report["original_shim_reused"]) is not int
+            or not 0 <= report["original_shim_reused"] <= MAX_IMPORTS
+            or report["original_shim_retry"] not in HOST_STATES
+            or report["original_shim_retry_process"] not in PROCESSES):
+        return False
+    if ((report["original_shim_retry"] == "NOT_RUN")
+            != (report["original_shim_retry_process"] == "NOT_RUN")):
+        return False
+    if report["original_shim_retry"] != "NOT_RUN" and (
+            report["original_shim_host"] != "ORIGINAL_SHIM_MISSING_DEPENDENCY"
+            or report["original_shim_dependency_stage"]["staged"] < 1
+            or report["loader_after_mzz"] != "LOADED"):
+        return False
+    if report["original_shim_dependency_stage"]["status"] != "NOT_RUN" and (
+            report["original_shim_host"] != "ORIGINAL_SHIM_MISSING_DEPENDENCY"):
+        return False
+    if report["original_shim_direct_imports"]["status"] != "NOT_RUN" and (
+            report["original_shim_staging"]["staged"] != 1
+            or report["original_shim_host"] != "ORIGINAL_SHIM_MISSING_DEPENDENCY"):
+        return False
+    if report["original_shim_reused"] > report["original_shim_direct_imports"]["missing"]:
+        return False
+    if report["original_shim_retry"] == "MANAGED_ORIGINAL_PASS" and (
+            report["original_shim_retry_process"] != "EXIT_ZERO"):
         return False
     if report["original_shim_staging"]["missing_requested"] not in {0, 1}:
         return False
@@ -180,7 +213,9 @@ def valid(report: object) -> bool:
             (report["host_stage"] == "MANAGED_ORIGINAL_PASS"
              and report["host_process"] == "EXIT_ZERO")
             or (report["original_shim_host"] == "MANAGED_ORIGINAL_PASS"
-                and report["original_shim_process"] == "EXIT_ZERO")):
+                and report["original_shim_process"] == "EXIT_ZERO")
+            or (report["original_shim_retry"] == "MANAGED_ORIGINAL_PASS"
+                and report["original_shim_retry_process"] == "EXIT_ZERO")):
         return False
     for key in ("installer_authenticode_preverified", "installer_sha256_verified",
                 "managed_executed", "runtime_installed", "original_payload_artifact"):
@@ -520,14 +555,37 @@ def trial(installer: Path, expected_sha: str, wine: Path, prefix: Path,
                         result["original_shim_staging"] = stage_from_mzz(
                             private, sevenzip, ["mscoreei.dll"])
                         if result["original_shim_staging"]["staged"] == 1:
+                            shim_path = private / "mscoreei.dll"
                             result["original_shim_host"], result["original_shim_process"] = host_check(
                                 wine, prefix, host_fixture, managed_fixture,
-                                original, original_shim=private / "mscoreei.dll")
+                                original, original_shim=shim_path)
+                            if result["original_shim_host"] == "ORIGINAL_SHIM_MISSING_DEPENDENCY":
+                                shim_missing: list[str] = []
+                                result["original_shim_direct_imports"] = direct_import_check(
+                                    wine, prefix, fixture, shim_path,
+                                    _private_missing=shim_missing)
+                                genuinely_missing = []
+                                for dep in shim_missing:
+                                    existing = private / dep
+                                    if (existing.is_file() and not existing.is_symlink()
+                                            and pe_type(existing.read_bytes()[:8192]) == "PE_AMD64"):
+                                        result["original_shim_reused"] += 1
+                                    else:
+                                        genuinely_missing.append(dep)
+                                if genuinely_missing:
+                                    result["original_shim_dependency_stage"] = stage_from_mzz(
+                                        private, sevenzip, genuinely_missing)
+                                    if result["original_shim_dependency_stage"]["staged"] > 0:
+                                        result["original_shim_retry"], result["original_shim_retry_process"] = host_check(
+                                            wine, prefix, host_fixture, managed_fixture,
+                                            original, original_shim=shim_path)
                         result["managed_executed"] = (
                             (result["host_stage"] == "MANAGED_ORIGINAL_PASS"
                              and result["host_process"] == "EXIT_ZERO")
                             or (result["original_shim_host"] == "MANAGED_ORIGINAL_PASS"
-                                and result["original_shim_process"] == "EXIT_ZERO"))
+                                and result["original_shim_process"] == "EXIT_ZERO")
+                            or (result["original_shim_retry"] == "MANAGED_ORIGINAL_PASS"
+                                and result["original_shim_retry_process"] == "EXIT_ZERO"))
     assert valid(result)
     return result
 
@@ -559,6 +617,22 @@ def main(argv: list[str] | None = None) -> int:
     print("AUTHENTIC_NETFX48_ORIGINAL_SHIM",
           shim["status"], shim["located"], shim["staged"],
           report["original_shim_host"], report["original_shim_process"])
+    shim_imports = report["original_shim_direct_imports"]
+    print("AUTHENTIC_NETFX48_ORIGINAL_SHIM_IMPORTS",
+          shim_imports["status"], shim_imports["checked"],
+          shim_imports["loaded"], shim_imports["missing"],
+          shim_imports["other"], report["original_shim_reused"])
+    for family_name in FAMILIES:
+        category = shim_imports["families"][family_name]
+        if sum(category.values()):
+            print("AUTHENTIC_NETFX48_ORIGINAL_SHIM_IMPORT_FAMILY", family_name,
+                  category["loaded"], category["missing"], category["other"])
+    repair = report["original_shim_dependency_stage"]
+    print("AUTHENTIC_NETFX48_ORIGINAL_SHIM_DEP_STAGE",
+          repair["status"], repair["missing_requested"],
+          repair["located"], repair["staged"])
+    print("AUTHENTIC_NETFX48_ORIGINAL_SHIM_RETRY",
+          report["original_shim_retry"], report["original_shim_retry_process"])
     staging = report["signed_mzz_staging"]
     print("AUTHENTIC_NETFX48_MZZ_STAGE", staging["status"],
           staging["missing_requested"], staging["located"], staging["staged"])
