@@ -89,8 +89,8 @@ def classify_listing(raw: bytes) -> dict | None:
         if result["entries"] > MAX_ENTRIES:
             return None
         base = name.split(".")[0]
-        result["signals"]["CLR_LIKE"] |= bool(re.match(r"^clr(?:[_-.]|$)", base))
-        result["signals"]["MSCORLIB_LIKE"] |= bool(re.match(r"^mscorlib(?:[_-.]|$)", base))
+        result["signals"]["CLR_LIKE"] |= bool(re.match(r"^clr(?:[-_.]|$)", base))
+        result["signals"]["MSCORLIB_LIKE"] |= bool(re.match(r"^mscorlib(?:[-_.]|$)", base))
         result["signals"]["WPF_LIKE"] |= any(s in name for s in (
             "presentationframework", "presentationcore", "presentationnative", "system_xaml", "system.xaml"))
         result["signals"]["AMD64_NAMED"] |= bool(re.search(r"(?:^|[_\-.])(?:amd64|x64)(?:[_\-.]|$)", name))
