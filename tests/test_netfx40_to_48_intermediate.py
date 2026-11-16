@@ -37,7 +37,7 @@ class Native40To48IntermediateTests(unittest.TestCase):
         winetricks = root / "winetricks"
         loader = root / "netfx481_clr_load.exe"
         managed = root / "netfx481_runtime_probe.exe"
-        for file in (wine, winetricks, loader, managed):
+        for file in (wine, root / "wineserver", winetricks, loader, managed):
             file.write_bytes(b"self-authored synthetic fixture")
             file.chmod(0o700)
         return wine, prefix, winetricks, loader, managed
@@ -50,7 +50,12 @@ class Native40To48IntermediateTests(unittest.TestCase):
         before = {"CLR64": ("PE_AMD64", hash_before)}
         after = {"CLR64": ("PE_AMD64", hash_after)}
         def runner(args, env, cwd, timeout):
-            self.assertEqual(args[1:], ["-q", "dotnet48"])
+            self.assertEqual(args, ["bash", str(paths[2]), "-q", "dotnet48"])
+            self.assertEqual(env["WINE"], str(paths[0]))
+            self.assertEqual(env["WINE_BIN"], str(paths[0]))
+            self.assertEqual(env["WINE_BINDIR"], str(paths[0].parent))
+            self.assertEqual(env["WINESERVER"], str(paths[0].parent / "wineserver"))
+            self.assertEqual(env["WINESERVER_BIN"], str(paths[0].parent / "wineserver"))
             self.assertEqual(env["WINEARCH"], "win64")
             self.assertEqual(env["WINEDEBUG"], "-all")
             self.assertNotIn("WINEDLLOVERRIDES", env)
@@ -104,6 +109,27 @@ class Native40To48IntermediateTests(unittest.TestCase):
             self.assertEqual(result, p.blank())
             runner.assert_not_called()
 
+
+    def test_binary_identity_overrides_poisoned_inherited_environment(self):
+        with TemporaryDirectory() as td:
+            wine, prefix, *_ = self._fixture(Path(td))
+            poisoned = {
+                "WINE": "/tmp/foreign/wine", "WINE_BIN": "/tmp/foreign/wine",
+                "WINESERVER": "/tmp/foreign/wineserver",
+                "WINESERVER_BIN": "/tmp/foreign/wineserver",
+                "WINE_BINDIR": "/tmp/foreign", "WINEDLLOVERRIDES": "mscoree=n",
+            }
+            with mock.patch.dict(os.environ, poisoned):
+                env = p._env(wine, prefix)
+            self.assertEqual(env["WINE_BIN"], str(wine))
+            self.assertEqual(env["WINE_BINDIR"], str(wine.parent))
+            self.assertEqual(env["WINESERVER_BIN"], str(wine.parent / "wineserver"))
+            self.assertNotIn("WINEDLLOVERRIDES", env)
+            (wine.parent / "wineserver").unlink()
+            with mock.patch.dict(os.environ, poisoned):
+                without_server = p._env(wine, prefix)
+            self.assertNotIn("WINESERVER_BIN", without_server)
+            self.assertNotIn("WINESERVER", without_server)
 
     def test_private_progress_never_contains_installer_output(self):
         self.assertEqual(p.classify_progress(b""), "NO_OUTPUT")
