@@ -20,6 +20,10 @@ from scripts.netfx481_setup_evidence import (
     classify_log, discard_log, KNOWN_RESULTS, KNOWN_PHASES, KNOWN_CODES,
     snapshot_secondary_logs, scan_secondary_logs, validate_secondary_report,
 )
+from scripts.netfx481_prereq_diagnostic import (
+    classify_file as classify_primary_prerequisite,
+    empty as empty_prerequisite, validate as validate_prerequisite,
+)
 from scripts.netfx481_trial import validate_prefix, probe, wineboot_restart
 from scripts.netfx481_win32_exit import (
     launch, blank as blank_launch, validate as validate_launch,
@@ -41,7 +45,9 @@ def blank() -> dict:
         "status": "NOT_ELIGIBLE", "native40_persistent": False,
         "win7": "NOT_RUN", "win10": "NOT_RUN",
         "setup": blank_launch(), "setup_evidence": dict(SETUP_EVIDENCE),
-        "secondary_evidence": None, "restart": "NOT_RUN", "clr64_changed": False,
+        "secondary_evidence": None,
+        "primary_prerequisite": empty_prerequisite(),
+        "restart": "NOT_RUN", "clr64_changed": False,
         "release": "UNAVAILABLE", "loader": "NOT_VERIFIED",
         "runtime_family": "NOT_VERIFIED", "native_only_managed": "NOT_VERIFIED",
         "native48_candidate": False, "framework481_confirmed": False,
@@ -73,6 +79,7 @@ def validate(report: object) -> bool:
                 "native40_persistent", "clr64_changed", "native48_candidate"))
             or report["framework481_confirmed"] is not False
             or report["solidworks_compatibility"] != "NOT_DEMONSTRATED"
+            or not validate_prerequisite(report["primary_prerequisite"])
             or (report["status"] == "MEASURED"
                 and not validate_secondary_report(report["secondary_evidence"]))
             or (report["status"] == "NOT_ELIGIBLE"
@@ -156,6 +163,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
     setup = blank_launch()
     evidence = dict(SETUP_EVIDENCE)
     secondary = None
+    primary = empty_prerequisite()
     restart = "NOT_RUN"
     try:
         if win7 == "APPLIED":
@@ -168,7 +176,10 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
                                timeout=465, fusion_builtin=True,
                                setup_family="NETFX48")
             finally:
+                # Both classifiers read the short-lived original /log inside
+                # the marked Wine prefix. Never print or retain raw text.
                 evidence = classify_log(log)
+                primary = classify_primary_prerequisite(log)
                 discard_log(log)
                 secondary = scan_secondary_logs(
                     prefix, baseline=secondary_before, family="NETFX48")
@@ -194,7 +205,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
         "status": "MEASURED", "native40_persistent": True,
         "win7": win7, "win10": win10, "setup": setup,
         "setup_evidence": evidence, "secondary_evidence": secondary,
-        "restart": restart,
+        "primary_prerequisite": primary, "restart": restart,
         "clr64_changed": delta["changes"]["CLR64"] == "CHANGED",
         "release": _release(wine, prefix, env),
         "loader": load_clr(wine, prefix, loader),
@@ -242,6 +253,9 @@ def main(argv: list[str] | None = None) -> int:
             for name in ("status", "phase"):
                 print("Original .NET 4.8 private log", name, value[name])
             print("Original .NET 4.8 private log error classes", ",".join(value["codes"]))
+        elif field == "primary_prerequisite":
+            for name in ("status", "os_versions", "blockers", "5100_in_log"):
+                print("Original .NET 4.8 primary_prerequisite", name, value[name])
         elif field == "secondary_evidence":
             if value is not None:
                 print("Original .NET 4.8 secondary status", value["status"])
