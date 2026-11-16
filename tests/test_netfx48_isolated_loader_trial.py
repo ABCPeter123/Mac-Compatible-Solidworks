@@ -44,6 +44,8 @@ class IsolatedLoaderTests(unittest.TestCase):
                  installer_authenticode_preverified=True,
                  installer_sha256_verified=True,
                  extraction="PE_AMD64",
+                 selftest="LOADED", selftest_process="EXIT_ZERO",
+                 original_process="EXIT_ZERO",
                  loader="MISSING_DEPENDENCY")
         self.assertTrue(t.valid(d))
         d["extraction"] = "NO_MZZ"
@@ -86,6 +88,33 @@ class IsolatedLoaderTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     t.trial(original, "a" * 64, wine, prefix, reader, fixture)
                 extract.assert_not_called()
+
+    def test_wine_selftest_differentiates_process_and_output_failure(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            fixture = base / "netfx48_isolated_loader.exe"
+            fixture.write_bytes(b"independent")
+            def fake_code(code: int):
+                def cb(argv, **kwargs):
+                    if code == 0:
+                        kwargs["stdout"].write(stdout("LOADED"))
+                    return mock.Mock(returncode=code)
+                return cb
+            for code, status, process in (
+                    (0, "LOADED", "EXIT_ZERO"),
+                    (1, "PROBE_ERROR", "EXIT_NONZERO"),
+                    (-11, "PROBE_ERROR", "SIGNALLED")):
+                with self.subTest(code=code), mock.patch.object(
+                        t.subprocess, "run", side_effect=fake_code(code)):
+                    self.assertEqual(
+                        t._invoke(base / "wine", base / "prefix", fixture,
+                                  "--selftest-windows", original=False),
+                        (status, process))
+            with mock.patch.object(t.subprocess, "run", return_value=mock.Mock(returncode=0)):
+                self.assertEqual(
+                    t._invoke(base / "wine", base / "prefix", fixture,
+                              "--selftest-windows", original=False),
+                    ("PROBE_ERROR", "EXIT_ZERO"))
 
     def test_no_raw_filenames_returned_on_missing_mzz(self):
         with tempfile.TemporaryDirectory() as td:
