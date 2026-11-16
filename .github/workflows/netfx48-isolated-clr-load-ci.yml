@@ -16,6 +16,8 @@ on:
       - 'tests/test_netfx48_host_activation.py'
       - 'probes/netfx48_host_activation.c'
       - 'probes/netfx48_managed_host_check.cs'
+      - 'scripts/netfx48_windows_shim_only.py'
+      - 'tests/test_netfx48_windows_shim_only.py'
   workflow_dispatch:
 
 permissions:
@@ -36,6 +38,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx48_isolated_loader_trial.py' -v
           python -m unittest discover -s tests -p 'test_netfx48_signed_mzz_dependency_staging.py' -v
           python -m unittest discover -s tests -p 'test_netfx48_host_activation.py' -v
+          python -m unittest discover -s tests -p 'test_netfx48_windows_shim_only.py' -v
           python -m unittest discover -s tests -p 'test_netfx4x_mzz_pe_evidence.py' -v
           python -m unittest discover -s tests -p 'test_netfx4x_mzz_import_evidence.py' -v
 
@@ -108,7 +111,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $url = 'https://download.microsoft.com/download/f/3/a/f3a6af84-da23-40a5-8d1c-49cc10c8e76f/NDP48-x86-x64-AllOS-ENU.exe'
-          $original = Join-Path (Resolve-Path build) 'original-microsoft-private.exe'
+          $original = Join-Path (Resolve-Path build) 'NDP48-x86-x64-AllOS-ENU.exe'
           try {
             curl.exe --fail --location --retry 3 --max-time 600 --output $original $url
             if ($LASTEXITCODE -ne 0) { throw 'Original .NET 4.8 media fetch failed' }
@@ -122,7 +125,13 @@ jobs:
             }
             $digest = (Get-FileHash -LiteralPath $original -Algorithm SHA256).Hash.ToLowerInvariant()
             Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "sha256=$digest"
-            'Original Microsoft 4.8 Authenticode valid; no vendor payload exported'
+            $sevenZip = Join-Path $env:ProgramFiles '7-Zip\7z.exe'
+            if (!(Test-Path -LiteralPath $sevenZip)) {
+              $sevenZip = (Get-Command 7z.exe -ErrorAction Stop).Source
+            }
+            python -m scripts.netfx48_windows_shim_only --installer $original --signed-sha256 $digest --sevenzip $sevenZip --fixture build/netfx48_host_activation.exe --output build/windows-native-shim-categories.json
+            if ($LASTEXITCODE -ne 0) { throw 'Windows original shim native-only control failed' }
+            'Original Microsoft 4.8 Authenticode valid; Windows shim-only control measured'
           }
           finally {
             Remove-Item -LiteralPath $original -Force -ErrorAction SilentlyContinue
@@ -134,6 +143,7 @@ jobs:
             build/netfx48_isolated_loader.exe
             build/netfx48_host_activation.exe
             build/netfx48_managed_host_check.dll
+            build/windows-native-shim-categories.json
           if-no-files-found: error
           retention-days: 3
 
@@ -218,6 +228,12 @@ jobs:
                 report["original_shim_staging"]["status"],
                 report["original_shim_host"],
                 report["original_shim_process"])
+          from scripts.netfx48_windows_shim_only import valid as windows_valid
+          windows = json.loads(Path("build/windows-native-shim-categories.json").read_text())
+          assert windows_valid(windows)
+          print("AUTHENTIC_NETFX48_SHIM_INIT_AB",
+                windows["source"], windows["native_shim"],
+                report["original_shim_only"], report["original_shim_only_process"])
           print("Genuine full .NET 4.8 runtime: NOT_INSTALLED_OR_VERIFIED")
           PY
       - uses: actions/upload-artifact@v4
