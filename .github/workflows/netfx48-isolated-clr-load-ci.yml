@@ -13,6 +13,9 @@ on:
       - 'tests/test_netfx48_isolated_loader_trial.py'
       - 'scripts/netfx48_signed_mzz_dependency_staging.py'
       - 'tests/test_netfx48_signed_mzz_dependency_staging.py'
+      - 'tests/test_netfx48_host_activation.py'
+      - 'probes/netfx48_host_activation.c'
+      - 'probes/netfx48_managed_host_check.cs'
   workflow_dispatch:
 
 permissions:
@@ -32,6 +35,7 @@ jobs:
           set -euo pipefail
           python -m unittest discover -s tests -p 'test_netfx48_isolated_loader_trial.py' -v
           python -m unittest discover -s tests -p 'test_netfx48_signed_mzz_dependency_staging.py' -v
+          python -m unittest discover -s tests -p 'test_netfx48_host_activation.py' -v
           python -m unittest discover -s tests -p 'test_netfx4x_mzz_pe_evidence.py' -v
           python -m unittest discover -s tests -p 'test_netfx4x_mzz_import_evidence.py' -v
 
@@ -57,6 +61,20 @@ jobs:
           Set-Content -LiteralPath build/compile-isolated-loader.cmd -Value $cmdText -Encoding ascii
           & cmd.exe /d /c build\compile-isolated-loader.cmd
           if ($LASTEXITCODE -ne 0) { throw 'Self-authored Windows loader fixture did not compile' }
+          $hostCmd = "@echo off`r`ncall `"$vcvars`"`r`ncl /nologo /W4 /O2 /GS- /Zl /Fe:build\netfx48_host_activation.exe probes\netfx48_host_activation.c /link /NODEFAULTLIB kernel32.lib /ENTRY:host_entry /SUBSYSTEM:CONSOLE`r`nexit /b %errorlevel%`r`n"
+          Set-Content -LiteralPath build/compile-netfx48-host.cmd -Value $hostCmd -Encoding ascii
+          & cmd.exe /d /c build\compile-netfx48-host.cmd
+          if ($LASTEXITCODE -ne 0) { throw 'Self-authored native .NET host fixture did not compile' }
+          $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+          if (!(Test-Path -LiteralPath $csc)) { throw 'Windows .NET Framework C# compiler unavailable' }
+          & $csc /nologo /target:library /out:build\netfx48_managed_host_check.dll probes\netfx48_managed_host_check.cs
+          if ($LASTEXITCODE -ne 0) { throw 'Self-authored managed fixture did not compile' }
+          $env:SWCOMPAT_CLR_PATH = 'C:\swcompat-host-missing\clr.dll'
+          $missingHost = & build\netfx48_host_activation.exe
+          if ($LASTEXITCODE -ne 0 -or $missingHost -notcontains 'SWCOMPAT_NETFX48_HOST_STATUS=ORIGINAL_MISSING') {
+            throw 'Independent host missing-original control failed'
+          }
+          Remove-Item env:SWCOMPAT_CLR_PATH -ErrorAction SilentlyContinue
           try {
             $env:SWCOMPAT_LOAD_DLL_PATH = 'C:\swcompat-definitely-missing\nonexistent.dll'
             $missing = & build\netfx48_isolated_loader.exe
@@ -100,7 +118,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: self-authored-netfx48-isolated-win32-loader
-          path: build/netfx48_isolated_loader.exe
+          path: |
+            build/netfx48_isolated_loader.exe
+            build/netfx48_host_activation.exe
+            build/netfx48_managed_host_check.dll
           if-no-files-found: error
           retention-days: 3
 
@@ -161,6 +182,8 @@ jobs:
             --prefix "$RUNNER_TEMP/swcompat-original48-isolated-prefix" \
             --sevenzip "$SWCOMPAT_SEVENZIP" \
             --fixture build/netfx48_isolated_loader.exe \
+            --host-fixture build/netfx48_host_activation.exe \
+            --managed-fixture build/netfx48_managed_host_check.dll \
             --output build/isolated-original48-loader-categories.json \
             --agree-disposable-prefix
           python3 - <<'PY'
@@ -171,10 +194,12 @@ jobs:
           assert valid(report)
           assert report["installer_sha256_verified"]
           assert not report["runtime_installed"]
-          assert not report["managed_executed"]
+          assert report["managed_executed"] == (report["host_stage"] == "MANAGED_ORIGINAL_PASS"
+                                                   and report["host_process"] == "EXIT_ZERO")
           assert not report["original_payload_artifact"]
           print("Isolated original .NET 4.8 x64 loader:", report["loader"])
-          print("Genuine full .NET 4.8 runtime: NOT_VERIFIED")
+          print("Authentic CLR 4.8 host activation:", report["host_stage"])
+          print("Genuine full .NET 4.8 runtime: NOT_INSTALLED_OR_VERIFIED")
           PY
       - uses: actions/upload-artifact@v4
         if: always()
