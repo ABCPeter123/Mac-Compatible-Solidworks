@@ -63,6 +63,18 @@ class PeImportSafetyTests(unittest.TestCase):
         self.assertNotIn("completelyprivate", json.dumps(result))
         self.assertFalse(result["native_loader_tested"])
 
+    def test_private_import_names_are_in_memory_only_and_cleared_on_error(self):
+        names = ["previous-sample"]
+        report = evidence.parse_pe(fixture(), _private_direct_names=names)
+        self.assertEqual(names, [
+            "kernel32.dll", "mscoree.dll", "completelyprivate.dll"])
+        self.assertNotIn("completelyprivate", json.dumps(report))
+        damaged = bytearray(fixture())
+        damaged[0x400 + 12:0x400 + 16] = b"\\xff\\xff\\xff\\xff"
+        broken = evidence.parse_pe(bytes(damaged), _private_direct_names=names)
+        self.assertEqual(broken["pe"], "INVALID_IMPORT_TABLE")
+        self.assertEqual(names, [])
+
     def test_none_and_unsafe_pe_do_not_claim_success(self):
         result = evidence.parse_pe(fixture(imports=(), delayed=(), clr=False))
         self.assertEqual(result["pe"], "PE_AMD64")
