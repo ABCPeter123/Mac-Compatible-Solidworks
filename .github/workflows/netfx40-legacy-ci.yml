@@ -3,7 +3,11 @@ name: Original Microsoft .NET 4.0 CLR on Wine Staging A/B
 # Original Microsoft installer experiments require explicit workflow_dispatch.
 # All pull requests use compatibility-ci.yml for non-proprietary regressions.
 # Use exactly one optional 4.8 intermediate; do not rerun both paths.
+# Temporary PR-only signed installer measurement, never merge this trigger.
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/netfx40-legacy-ci.yml'
   workflow_dispatch:
     inputs:
       try_48_intermediate:
@@ -223,7 +227,7 @@ jobs:
             Set-Content -LiteralPath build/netfx481.sha256 -NoNewline -Encoding ascii
           Write-Output "Verified signed official .NET 4.8.1 in-place upgrade package"
       - name: Download and authenticate original signed Microsoft .NET Framework 4.8 intermediate
-        if: inputs.try_48_direct
+        if: (inputs.try_48_direct || github.event_name == 'pull_request')
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -243,7 +247,7 @@ jobs:
             Set-Content -LiteralPath build/netfx48.sha256 -NoNewline -Encoding ascii
           Write-Output "Original signed Microsoft .NET 4.8 authenticated, checksum staged privately"
       - name: Compile distinct 4.8 original Windows process monitor
-        if: inputs.try_48_direct
+        if: (inputs.try_48_direct || github.event_name == 'pull_request')
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -493,7 +497,7 @@ jobs:
     timeout-minutes: 35
     env:
       SWCOMPAT_TRY_48_INTERMEDIATE: ${{ inputs.try_48_intermediate }}
-      SWCOMPAT_TRY_48_DIRECT: ${{ inputs.try_48_direct }}
+      SWCOMPAT_TRY_48_DIRECT: ${{ (inputs.try_48_direct || github.event_name == 'pull_request') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -601,13 +605,13 @@ jobs:
           print("Original native .NET 4.0 prerequisites passed:", r["persistent_native_managed"])
           PY
       - name: Reject conflicting 4.8 intermediate experiment selections
-        if: inputs.try_48_intermediate && inputs.try_48_direct
+        if: inputs.try_48_intermediate && (inputs.try_48_direct || github.event_name == 'pull_request')
         shell: bash
         run: |
           echo "Select either Winetricks 4.8 OR original signed 4.8, not both."
           exit 1
       - name: Install original signed 4.8 directly on the verified native 4.0 prefix
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_48_direct && !inputs.try_48_intermediate
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && (inputs.try_48_direct || github.event_name == 'pull_request') && !inputs.try_48_intermediate
         shell: bash
         run: |
           set -euo pipefail
@@ -623,7 +627,7 @@ jobs:
             --output build/netfx40-to-48-direct.json \
             --agree-disposable-prefix
       - name: Gate original 4.8.1 on independently verified original native 4.8
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_48_direct && !inputs.try_48_intermediate
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && (inputs.try_48_direct || github.event_name == 'pull_request') && !inputs.try_48_intermediate
         shell: bash
         run: |
           set -euo pipefail
@@ -673,7 +677,7 @@ jobs:
           print("Real native Microsoft 4.8 intermediate candidate verified:", r["native48_candidate"])
           PY
       - name: Read disk-space prerequisites on actual persistent native CLR 4.0 prefix
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && ((!inputs.try_48_intermediate && !inputs.try_48_direct) || env.SWCOMPAT_NATIVE48_READY == 'yes')
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && ((!inputs.try_48_intermediate && !(inputs.try_48_direct || github.event_name == 'pull_request')) || env.SWCOMPAT_NATIVE48_READY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
@@ -684,7 +688,7 @@ jobs:
             --output build/netfx481-disk-before-upgrade.json \
             --agree-disposable-prefix
       - name: Select Windows 10 reported version for original Microsoft 4.8.1 upgrade
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && ((!inputs.try_48_intermediate && !inputs.try_48_direct) || env.SWCOMPAT_NATIVE48_READY == 'yes')
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && ((!inputs.try_48_intermediate && !(inputs.try_48_direct || github.event_name == 'pull_request')) || env.SWCOMPAT_NATIVE48_READY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
@@ -692,7 +696,7 @@ jobs:
             --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
             --logs-dir "$RUNNER_TEMP/netfx40-msxml3-logs" set-winver win10
       - name: Upgrade functioning Microsoft .NET 4.x CLR with original Microsoft 4.8.1
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && ((!inputs.try_48_intermediate && !inputs.try_48_direct) || env.SWCOMPAT_NATIVE48_READY == 'yes')
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && ((!inputs.try_48_intermediate && !(inputs.try_48_direct || github.event_name == 'pull_request')) || env.SWCOMPAT_NATIVE48_READY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
@@ -709,7 +713,7 @@ jobs:
             --experiment-private-setup-evidence \
             --agree-disposable-prefix
       - name: Restore Windows 11 profile and verify native-only managed CLR
-        if: always() && env.SWCOMPAT_NATIVE40_READY == 'yes' && ((!inputs.try_48_intermediate && !inputs.try_48_direct) || env.SWCOMPAT_NATIVE48_READY == 'yes')
+        if: always() && env.SWCOMPAT_NATIVE40_READY == 'yes' && ((!inputs.try_48_intermediate && !(inputs.try_48_direct || github.event_name == 'pull_request')) || env.SWCOMPAT_NATIVE48_READY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
