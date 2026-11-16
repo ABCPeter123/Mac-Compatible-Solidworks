@@ -37,6 +37,15 @@ STATES = {"NOT_RUN", "NOT_FOUND", "LINKED", "LOADED", "MISSING_DEPENDENCY",
           "OTHER_LOAD_FAILURE", "INVALID_ARGUMENT", "TIMEOUT", "PROBE_ERROR"}
 EXTRACTIONS = {"NOT_STARTED", "NO_MZZ", "NO_CLR", "MZZ_ERROR", "EXTRACT_FAILED",
                "INVALID_CLR_PE", "PE_AMD64"}
+HOST_STATES = {"NOT_RUN", "INVALID_INPUT", "ORIGINAL_MISSING",
+               "ORIGINAL_LOAD_FAILED", "ORIGINAL_PATH_MISMATCH", "NO_MSCOREE",
+               "NO_HOST_EXPORT", "META_HOST_FAILED", "RUNTIME_NOT_REGISTERED",
+               "RUNTIME_DIRECTORY_FAILED", "HOST_INTERFACE_FAILED",
+               "OTHER_RUNTIME_SELECTED", "HOST_START_FAILED",
+               "MANAGED_FIXTURE_MISSING", "MANAGED_EXECUTION_FAILED",
+               "MANAGED_UNEXPECTED_RESULT", "MANAGED_ORIGINAL_PASS",
+               "TIMEOUT", "PROBE_ERROR"}
+HOST_LINE = re.compile(r"^SWCOMPAT_NETFX48_HOST_(SCHEMA|STATUS)=([A-Z0-9_]+)$")
 PROCESSES = {"NOT_RUN", "EXIT_ZERO", "EXIT_1", "EXIT_2", "EXIT_5",
              "EXIT_126", "EXIT_127", "EXIT_193", "EXIT_NONZERO_OTHER",
              "SIGNALLED", "TIMEOUT", "SPAWN_ERROR", "NO_Z_DRIVE"}
@@ -99,6 +108,7 @@ def blank() -> dict:
         "signed_mzz_staging": stage_blank(),
         "loader_after_mzz": "NOT_RUN",
         "mzz_process": "NOT_RUN",
+        "host_stage": "NOT_RUN", "host_process": "NOT_RUN",
     }
 
 
@@ -115,7 +125,9 @@ def valid(report: object) -> bool:
             or not valid_dependencies(report["direct_imports"])
             or not stage_valid(report["signed_mzz_staging"])
             or report["loader_after_mzz"] not in STATES
-            or report["mzz_process"] not in PROCESSES):
+            or report["mzz_process"] not in PROCESSES
+            or report["host_stage"] not in HOST_STATES
+            or report["host_process"] not in PROCESSES):
         return False
     if (report["signed_mzz_staging"]["staged"] == 0
             and report["loader_after_mzz"] != "NOT_RUN"):
@@ -132,11 +144,20 @@ def valid(report: object) -> bool:
     if (report["loader_after_mzz"] == "NOT_RUN"
             and report["mzz_process"] != "NOT_RUN"):
         return False
+    if (report["host_stage"] == "NOT_RUN") != (report["host_process"] == "NOT_RUN"):
+        return False
+    if (report["host_stage"] != "NOT_RUN"
+            and report["loader_after_mzz"] != "LOADED"):
+        return False
+    if report["managed_executed"] != (
+            report["host_stage"] == "MANAGED_ORIGINAL_PASS"
+            and report["host_process"] == "EXIT_ZERO"):
+        return False
     for key in ("installer_authenticode_preverified", "installer_sha256_verified",
                 "managed_executed", "runtime_installed", "original_payload_artifact"):
         if type(report[key]) is not bool:
             return False
-    if any(report[key] for key in ("managed_executed", "runtime_installed",
+    if any(report[key] for key in ("runtime_installed",
                                     "original_payload_artifact")):
         return False
     if report["status"] == "NOT_RUN":
@@ -340,8 +361,63 @@ def direct_import_check(wine: Path, prefix: Path, fixture: Path,
     return report
 
 
+
+def parse_host(raw: bytes, exit_code: int) -> str:
+    """An allowlisted, bounded read of the self-authored Win32 host fixture."""
+    if exit_code != 0 or not 1 <= len(raw) <= MAX_PROBE or b"\x00" in raw:
+        return "PROBE_ERROR"
+    try:
+        lines = raw.decode("ascii").splitlines()
+    except UnicodeError:
+        return "PROBE_ERROR"
+    fields: dict[str, str] = {}
+    for line in lines:
+        m = HOST_LINE.fullmatch(line)
+        if m is not None:
+            key, value = m.groups()
+            if key in fields or (key == "SCHEMA" and value != "1") or (
+                    key == "STATUS" and value not in HOST_STATES - {
+                        "NOT_RUN", "TIMEOUT", "PROBE_ERROR"}):
+                return "PROBE_ERROR"
+            fields[key] = value
+        elif line.startswith("SWCOMPAT_NETFX48_HOST_"):
+            return "PROBE_ERROR"
+    return fields["STATUS"] if set(fields) == {"SCHEMA", "STATUS"} else "PROBE_ERROR"
+
+
+def host_check(wine: Path, prefix: Path, host_fixture: Path,
+               managed_fixture: Path, original: Path) -> tuple[str, str]:
+    """Isolated hosting: no framework registration and no Mono success accepted."""
+    z = prefix / "dosdevices" / "z:"
+    if not z.is_symlink() or z.resolve() != Path("/"):
+        return "PROBE_ERROR", "NO_Z_DRIVE"
+    env = os.environ.copy()
+    env.pop("WINEDLLOVERRIDES", None)
+    env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64",
+                "WINEDEBUG": "-all", "WINEDLLOVERRIDES": "clr=n",
+                "SWCOMPAT_CLR_PATH": "Z:" + str(original.resolve(strict=True)).replace("/", "\\"),
+                "SWCOMPAT_MANAGED_DLL": "Z:" + str(managed_fixture.resolve(strict=True)).replace("/", "\\")})
+    host_fixture = host_fixture.resolve(strict=True)
+    with tempfile.TemporaryFile() as output:
+        try:
+            proc = subprocess.run(
+                [str(wine), str(host_fixture)], cwd=host_fixture.parent,
+                stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.DEVNULL,
+                env=env, timeout=90, check=False)
+        except subprocess.TimeoutExpired:
+            return "TIMEOUT", "TIMEOUT"
+        except OSError:
+            return "PROBE_ERROR", "SPAWN_ERROR"
+        if proc.returncode:
+            return "PROBE_ERROR", exit_class(proc.returncode)
+        output.seek(0)
+        raw = output.read(MAX_PROBE + 1)
+    return parse_host(raw, 0), "EXIT_ZERO"
+
+
 def trial(installer: Path, expected_sha: str, wine: Path, prefix: Path,
-          sevenzip: Path, fixture: Path) -> dict:
+          sevenzip: Path, fixture: Path, host_fixture: Path | None = None,
+          managed_fixture: Path | None = None) -> dict:
     validate_prefix(prefix)
     wine = wine.resolve(strict=True)
     sevenzip = sevenzip.resolve(strict=True)
@@ -352,6 +428,17 @@ def trial(installer: Path, expected_sha: str, wine: Path, prefix: Path,
             or installer.resolve().is_relative_to(prefix.resolve())
             or fixture.resolve().is_relative_to(prefix.resolve())):
         raise ValueError("Invalid original media / independent Wine loader fixture")
+    if (host_fixture is None) != (managed_fixture is None):
+        raise ValueError("Both independent host fixtures required together")
+    if host_fixture is not None and (
+            host_fixture.is_symlink() or not host_fixture.is_file()
+            or host_fixture.name != "netfx48_host_activation.exe"
+            or managed_fixture is None or managed_fixture.is_symlink()
+            or not managed_fixture.is_file()
+            or managed_fixture.name != "netfx48_managed_host_check.dll"
+            or host_fixture.resolve().is_relative_to(prefix.resolve())
+            or managed_fixture.resolve().is_relative_to(prefix.resolve())):
+        raise ValueError("Unsafe independent CLR host fixture")
     verify_original(installer, expected_sha)
     result = blank()
     result["status"] = "PARTIAL"
@@ -386,6 +473,13 @@ def trial(installer: Path, expected_sha: str, wine: Path, prefix: Path,
                 if result["signed_mzz_staging"]["staged"] > 0:
                     result["loader_after_mzz"], result["mzz_process"] = _load(
                         wine, prefix, fixture, original)
+                    if (result["loader_after_mzz"] == "LOADED"
+                            and host_fixture is not None and managed_fixture is not None):
+                        result["host_stage"], result["host_process"] = host_check(
+                            wine, prefix, host_fixture, managed_fixture, original)
+                        result["managed_executed"] = (
+                            result["host_stage"] == "MANAGED_ORIGINAL_PASS"
+                            and result["host_process"] == "EXIT_ZERO")
     assert valid(result)
     return result
 
@@ -394,13 +488,16 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Only an isolated original 4.8 CLR native-loader test")
     for name in ("installer", "wine", "prefix", "sevenzip", "fixture", "output"):
         ap.add_argument("--" + name, type=Path, required=True)
+    ap.add_argument("--host-fixture", type=Path)
+    ap.add_argument("--managed-fixture", type=Path)
     ap.add_argument("--signed-sha256", required=True)
     ap.add_argument("--agree-disposable-prefix", action="store_true", required=True)
     args = ap.parse_args(argv)
     if args.output.is_symlink() or args.output.resolve().is_relative_to(args.prefix.resolve()):
         ap.error("Only an external allowlisted report file")
     report = trial(args.installer, args.signed_sha256, args.wine,
-                   args.prefix, args.sevenzip, args.fixture)
+                   args.prefix, args.sevenzip, args.fixture,
+                   args.host_fixture, args.managed_fixture)
     assert valid(report)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, sort_keys=True), encoding="utf-8")
@@ -408,6 +505,8 @@ def main(argv: list[str] | None = None) -> int:
                 "extraction", "loader",
                 "original_process", "managed_executed", "runtime_installed"):
         print("AUTHENTIC_NETFX48_ISOLATED", key, report[key])
+    print("AUTHENTIC_NETFX48_HOST", report["host_stage"],
+          report["host_process"], report["managed_executed"])
     staging = report["signed_mzz_staging"]
     print("AUTHENTIC_NETFX48_MZZ_STAGE", staging["status"],
           staging["missing_requested"], staging["located"], staging["staged"])
