@@ -10,6 +10,8 @@ on:
       - 'tests/test_netfx4x_mzz_evidence.py'
       - 'scripts/netfx4x_mzz_pe_evidence.py'
       - 'tests/test_netfx4x_mzz_pe_evidence.py'
+      - 'scripts/netfx4x_mzz_import_evidence.py'
+      - 'tests/test_netfx4x_mzz_import_evidence.py'
   workflow_dispatch:
 
 permissions:
@@ -29,6 +31,7 @@ jobs:
           set -euo pipefail
           python -m unittest discover -s tests -p 'test_netfx4x_mzz_evidence.py' -v
           python -m unittest discover -s tests -p 'test_netfx4x_mzz_pe_evidence.py' -v
+          python -m unittest discover -s tests -p 'test_netfx4x_mzz_import_evidence.py' -v
           python -m unittest discover -s tests -p 'test_netfx481_archive_evidence.py' -v
           python -m unittest discover -s tests -p 'test_netfx481_nested_cab_evidence.py' -v
           python -m unittest discover -s tests -p 'test_netfx481_prereq_diagnostic.py' -v
@@ -113,6 +116,10 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Original MZZ report failed validation' }
             python -m scripts.netfx4x_mzz_pe_evidence --directory $mzz --sevenzip $seven --output build/netfx-original-pe.json
             if ($LASTEXITCODE -ne 0) { throw 'Original MZZ PE architecture classifier failed' }
+            python -m scripts.netfx4x_mzz_import_evidence --directory $mzz --sevenzip $seven --output build/netfx-original-imports.json
+            if ($LASTEXITCODE -ne 0) { throw 'Original MZZ private import dependency classifier failed' }
+            python -c 'import json; from pathlib import Path; from scripts.netfx4x_mzz_import_evidence import validate as valid; p=Path("build/netfx-original-imports.json"); assert valid(json.loads(p.read_text()))'
+            if ($LASTEXITCODE -ne 0) { throw 'Original static import evidence is unsafe or invalid' }
             python -c 'import json; from pathlib import Path; from scripts.netfx481_archive_evidence import validate as a; from scripts.netfx481_nested_cab_evidence import validate as c; from scripts.netfx4x_mzz_evidence import validate as m; p=Path("build"); assert a(json.loads((p/"netfx-original-outer.json").read_text())); assert c(json.loads((p/"netfx-original-cab.json").read_text())); assert m(json.loads((p/"netfx-original-mzz.json").read_text()))'
             if ($LASTEXITCODE -ne 0) { throw 'One original package census failed closed' }
           }
@@ -140,6 +147,15 @@ jobs:
           Add-Content $env:GITHUB_STEP_SUMMARY "Exact original CLR AMD64 PE: **$($pe.members.CLR_AMD64)**"
           Add-Content $env:GITHUB_STEP_SUMMARY "Exact original MSCORLIB AMD64 PE: **$($pe.members.MSCORLIB_AMD64)**"
           Add-Content $env:GITHUB_STEP_SUMMARY "Original CLR member extraction status: **$($pe.status)**"
+          $dep = Get-Content -Raw build/netfx-original-imports.json | ConvertFrom-Json
+          foreach ($member in @('CLR_AMD64','MSCORLIB_AMD64')) {
+            $entry = $dep.members.$member
+            Add-Content $env:GITHUB_STEP_SUMMARY "$($member) PE: **$($entry.pe)**; direct imports: **$($entry.import_table) ($($entry.import_count))**; delay imports: **$($entry.delay_import_table) ($($entry.delay_import_count))**; CLI directory: **$($entry.cli_metadata_directory)**"
+            foreach ($family in @('KERNEL32','KERNELBASE','NTDLL','MSCOREE','MSCOREI','FUSION','CLR','MSVC_RUNTIME','VCRUNTIME','UCRTBASE','API_SET','OTHER')) {
+              $count = $entry.import_families.$family
+              if ($count) { Add-Content $env:GITHUB_STEP_SUMMARY "$($member) fixed import family $($family): **$($count)**" }
+            }
+          }
           Add-Content $env:GITHUB_STEP_SUMMARY "Native CLR installation and execution: **NOT_TESTED**"
       - uses: actions/upload-artifact@v4
         with:
@@ -149,6 +165,7 @@ jobs:
             build/netfx-original-cab.json
             build/netfx-original-mzz.json
             build/netfx-original-pe.json
+            build/netfx-original-imports.json
           retention-days: 7
           if-no-files-found: error
 
