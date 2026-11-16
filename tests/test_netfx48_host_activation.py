@@ -74,6 +74,30 @@ class HostBoundaryTests(unittest.TestCase):
         self.assertEqual(t.parse_host(host_output("ORIGINAL_SHIM_NO_HOST_EXPORT"), 0),
                          "ORIGINAL_SHIM_NO_HOST_EXPORT")
 
+    def test_missing_original_shim_dependencies_are_never_synthetic_success(self):
+        blank = t.blank()
+        self.assertTrue(t.valid(blank))
+        for status in (
+                "ORIGINAL_SHIM_MISSING_DEPENDENCY",
+                "ORIGINAL_SHIM_MISSING_EXPORT",
+                "ORIGINAL_SHIM_BAD_IMAGE",
+                "ORIGINAL_SHIM_INIT_FAILED",
+                "ORIGINAL_SHIM_ACCESS_DENIED"):
+            with self.subTest(status=status):
+                self.assertEqual(t.parse_host(host_output(status), 0), status)
+        self.assertFalse(t.valid(dict(blank, original_shim_reused=1)))
+        self.assertFalse(t.valid(dict(blank, original_shim_retry="MANAGED_ORIGINAL_PASS",
+                                      original_shim_retry_process="EXIT_ZERO",
+                                      managed_executed=True)))
+        self.assertFalse(t.valid(dict(blank, original_shim_direct_imports=dict(
+            blank["original_shim_direct_imports"], original_filename="private.dll"))))
+        self.assertFalse(t.valid(dict(blank, original_shim_dependency_stage=dict(
+            blank["original_shim_dependency_stage"], original_path="private"))))
+        self.assertFalse(t.valid(dict(blank, original_shim_retry="ORIGINAL_SHIM_MISSING_EXPORT",
+                                      original_shim_retry_process="EXIT_ZERO")))
+        self.assertEqual(blank["original_shim_dependency_stage"]["status"], "NOT_RUN")
+        self.assertEqual(blank["original_shim_direct_imports"]["status"], "NOT_RUN")
+
     def test_private_host_invocation_is_bounded_and_classified(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
