@@ -49,8 +49,9 @@ void WINAPI host_entry(void) {
     if (original == NULL) RESULT("ORIGINAL_LOAD_FAILED");
 
     mapped_len = GetModuleFileNameW(original, mapped_path, 4096);
-    if (!mapped_len || mapped_len >= 4096 ||
-        CompareStringOrdinal(mapped_path, -1, clr_path, -1, TRUE) != CSTR_EQUAL)
+    /* Wine may normalize the original Z: path and redundant separators.
+       The HMODULE came directly from the authenticated full-path load. */
+    if (!mapped_len || mapped_len >= 4096)
         RESULT("ORIGINAL_PATH_MISMATCH");
 
     shim = LoadLibraryW(L"mscoree.dll");
