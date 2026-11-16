@@ -11,6 +11,8 @@ on:
       - 'probes/netfx48_isolated_loader.c'
       - 'scripts/netfx48_isolated_loader_trial.py'
       - 'tests/test_netfx48_isolated_loader_trial.py'
+      - 'scripts/netfx48_signed_mzz_dependency_staging.py'
+      - 'tests/test_netfx48_signed_mzz_dependency_staging.py'
   workflow_dispatch:
 
 permissions:
@@ -29,6 +31,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m unittest discover -s tests -p 'test_netfx48_isolated_loader_trial.py' -v
+          python -m unittest discover -s tests -p 'test_netfx48_signed_mzz_dependency_staging.py' -v
           python -m unittest discover -s tests -p 'test_netfx4x_mzz_pe_evidence.py' -v
           python -m unittest discover -s tests -p 'test_netfx4x_mzz_import_evidence.py' -v
 
