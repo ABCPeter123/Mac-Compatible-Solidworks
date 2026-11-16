@@ -1,6 +1,7 @@
 """Private original .NET 4.8 x64 CLR loader test, synthetic-only fixtures."""
 from __future__ import annotations
 import hashlib
+import os
 import json
 from pathlib import Path
 import tempfile
@@ -116,6 +117,27 @@ class IsolatedLoaderTests(unittest.TestCase):
                     t._invoke(base / "wine", base / "prefix", fixture,
                               "--selftest-windows", original=False),
                     ("PROBE_ERROR", "EXIT_ZERO"))
+
+    def test_relative_fixture_path_is_resolved_before_cwd_change(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            directory = root / "build"
+            directory.mkdir()
+            fixture = directory / "netfx48_isolated_loader.exe"
+            fixture.write_bytes(b"fixture")
+            relative = Path(os.path.relpath(fixture, Path.cwd()))
+            def fake_run(argv, **kwargs):
+                self.assertEqual(argv[1], str(fixture.resolve()))
+                self.assertEqual(kwargs["cwd"], fixture.parent.resolve())
+                self.assertEqual(kwargs["env"]["SWCOMPAT_LOAD_DLL_PATH"],
+                                 r"C:\Windows\System32\kernel32.dll")
+                kwargs["stdout"].write(stdout("LOADED"))
+                return mock.Mock(returncode=0)
+            with mock.patch.object(t.subprocess, "run", side_effect=fake_run):
+                self.assertEqual(
+                    t._invoke(root / "wine", root / "prefix", relative,
+                              "--selftest-windows", original=False),
+                    ("LOADED", "EXIT_ZERO"))
 
     def test_wine_cmd_control_and_finite_exit_buckets(self):
         self.assertEqual(t.exit_class(0), "EXIT_ZERO")
