@@ -24,6 +24,24 @@ class OriginalPrerequisiteTests(unittest.TestCase):
         self.assertNotIn("Secret", str(report))
         self.assertNotIn("vendor", str(report))
 
+    def test_win7_sp_reported_by_original_setup_is_specific_to_net48(self):
+        for original, expected in (
+            (b"OS Version = 6.1.7601, SP = 1.0\n", "WINDOWS_7_SP1_REPORTED_48"),
+            (b"OS Version = 6.1.7600, SP = 0.0\n", "WINDOWS_7_SP0_REPORTED_48"),
+            (b"OS Version = 6.1.7601\n", "WINDOWS_7_SP_UNVERIFIED_48"),
+            (b"OS Version = 6.3.9600\n", "WINDOWS_8_1_FAMILY_48"),
+        ):
+            with self.subTest(source=original):
+                report = classify_text(original, family="NETFX48")
+                self.assertEqual(report["os_versions"], [expected])
+                self.assertEqual(report["blockers"], [])
+                self.assertTrue(validate(report))
+                self.assertNotIn("7601", str(report))
+        old = classify_text(b"OS Version = 6.1.7601, SP = 1.0\n")
+        self.assertEqual(old["os_versions"], ["BELOW_WINDOWS_10"])
+        with self.assertRaises(ValueError):
+            classify_text(b"OS Version = 6.1.7601\n", family="UNTRUSTED")
+
     def test_modern_19045_and_22621_are_supported_but_not_installed(self):
         for version, expected in (
             ("10.0.19045", "WINDOWS_10_SUPPORTED"),
