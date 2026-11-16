@@ -54,7 +54,7 @@ def valid(value: object) -> bool:
 
 
 def classify(raw: bytes, code: int) -> str:
-    if len(raw) > MAX_BYTES or code != 0 or b"\\x00" in raw:
+    if len(raw) > MAX_BYTES or code != 0 or bytes([0]) in raw:
         return "INVALID_OUTPUT"
     lines = [line for line in raw.splitlines() if line.startswith(PREFIX)]
     if len(lines) != 2 or lines[0] != b"SWCOMPAT_NETFX48_HOST_SCHEMA=1":
