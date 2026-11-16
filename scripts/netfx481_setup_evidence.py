@@ -334,7 +334,7 @@ def scan_secondary_logs(prefix: Path, *,
                 family_stage_file = new_or_changed and (
                     family == "NETFX481" or not _is_481_log_name(name))
                 if named_for_family or family_stage_file:
-                    prereq = classify_prerequisite_text(raw)
+                    prereq = classify_prerequisite_text(raw, family=family)
                     if prereq["status"] != "CLASSIFIED":
                         partial = True
                     else:
