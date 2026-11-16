@@ -285,7 +285,7 @@ class NetFxSetupEvidenceTests(unittest.TestCase):
             self.assertEqual(report["prerequisite_files"], 2)
             self.assertEqual(report["stage_files"], 3)
             self.assertEqual(report["stage_scope"], "CAPTURED")
-            self.assertEqual(report["prerequisite"]["os_versions"], ["BELOW_WINDOWS_10"])
+            self.assertEqual(report["prerequisite"]["os_versions"], ["WINDOWS_7_SP_UNVERIFIED_48"])
             self.assertTrue(report["prerequisite"]["5100_in_log"])
             self.assertIn("WINDOWS_UPDATE_BLOCK", report["prerequisite"]["blockers"])
             self.assertIn("MISSING_UPDATE_BLOCK", report["prerequisite"]["blockers"])
