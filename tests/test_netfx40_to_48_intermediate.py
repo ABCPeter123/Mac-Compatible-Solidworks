@@ -1,5 +1,7 @@
 """Native .NET 4.8 intermediate never confuses a Winetricks marker with CLR."""
 import os
+import signal
+import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
@@ -41,7 +43,8 @@ class Native40To48IntermediateTests(unittest.TestCase):
         return wine, prefix, winetricks, loader, managed
 
     def _run_fixture(self, paths, winetricks="SUCCESS",
-                     changed=True, release="NETFX48_RANGE"):
+                     changed=True, release="NETFX48_RANGE",
+                     progress="DOTNET48_VERB_SEEN"):
         hash_before = b"orig40"
         hash_after = b"orig48" if changed else hash_before
         before = {"CLR64": ("PE_AMD64", hash_before)}
@@ -51,14 +54,14 @@ class Native40To48IntermediateTests(unittest.TestCase):
             self.assertEqual(env["WINEARCH"], "win64")
             self.assertEqual(env["WINEDEBUG"], "-all")
             self.assertNotIn("WINEDLLOVERRIDES", env)
-            return winetricks
+            return winetricks, progress
         with (mock.patch.object(p, "validate_prefix"),
               mock.patch.object(p, "validate_native40", return_value=True),
               mock.patch.object(p, "snapshot", side_effect=[before, after]),
               mock.patch.object(p, "load_clr", return_value="LOADED"),
               mock.patch.object(p, "probe", return_value={"managed": "PASS"}),
               mock.patch.object(p, "_set_winver", return_value="APPLIED") as profile,
-              mock.patch.object(p, "_run", side_effect=runner),
+              mock.patch.object(p, "_run_winetricks", side_effect=runner),
               mock.patch.object(p, "wineboot_restart", return_value="COMPLETED"),
               mock.patch.object(p, "_release", return_value=release)):
             outcome = p.inspect(*paths, {"persistent_native_managed": True})
@@ -66,6 +69,7 @@ class Native40To48IntermediateTests(unittest.TestCase):
         self.assertEqual([x.args[3] for x in profile.call_args_list],
                          ["win7", "win10"])
         self.assertFalse(outcome["framework481_confirmed"])
+        self.assertEqual(outcome["verb_progress"], progress)
         self.assertEqual(outcome["solidworks_compatibility"], "NOT_DEMONSTRATED")
         return outcome
 
@@ -99,6 +103,50 @@ class Native40To48IntermediateTests(unittest.TestCase):
                 result = p.inspect(*paths, {"persistent_native_managed": False})
             self.assertEqual(result, p.blank())
             runner.assert_not_called()
+
+
+    def test_private_progress_never_contains_installer_output(self):
+        self.assertEqual(p.classify_progress(b""), "NO_OUTPUT")
+        self.assertEqual(p.classify_progress(b"Executing load_dotnet48\n"),
+                         "DOTNET48_VERB_SEEN")
+        self.assertEqual(p.classify_progress(
+            b"Execute C:\\user\\private\\NDP48-x86-x64-AllOS-ENU.exe"),
+            "DOTNET48_PACKAGE_MENTIONED")
+        self.assertEqual(p.classify_progress(b"Starting Winetricks"),
+                         "WINETRICKS_ACTIVE")
+        self.assertEqual(p.classify_progress(b"x" * (p.MAX_PRIVATE_OUTPUT + 1)),
+                         "OUTPUT_TOO_LARGE")
+        self.assertNotIn("private", p.classify_progress(
+            b"Execute C:\\user\\private\\NDP48-x86-x64-AllOS-ENU.exe"))
+
+    @unittest.skipIf(os.name == "nt", "POSIX process group cleanup only")
+    def test_winetricks_timeout_terminates_entire_process_group(self):
+        with TemporaryDirectory() as td:
+            command = ["/bin/sh", "-c", "sleep 30"]
+            status, milestone = p._run_winetricks(
+                command, os.environ.copy(), Path(td), timeout=1)
+            self.assertEqual(status, "TIMED_OUT")
+            self.assertEqual(milestone, "NO_OUTPUT")
+
+    def test_group_cleanup_terminates_even_if_parent_exits_early(self):
+        proc = mock.Mock()
+        proc.pid = 56789
+        proc.wait.return_value = 0
+        with mock.patch.object(p.os, "killpg") as kill:
+            p._terminate_group(proc)
+        self.assertEqual(
+            [call.args for call in kill.call_args_list],
+            [(56789, signal.SIGTERM), (56789, signal.SIGKILL)])
+
+    def test_progress_is_not_an_upgrade_success_signal(self):
+        with TemporaryDirectory() as td:
+            paths = self._fixture(Path(td))
+            status = self._run_fixture(paths, winetricks="TIMED_OUT",
+                                       changed=False, release="BELOW_48",
+                                       progress="DOTNET48_PACKAGE_MENTIONED")
+            self.assertFalse(status["native48_candidate"])
+            self.assertTrue(p.validate(status))
+            self.assertFalse(p.validate(dict(status, verb_progress="PRIVATE_LOG")))
 
     def test_invalid_privilege_and_explicit_profile_constraints(self):
         env = {"WINEARCH": "win64"}
