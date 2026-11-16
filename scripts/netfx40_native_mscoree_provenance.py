@@ -24,7 +24,7 @@ SOURCES = {"NOT_RUN", "NATIVE_ONLY", "BUILTIN_ONLY", "MIXED", "NOT_OBSERVED", "T
 PROCESSES = {"NOT_RUN", "EXIT_ZERO", "EXIT_NONZERO", "SPAWN_ERROR", "TIMEOUT"}
 STATES = {"NOT_ELIGIBLE", "MEASURED"}
 LOADED = re.compile(
-    r'\bLoaded\s+L?"([^"\r\n]{1,1024})"\s+at\s+0x?[0-9a-fA-F]+:\s+(native|builtin)\b',
+    r'\bLoaded\s+L?"([^"\r\n]{1,1024})"\s+at\s+(?:0x)?[0-9a-fA-F]+:\s+(native|builtin)\b',
     re.IGNORECASE,
 )
 FIELDS = {"mscoree.dll": "mscoree", "clr.dll": "clr"}
