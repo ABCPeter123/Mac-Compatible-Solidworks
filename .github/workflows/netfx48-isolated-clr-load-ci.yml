@@ -1,0 +1,182 @@
+name: Isolated genuine Microsoft .NET 4.8 x64 CLR loader on Apple Silicon
+
+# Original vendor files are downloaded independently on each runner and never
+# passed through artifacts. Windows Authenticode establishes Microsoft identity;
+# same-run SHA256 equality binds the Mac payload to the signed Windows original.
+# This does not install .NET, spoof Release, or run a managed application.
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/netfx48-isolated-clr-load-ci.yml'
+      - 'probes/netfx48_isolated_loader.c'
+      - 'scripts/netfx48_isolated_loader_trial.py'
+      - 'tests/test_netfx48_isolated_loader_trial.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-privacy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate native-loader fixed output and strict synthetic media boundaries
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -p 'test_netfx48_isolated_loader_trial.py' -v
+          python -m unittest discover -s tests -p 'test_netfx4x_mzz_pe_evidence.py' -v
+          python -m unittest discover -s tests -p 'test_netfx4x_mzz_import_evidence.py' -v
+
+  signed-windows-control:
+    needs: synthetic-privacy
+    runs-on: windows-2025
+    timeout-minutes: 18
+    outputs:
+      sha256: ${{ steps.auth.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile self-authored x64 LoadLibraryExW fixture and verify Win32 controls
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force build | Out-Null
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (!(Test-Path -LiteralPath $vswhere)) { throw 'Windows MSVC locator unavailable' }
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw 'Windows x64 compiler unavailable' }
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $cmdText = "@echo off`r`ncall `"$vcvars`"`r`ncl /nologo /W4 /O2 /GS- /Zl /Fe:build\netfx48_isolated_loader.exe probes\netfx48_isolated_loader.c /link /NODEFAULTLIB kernel32.lib /ENTRY:isolated_entry /SUBSYSTEM:CONSOLE`r`nexit /b %errorlevel%`r`n"
+          Set-Content -LiteralPath build/compile-isolated-loader.cmd -Value $cmdText -Encoding ascii
+          & cmd.exe /d /c build\compile-isolated-loader.cmd
+          if ($LASTEXITCODE -ne 0) { throw 'Self-authored Windows loader fixture did not compile' }
+          try {
+            $env:SWCOMPAT_LOAD_DLL_PATH = 'C:\swcompat-definitely-missing\nonexistent.dll'
+            $missing = & build\netfx48_isolated_loader.exe
+            if ($LASTEXITCODE -ne 0 -or $missing -notcontains 'SWCOMPAT_NETFX48_ISOLATED_LOADER=NOT_FOUND') {
+              throw 'Independent Windows missing-file control failed'
+            }
+            $env:SWCOMPAT_LOAD_DLL_PATH = Join-Path $env:WINDIR 'System32\kernel32.dll'
+            $system = & build\netfx48_isolated_loader.exe
+            if ($LASTEXITCODE -ne 0 -or $system -notcontains 'SWCOMPAT_NETFX48_ISOLATED_LOADER=LOADED') {
+              throw 'Independent Windows native LoadLibraryExW control failed'
+            }
+          }
+          finally {
+            Remove-Item env:SWCOMPAT_LOAD_DLL_PATH -ErrorAction SilentlyContinue
+          }
+      - name: Verify original Microsoft 4.8 Authenticode and emit only same-run digest
+        id: auth
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://download.microsoft.com/download/f/3/a/f3a6af84-da23-40a5-8d1c-49cc10c8e76f/NDP48-x86-x64-AllOS-ENU.exe'
+          $original = Join-Path (Resolve-Path build) 'original-microsoft-private.exe'
+          try {
+            curl.exe --fail --location --retry 3 --max-time 600 --output $original $url
+            if ($LASTEXITCODE -ne 0) { throw 'Original .NET 4.8 media fetch failed' }
+            $size = (Get-Item -LiteralPath $original).Length
+            if ($size -lt 15728640 -or $size -gt 262144000) { throw 'Incorrect Microsoft media size' }
+            $sig = Get-AuthenticodeSignature -LiteralPath $original
+            if ($sig.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+                $null -eq $sig.SignerCertificate -or
+                $sig.SignerCertificate.Subject -notmatch '(^|, )O=Microsoft Corporation(,|$)') {
+              throw 'Original Microsoft offline installer publisher invalid'
+            }
+            $digest = (Get-FileHash -LiteralPath $original -Algorithm SHA256).Hash.ToLowerInvariant()
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "sha256=$digest"
+            'Original Microsoft 4.8 Authenticode valid; no vendor payload exported'
+          }
+          finally {
+            Remove-Item -LiteralPath $original -Force -ErrorAction SilentlyContinue
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: self-authored-netfx48-isolated-win32-loader
+          path: build/netfx48_isolated_loader.exe
+          if-no-files-found: error
+          retention-days: 3
+
+  original-clr-apple-silicon:
+    needs: signed-windows-control
+    runs-on: macos-15
+    timeout-minutes: 18
+    env:
+      SWCOMPAT_ORIGINAL48_SIGNED_SHA: ${{ needs.signed-windows-control.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: self-authored-netfx48-isolated-win32-loader
+          path: build
+      - name: Verify checksum-pinned Apple Silicon Wine 11.21 original engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wine-staging-11.21-osx64.tar.xz"
+          curl --fail --location --retry 3 --output "$ARCHIVE" \
+            'https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-staging-11.21-osx64.tar.xz'
+          echo "d7bcd5abf4df27aae397a7898aef074fea4a2e0b51e0a55aa9659517bbf9d452  $ARCHIVE" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/original-netfx48-wine-staging"
+          tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/original-netfx48-wine-staging"
+          WINE_BIN="$(find "$RUNNER_TEMP/original-netfx48-wine-staging" -path '*/bin/wine' -print -quit)"
+          test -n "$WINE_BIN" && test -x "$WINE_BIN"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+      - name: Prepare private 7zip reader and marked disposable Wine prefix
+        shell: bash
+        run: |
+          set -euo pipefail
+          SEVENZIP="$(command -v 7zz || command -v 7z || true)"
+          if [ -z "$SEVENZIP" ]; then
+            brew install sevenzip
+            SEVENZIP="$(command -v 7zz || command -v 7z || true)"
+          fi
+          test -n "$SEVENZIP" && test -x "$SEVENZIP"
+          echo "SWCOMPAT_SEVENZIP=$SEVENZIP" >> "$GITHUB_ENV"
+          PREFIX="$RUNNER_TEMP/swcompat-original48-isolated-prefix"
+          python3 -m swcompat --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" \
+            --logs-dir "$RUNNER_TEMP/swcompat-original48-private-logs" init
+          touch "$PREFIX/.swcompat-netfx481-disposable"
+      - name: Independently download SHA-matched original media and attempt isolated x64 CLR LoadLibraryExW
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SWCOMPAT_ORIGINAL48_SIGNED_SHA"
+          mkdir -p build
+          ORIGINAL="$RUNNER_TEMP/NDP48-x86-x64-AllOS-ENU.exe"
+          trap 'rm -f "$ORIGINAL"' EXIT
+          curl --fail --location --retry 3 --max-time 600 --output "$ORIGINAL" \
+            'https://download.microsoft.com/download/f/3/a/f3a6af84-da23-40a5-8d1c-49cc10c8e76f/NDP48-x86-x64-AllOS-ENU.exe'
+          python3 -m scripts.netfx48_isolated_loader_trial \
+            --installer "$ORIGINAL" \
+            --signed-sha256 "$SWCOMPAT_ORIGINAL48_SIGNED_SHA" \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/swcompat-original48-isolated-prefix" \
+            --sevenzip "$SWCOMPAT_SEVENZIP" \
+            --fixture build/netfx48_isolated_loader.exe \
+            --output build/isolated-original48-loader-categories.json \
+            --agree-disposable-prefix
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          from scripts.netfx48_isolated_loader_trial import valid
+          report = json.loads(Path("build/isolated-original48-loader-categories.json").read_text())
+          assert valid(report)
+          assert report["installer_sha256_verified"]
+          assert not report["runtime_installed"]
+          assert not report["managed_executed"]
+          assert not report["original_payload_artifact"]
+          print("Isolated original .NET 4.8 x64 loader:", report["loader"])
+          print("Genuine full .NET 4.8 runtime: NOT_VERIFIED")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: authentic-original-netfx48-isolated-loader-fixed-status-only
+          path: build/isolated-original48-loader-categories.json
+          if-no-files-found: warn
+          retention-days: 5
