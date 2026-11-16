@@ -49,7 +49,7 @@ def validate(report: object) -> bool:
 
 def matching_names(raw: bytes) -> dict[str, str]:
     """Keep original member names only inside the disposable process."""
-    if len(raw) > MAX_LIST or b"\\x00" in raw:
+    if len(raw) > MAX_LIST or b"\x00" in raw:
         return {}
     try:
         lines = raw.decode("utf-8-sig").splitlines()
@@ -70,8 +70,8 @@ def matching_names(raw: bytes) -> dict[str, str]:
             continue
         # No path components, traversal syntax, arbitrary extensions, or
         # unbounded names may be supplied to the private archive reader.
-        name = m.group(1).replace("\\\\", "/").rsplit("/", 1)[-1]
-        if not name or len(name) > 96 or "/" in name or "\\\\" in name:
+        name = m.group(1).replace("\\", "/").rsplit("/", 1)[-1]
+        if not name or len(name) > 96 or "/" in name or "\\" in name:
             continue
         for key, pattern in TARGETS.items():
             if key not in result and pattern.fullmatch(name):
