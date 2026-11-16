@@ -64,6 +64,10 @@ class DirectNative48Tests(unittest.TestCase):
             mock.patch.object(p, "classify_log", return_value={
                 "status": "CLASSIFIED", "phase": "UNKNOWN", "codes": []}),
             mock.patch.object(p, "discard_log"),
+            mock.patch.object(p, "classify_primary_prerequisite", return_value={
+                "status": "CLASSIFIED", "os_versions": ["BELOW_WINDOWS_10"],
+                "blockers": ["MISSING_UPDATE_BLOCK"],
+                "5100_in_log": True}) as primary_scan,
             mock.patch.object(p, "snapshot_secondary_logs", return_value={}),
             mock.patch.object(p, "scan_secondary_logs", return_value=self.secondary()) as secondary_scan,
             mock.patch.object(p, "wineboot_restart", return_value="COMPLETED"),
@@ -73,6 +77,9 @@ class DirectNative48Tests(unittest.TestCase):
         self.assertTrue(p.validate(result))
         self.assertEqual(started.call_args.kwargs["setup_family"], "NETFX48")
         self.assertEqual(secondary_scan.call_args.kwargs["family"], "NETFX48")
+        self.assertEqual(primary_scan.call_count, 1)
+        self.assertEqual(result["primary_prerequisite"]["blockers"], ["MISSING_UPDATE_BLOCK"])
+        self.assertTrue(result["primary_prerequisite"]["5100_in_log"])
         self.assertTrue(evidence.validate_secondary_report(result["secondary_evidence"]))
         self.assertTrue(started.call_args.kwargs["fusion_builtin"])
         self.assertNotIn(str(root), str(result))
@@ -125,6 +132,13 @@ class DirectNative48Tests(unittest.TestCase):
                 result["secondary_evidence"], private_log="C:\\Users\\sensitive")
             self.assertFalse(p.validate(corrupt))
             corrupt["secondary_evidence"] = None
+            self.assertFalse(p.validate(corrupt))
+            corrupt = dict(result)
+            corrupt["primary_prerequisite"] = dict(
+                result["primary_prerequisite"], private_path="SECRET")
+            self.assertFalse(p.validate(corrupt))
+            corrupt["primary_prerequisite"] = dict(
+                result["primary_prerequisite"], blockers=["COPY_OF_RAW_LINE"])
             self.assertFalse(p.validate(corrupt))
 
     def test_requires_exact_sha_and_original_media_name(self):
