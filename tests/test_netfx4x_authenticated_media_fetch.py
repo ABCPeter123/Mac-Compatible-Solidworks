@@ -78,6 +78,27 @@ class OriginalMediaPrivacyTests(unittest.TestCase):
                     m.stage(build, ["481"])
             self.assertFalse(any(build.glob(".original-netfx-*")))
 
+    def test_manual_workflow_never_uploads_original_microsoft_installers(self):
+        workflow = (Path(__file__).resolve().parents[1]
+                    / ".github/workflows/netfx40-legacy-ci.yml").read_text(encoding="utf-8")
+        self.assertNotIn("authenticated-original-microsoft-netfx40-private", workflow)
+        self.assertEqual(workflow.count(
+            "name: self-authored-netfx40-probes-and-signed-digests"), 3)
+        # Inspect the publisher's exact file list, not download-artifact usage.
+        publisher = workflow.split(
+            "name: self-authored-netfx40-probes-and-signed-digests", 1)[1]
+        publisher = publisher.split("compression-level:", 1)[0]
+        for name, _, _ in m.MEDIA.values():
+            self.assertNotIn("build/" + name, publisher)
+        self.assertNotIn("build/", publisher.split("path: |", 1)[0])
+        self.assertIn("build/netfx40.sha256", publisher)
+        self.assertIn("build/netfx481.sha256", publisher)
+        self.assertIn("build/netfx48.sha256", publisher)
+        self.assertEqual(workflow.count(
+            "python3 -m scripts.netfx4x_authenticated_media_fetch"), 2)
+        self.assertIn('if [ "$SWCOMPAT_PROVENANCE_ONLY" != "true" ]', workflow)
+        self.assertIn('if [ "$SWCOMPAT_DIRECT_48" = "true" ]', workflow)
+
     def test_reject_duplicates_unknown_versions_and_missing_digests(self):
         with tempfile.TemporaryDirectory() as d:
             build = Path(d)
