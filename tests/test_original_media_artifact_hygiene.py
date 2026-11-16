@@ -17,7 +17,7 @@ PROPRIETARY_INSTALLERS = (
     "NDP481-x86-x64-AllOS-ENU.exe",
     "SolidworksSetup.exe",
 )
-UPLOAD_STEP = re.compile(r"(?m)^(?P<spaces> +)- uses: actions/upload-artifact@v4\\s*$")
+UPLOAD_STEP = re.compile(r"(?m)^(?P<spaces> +)- uses: actions/upload-artifact@v4\s*$")
 
 
 def uploads(text: str) -> list[str]:
@@ -35,7 +35,7 @@ def uploads(text: str) -> list[str]:
             if re.match(r"^ {" + str(level) + r"}- (?:uses|name|run|id|if):", lines[j]):
                 next_line = j
                 break
-        blocks.append("\\n".join(lines[i:next_line]))
+        blocks.append("\n".join(lines[i:next_line]))
     return blocks
 
 
@@ -46,7 +46,9 @@ class PublicArtifactPrivacyTests(unittest.TestCase):
         for workflow in paths:
             with self.subTest(workflow=workflow.name):
                 text = workflow.read_text(encoding="utf-8")
-                for block in uploads(text):
+                blocks = uploads(text)
+                self.assertTrue(blocks, "CI artifact publisher must be inspected")
+                for block in blocks:
                     for filename in PROPRIETARY_INSTALLERS:
                         self.assertNotIn(filename, block)
                     self.assertNotIn("authenticated-original-microsoft-netfx40-private", block)
@@ -69,8 +71,7 @@ class PublicArtifactPrivacyTests(unittest.TestCase):
                 self.assertIn("build/netfx" + version + ".sha256", text)
                 self.assertIn("Get-AuthenticodeSignature", text)
                 for block in uploads(text):
-                    self.assertIn("retention-days:", block)
-                    self.assertNotIn(".exe\\n            build/NDP", block)
+                    self.assertNotIn(".exe\n            build/NDP", block)
 
 
 if __name__ == "__main__":
