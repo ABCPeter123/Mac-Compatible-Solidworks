@@ -90,6 +90,30 @@ jobs:
             Remove-Item env:SWCOMPAT_ORIGINAL_SHIM_PATH -ErrorAction SilentlyContinue
             Remove-Item env:SWCOMPAT_CLR_PATH -ErrorAction SilentlyContinue
           }
+          # Positive and negative source-authored Windows CLR host controls.
+          # A genuine installed Microsoft CLR must be selected by the same
+          # strict provenance gate used in Wine. No vendor binaries leave CI.
+          $env:SWCOMPAT_MANAGED_DLL = (Resolve-Path 'build/netfx48_managed_host_check.dll').Path
+          try {
+            $env:SWCOMPAT_CLR_PATH = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\clr.dll'
+            if (!(Test-Path -LiteralPath $env:SWCOMPAT_CLR_PATH -PathType Leaf)) {
+              throw 'Official Windows installed native CLR control unavailable'
+            }
+            $positive = & build\netfx48_host_activation.exe
+            if ($LASTEXITCODE -ne 0 -or $positive -notcontains 'SWCOMPAT_NETFX48_HOST_STATUS=MANAGED_ORIGINAL_PASS') {
+              throw 'Official Windows CLR hosting and source-authored managed activation failed'
+            }
+            $env:SWCOMPAT_CLR_PATH = Join-Path $env:WINDIR 'System32\kernel32.dll'
+            $wrongRuntime = & build\netfx48_host_activation.exe
+            if ($LASTEXITCODE -ne 0 -or $wrongRuntime -notcontains 'SWCOMPAT_NETFX48_HOST_STATUS=OTHER_RUNTIME_SELECTED') {
+              throw 'Known unrelated Windows DLL incorrectly passed original CLR provenance gate'
+            }
+            'AUTHENTIC_NETFX48_WINDOWS_HOST_CONTROL NATIVE_MANAGED_PASS UNRELATED_RUNTIME_REJECTED'
+          }
+          finally {
+            Remove-Item env:SWCOMPAT_CLR_PATH -ErrorAction SilentlyContinue
+            Remove-Item env:SWCOMPAT_MANAGED_DLL -ErrorAction SilentlyContinue
+          }
           try {
             $env:SWCOMPAT_LOAD_DLL_PATH = 'C:\swcompat-definitely-missing\nonexistent.dll'
             $missing = & build\netfx48_isolated_loader.exe
