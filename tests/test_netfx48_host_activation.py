@@ -77,11 +77,11 @@ class HostBoundaryTests(unittest.TestCase):
                 self.assertEqual(argv[1], str(fixture))
                 self.assertEqual(kwargs["env"]["WINEDLLOVERRIDES"], "clr=n")
                 self.assertIn("clr.dll", kwargs["env"]["SWCOMPAT_CLR_PATH"])
-                kwargs["stdout"].write(host_output("RUNTIME_NOT_REGISTERED"))
+                kwargs["stdout"].write(host_output("RUNTIME_DISCOVERY_FAILED"))
                 return mock.Mock(returncode=0)
             with mock.patch.object(t.subprocess, "run", side_effect=success):
                 self.assertEqual(t.host_check(root/"wine", prefix, fixture, managed, dll),
-                                 ("RUNTIME_NOT_REGISTERED", "EXIT_ZERO"))
+                                 ("RUNTIME_DISCOVERY_FAILED", "EXIT_ZERO"))
             with mock.patch.object(t.subprocess, "run",
                                    side_effect=__import__("subprocess").TimeoutExpired("wine", 1)):
                 self.assertEqual(t.host_check(root/"wine", prefix, fixture, managed, dll),
