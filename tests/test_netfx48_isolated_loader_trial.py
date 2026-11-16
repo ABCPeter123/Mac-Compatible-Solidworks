@@ -45,6 +45,7 @@ class IsolatedLoaderTests(unittest.TestCase):
                  installer_sha256_verified=True,
                  extraction="PE_AMD64",
                  selftest="LOADED", selftest_process="EXIT_ZERO",
+                 wine_system_process="EXIT_ZERO",
                  original_process="EXIT_ZERO",
                  loader="MISSING_DEPENDENCY")
         self.assertTrue(t.valid(d))
@@ -102,7 +103,7 @@ class IsolatedLoaderTests(unittest.TestCase):
                 return cb
             for code, status, process in (
                     (0, "LOADED", "EXIT_ZERO"),
-                    (1, "PROBE_ERROR", "EXIT_NONZERO"),
+                    (1, "PROBE_ERROR", "EXIT_1"),
                     (-11, "PROBE_ERROR", "SIGNALLED")):
                 with self.subTest(code=code), mock.patch.object(
                         t.subprocess, "run", side_effect=fake_code(code)):
@@ -115,6 +116,21 @@ class IsolatedLoaderTests(unittest.TestCase):
                     t._invoke(base / "wine", base / "prefix", fixture,
                               "--selftest-windows", original=False),
                     ("PROBE_ERROR", "EXIT_ZERO"))
+
+    def test_wine_cmd_control_and_finite_exit_buckets(self):
+        self.assertEqual(t.exit_class(0), "EXIT_ZERO")
+        self.assertEqual(t.exit_class(126), "EXIT_126")
+        self.assertEqual(t.exit_class(127), "EXIT_127")
+        self.assertEqual(t.exit_class(193), "EXIT_193")
+        self.assertEqual(t.exit_class(999999), "EXIT_NONZERO_OTHER")
+        self.assertEqual(t.exit_class(-11), "SIGNALLED")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with mock.patch.object(t.subprocess, "run", return_value=mock.Mock(returncode=0)) as f:
+                self.assertEqual(t._wine_system_control(root / "wine", root), "EXIT_ZERO")
+                self.assertEqual(f.call_args.args[0][1:], ["cmd.exe", "/c", "ver"])
+            with mock.patch.object(t.subprocess, "run", return_value=mock.Mock(returncode=127)):
+                self.assertEqual(t._wine_system_control(root / "wine", root), "EXIT_127")
 
     def test_no_raw_filenames_returned_on_missing_mzz(self):
         with tempfile.TemporaryDirectory() as td:
