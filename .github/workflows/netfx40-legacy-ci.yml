@@ -15,6 +15,11 @@ on:
         type: boolean
         required: false
         default: false
+      try_48_direct:
+        description: 'Opt-in original signed Microsoft 4.8 offline upgrade after real 4.0, before 4.8.1'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -221,6 +226,45 @@ jobs:
           (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant() |
             Set-Content -LiteralPath build/netfx481.sha256 -NoNewline -Encoding ascii
           Write-Output "Verified signed official .NET 4.8.1 in-place upgrade package"
+      - name: Download and authenticate original signed Microsoft .NET Framework 4.8 intermediate
+        if: inputs.try_48_direct
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $url = "https://download.microsoft.com/download/f/3/a/f3a6af84-da23-40a5-8d1c-49cc10c8e76f/NDP48-x86-x64-AllOS-ENU.exe"
+          $exe = Join-Path (Resolve-Path build) "NDP48-x86-x64-AllOS-ENU.exe"
+          curl.exe --fail --location --retry 3 --max-time 600 --output $exe $url
+          if ($LASTEXITCODE -ne 0) { throw "Official Microsoft .NET 4.8 offline media unavailable" }
+          $length = (Get-Item -LiteralPath $exe).Length
+          if ($length -lt 15728640 -or $length -gt 262144000) { throw "Unexpected original 4.8 media size" }
+          $sig = Get-AuthenticodeSignature -LiteralPath $exe
+          if ($sig.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+              $null -eq $sig.SignerCertificate -or
+              $sig.SignerCertificate.Subject -notmatch '(^|, )O=Microsoft Corporation(,|$)') {
+            throw "Original Microsoft 4.8 publisher authentication failed"
+          }
+          (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant() |
+            Set-Content -LiteralPath build/netfx48.sha256 -NoNewline -Encoding ascii
+          Write-Output "Original signed Microsoft .NET 4.8 authenticated, checksum staged privately"
+      - name: Compile distinct 4.8 original Windows process monitor
+        if: inputs.try_48_direct
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw "MSVC required for original 4.8 Win32 launcher" }
+          $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+          $lines = @('@echo off', ('call "' + $vcvars + '"'),
+            'cl /nologo /W4 /O2 /DUNICODE /D_UNICODE /DSWCOMPAT_NETFX48 /Fe:build\netfx48_win32_launch.exe probes\netfx481_win32_launch.c',
+            'exit /b %errorlevel%')
+          [System.IO.File]::WriteAllLines((Join-Path (Get-Location) 'build\compile-original-48.cmd'), $lines, [System.Text.Encoding]::ASCII)
+          & cmd.exe /d /c build\compile-original-48.cmd
+          if ($LASTEXITCODE -ne 0) { throw "Original .NET 4.8 launcher build failed" }
+          $selftest = & build\netfx48_win32_launch.exe --selftest-3010
+          if ($LASTEXITCODE -ne 0 -or $selftest -notcontains 'SWCOMPAT_WIN32_SETUP_EXIT_HEX=00000BC2') {
+            throw "Original .NET 4.8 launcher 3010 selftest failed"
+          }
       - name: Check authenticated Microsoft /x extraction on native Windows without installing
         shell: pwsh
         run: |
@@ -235,6 +279,9 @@ jobs:
             build/netfx40.sha256
             build/NDP481-x86-x64-AllOS-ENU.exe
             build/netfx481.sha256
+            build/NDP48-x86-x64-AllOS-ENU.exe
+            build/netfx48.sha256
+            build/netfx48_win32_launch.exe
             build/netfx481_runtime_probe.exe
             build/netfx481_clr_load.exe
             build/netfx40_win32_launch.exe
@@ -450,6 +497,7 @@ jobs:
     timeout-minutes: 35
     env:
       SWCOMPAT_TRY_48_INTERMEDIATE: ${{ inputs.try_48_intermediate }}
+      SWCOMPAT_TRY_48_DIRECT: ${{ inputs.try_48_direct }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -556,6 +604,46 @@ jobs:
                   f.write("SWCOMPAT_NATIVE40_READY=yes\n")
           print("Original native .NET 4.0 prerequisites passed:", r["persistent_native_managed"])
           PY
+      - name: Reject conflicting 4.8 intermediate experiment selections
+        if: inputs.try_48_intermediate && inputs.try_48_direct
+        shell: bash
+        run: |
+          echo "Select either Winetricks 4.8 OR original signed 4.8, not both."
+          exit 1
+      - name: Install original signed 4.8 directly on the verified native 4.0 prefix
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_48_direct && !inputs.try_48_intermediate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx40_to_48_direct \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --installer build/NDP48-x86-x64-AllOS-ENU.exe \
+            --sha256-file build/netfx48.sha256 \
+            --launcher build/netfx48_win32_launch.exe \
+            --loader build/netfx481_clr_load.exe \
+            --managed build/netfx481_runtime_probe.exe \
+            --native40-report build/netfx40-msxml3-restart.json \
+            --output build/netfx40-to-48-direct.json \
+            --agree-disposable-prefix
+      - name: Gate original 4.8.1 on independently verified original native 4.8
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_48_direct && !inputs.try_48_intermediate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx40_to_48_direct import validate
+          file = Path("build/netfx40-to-48-direct.json")
+          assert file.is_file(), "Original signed 4.8 run did not produce evidence"
+          r = json.loads(file.read_text(encoding="ascii"))
+          assert validate(r)
+          if r["native48_candidate"]:
+              with open(os.environ["GITHUB_ENV"], "a") as out:
+                  out.write("SWCOMPAT_NATIVE48_READY=yes\n")
+          print("Original signed Microsoft native 4.8 verified:", r["native48_candidate"])
+          PY
       - name: Test pinned Winetricks dotnet48 on existing verified Microsoft 4.0 prefix
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_48_intermediate
         shell: bash
@@ -589,7 +677,7 @@ jobs:
           print("Real native Microsoft 4.8 intermediate candidate verified:", r["native48_candidate"])
           PY
       - name: Read disk-space prerequisites on actual persistent native CLR 4.0 prefix
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && (!inputs.try_48_intermediate || env.SWCOMPAT_NATIVE48_READY == 'yes')
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && ((!inputs.try_48_intermediate && !inputs.try_48_direct) || env.SWCOMPAT_NATIVE48_READY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
@@ -600,7 +688,7 @@ jobs:
             --output build/netfx481-disk-before-upgrade.json \
             --agree-disposable-prefix
       - name: Select Windows 10 reported version for original Microsoft 4.8.1 upgrade
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && (!inputs.try_48_intermediate || env.SWCOMPAT_NATIVE48_READY == 'yes')
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && ((!inputs.try_48_intermediate && !inputs.try_48_direct) || env.SWCOMPAT_NATIVE48_READY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
@@ -608,7 +696,7 @@ jobs:
             --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
             --logs-dir "$RUNNER_TEMP/netfx40-msxml3-logs" set-winver win10
       - name: Upgrade functioning Microsoft .NET 4.x CLR with original Microsoft 4.8.1
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && (!inputs.try_48_intermediate || env.SWCOMPAT_NATIVE48_READY == 'yes')
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && ((!inputs.try_48_intermediate && !inputs.try_48_direct) || env.SWCOMPAT_NATIVE48_READY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
@@ -625,7 +713,7 @@ jobs:
             --experiment-private-setup-evidence \
             --agree-disposable-prefix
       - name: Restore Windows 11 profile and verify native-only managed CLR
-        if: always() && env.SWCOMPAT_NATIVE40_READY == 'yes' && (!inputs.try_48_intermediate || env.SWCOMPAT_NATIVE48_READY == 'yes')
+        if: always() && env.SWCOMPAT_NATIVE40_READY == 'yes' && ((!inputs.try_48_intermediate && !inputs.try_48_direct) || env.SWCOMPAT_NATIVE48_READY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
@@ -703,10 +791,25 @@ jobs:
                   from scripts.netfx40_to_48_intermediate import validate as valid_intermediate
                   step = json.loads(intermediate.read_text(encoding="ascii"))
                   assert valid_intermediate(step)
-                  for name in ("status", "verb", "win7", "win10", "restart",
+                  for name in ("status", "verb", "verb_progress", "win7", "win10", "restart",
                                "clr64_changed", "release", "loader",
                                "native_only_managed", "native48_candidate"):
                       out.write(f"intermediate_48_{name}: **{step[name]}**\n\n")
+              direct_path = Path("build/netfx40-to-48-direct.json")
+              if direct_path.is_file():
+                  from scripts.netfx40_to_48_direct import validate as valid_direct
+                  measured = json.loads(direct_path.read_text(encoding="ascii"))
+                  assert valid_direct(measured)
+                  for key in ("status", "win7", "win10", "restart", "clr64_changed",
+                              "release", "loader", "runtime_family",
+                              "native_only_managed", "native48_candidate",
+                              "framework481_confirmed"):
+                      out.write(f"original_direct_48_{key}: **{measured[key]}**\n\n")
+                  for key in ("status", "category", "child_lifecycle", "child_exit", "exit_hex"):
+                      out.write(f"original_direct_48_setup_{key}: **{measured['setup'][key]}**\n\n")
+                  for key in ("status", "phase"):
+                      out.write(f"original_direct_48_log_{key}: **{measured['setup_evidence'][key]}**\n\n")
+                  out.write(f"original_direct_48_log_codes: **{','.join(measured['setup_evidence']['codes'])}**\n\n")
               disk_path = Path("build/netfx481-disk-before-upgrade.json")
               if disk_path.is_file():
                   from scripts.netfx481_disk_space_gate import valid as valid_disk
@@ -771,6 +874,7 @@ jobs:
             build/netfx40-msxml3-runtime.json
             build/netfx40-msxml3-restart.json
             build/netfx40-to-48-intermediate.json
+            build/netfx40-to-48-direct.json
             build/netfx481-disk-before-upgrade.json
             build/netfx40-to-481-upgrade.json
             build/netfx40-to-481-win11.json
@@ -820,10 +924,22 @@ jobs:
                       intermediate = json.loads(intermediate_path.read_text(encoding="ascii"))
                       assert valid_intermediate(intermediate)
                       intermediate_ready = intermediate["native48_candidate"]
+                  direct_path = Path("build/netfx40-to-48-direct.json")
+                  direct_required = os.environ.get("SWCOMPAT_TRY_48_DIRECT") == "true"
+                  assert not (direct_required and intermediate_required), (
+                      "Cannot mix original and Winetricks native 4.8 prerequisites")
+                  assert direct_path.is_file() == direct_required, (
+                      "Requested signed original 4.8 experiment was not measured")
+                  if direct_path.is_file():
+                      from scripts.netfx40_to_48_direct import validate as valid_direct
+                      direct = json.loads(direct_path.read_text(encoding="ascii"))
+                      assert valid_direct(direct)
+                      intermediate_ready = direct["native48_candidate"]
                   upgrade_path = Path("build/netfx40-to-481-upgrade.json")
                   assert upgrade_path.is_file() == (
-                      not intermediate_required or intermediate_ready), (
-                      "4.8.1 must only run after requested 4.8 prerequisite passes")
+                      (not intermediate_required and not direct_required)
+                      or intermediate_ready), (
+                      "4.8.1 must only run after requested verified 4.8 prerequisite passes")
                   if upgrade_path.is_file():
                       upgraded = json.loads(upgrade_path.read_text(encoding="utf-8"))
                       assert upgrade_valid(upgraded)
