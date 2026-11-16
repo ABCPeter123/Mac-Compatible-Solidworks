@@ -86,7 +86,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m swcompat --prefix "$RUNNER_TEMP/winver-5100-prefix" --logs-dir "$RUNNER_TEMP/winver-5100-logs" set-winver win7
+          # The local CLI intentionally offers only Win10/Win11. This disposable
+          # Win7 prerequisite experiment uses Wine's native version setter.
+          WINEPREFIX="$RUNNER_TEMP/winver-5100-prefix" WINEARCH=win64 WINEDEBUG=-all \
+            "$SWCOMPAT_WINE" winecfg.exe -v win7 >/dev/null 2>&1
           python3 -m scripts.netfx481_version_gate --wine "$SWCOMPAT_WINE" \
             --prefix "$RUNNER_TEMP/winver-5100-prefix" \
             --bare build/winver_481_bare.exe --manifested build/winver_481_supported.exe \
