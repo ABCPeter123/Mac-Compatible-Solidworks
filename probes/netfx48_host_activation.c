@@ -67,7 +67,17 @@ void WINAPI host_entry(void) {
         if (attrs & FILE_ATTRIBUTE_REPARSE_POINT)
             RESULT("ORIGINAL_SHIM_INVALID_INPUT");
         shim = LoadLibraryExW(shim_path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
-        if (shim == NULL) RESULT("ORIGINAL_SHIM_LOAD_FAILED");
+        if (shim == NULL) {
+            DWORD code = GetLastError();
+            switch (code) {
+                case ERROR_MOD_NOT_FOUND: RESULT("ORIGINAL_SHIM_MISSING_DEPENDENCY");
+                case ERROR_PROC_NOT_FOUND: RESULT("ORIGINAL_SHIM_MISSING_EXPORT");
+                case ERROR_BAD_EXE_FORMAT: RESULT("ORIGINAL_SHIM_BAD_IMAGE");
+                case ERROR_DLL_INIT_FAILED: RESULT("ORIGINAL_SHIM_INIT_FAILED");
+                case ERROR_ACCESS_DENIED: RESULT("ORIGINAL_SHIM_ACCESS_DENIED");
+                default: RESULT("ORIGINAL_SHIM_LOAD_FAILED");
+            }
+        }
         create = (CreateCLRFn)GetProcAddress(shim, "CLRCreateInstance");
         if (create == NULL) RESULT("ORIGINAL_SHIM_NO_HOST_EXPORT");
     } else {
