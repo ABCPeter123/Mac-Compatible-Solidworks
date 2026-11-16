@@ -74,7 +74,7 @@ class HostBoundaryTests(unittest.TestCase):
             fixture = root / "netfx48_host_activation.exe"
             fixture.write_bytes(b"synthetic")
             def success(argv, **kwargs):
-                self.assertEqual(argv[1], str(fixture))
+                self.assertEqual(Path(argv[1]).resolve(), fixture.resolve())
                 self.assertEqual(kwargs["env"]["WINEDLLOVERRIDES"], "clr=n")
                 self.assertIn("clr.dll", kwargs["env"]["SWCOMPAT_CLR_PATH"])
                 kwargs["stdout"].write(host_output("RUNTIME_DISCOVERY_FAILED"))
