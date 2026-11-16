@@ -75,7 +75,7 @@ jobs:
             throw 'Independent host missing-original control failed'
           }
           Remove-Item env:SWCOMPAT_CLR_PATH -ErrorAction SilentlyContinue
-          $env:SWCOMPAT_CLR_PATH = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\clr.dll'
+          $env:SWCOMPAT_CLR_PATH = Join-Path $env:WINDIR 'System32\kernel32.dll' # self-authored negative control; no original CLR required
           $env:SWCOMPAT_ORIGINAL_SHIM_PATH = 'C:\swcompat-host-missing\mscoreei.dll'
           try {
             $missingShim = & build\netfx48_host_activation.exe
