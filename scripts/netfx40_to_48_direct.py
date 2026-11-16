@@ -18,6 +18,7 @@ from scripts.netfx481_clr_load import run as load_clr, STATUSES as LOAD_STATES
 from scripts.netfx481_payload_audit import snapshot, compare
 from scripts.netfx481_setup_evidence import (
     classify_log, discard_log, KNOWN_RESULTS, KNOWN_PHASES, KNOWN_CODES,
+    snapshot_secondary_logs, scan_secondary_logs, validate_secondary_report,
 )
 from scripts.netfx481_trial import validate_prefix, probe, wineboot_restart
 from scripts.netfx481_win32_exit import (
@@ -40,7 +41,7 @@ def blank() -> dict:
         "status": "NOT_ELIGIBLE", "native40_persistent": False,
         "win7": "NOT_RUN", "win10": "NOT_RUN",
         "setup": blank_launch(), "setup_evidence": dict(SETUP_EVIDENCE),
-        "restart": "NOT_RUN", "clr64_changed": False,
+        "secondary_evidence": None, "restart": "NOT_RUN", "clr64_changed": False,
         "release": "UNAVAILABLE", "loader": "NOT_VERIFIED",
         "runtime_family": "NOT_VERIFIED", "native_only_managed": "NOT_VERIFIED",
         "native48_candidate": False, "framework481_confirmed": False,
@@ -71,7 +72,11 @@ def validate(report: object) -> bool:
             or any(type(report[key]) is not bool for key in (
                 "native40_persistent", "clr64_changed", "native48_candidate"))
             or report["framework481_confirmed"] is not False
-            or report["solidworks_compatibility"] != "NOT_DEMONSTRATED"):
+            or report["solidworks_compatibility"] != "NOT_DEMONSTRATED"
+            or (report["status"] == "MEASURED"
+                and not validate_secondary_report(report["secondary_evidence"]))
+            or (report["status"] == "NOT_ELIGIBLE"
+                and report["secondary_evidence"] is not None)):
         return False
     if report["status"] == "NOT_ELIGIBLE":
         return report == blank()
@@ -150,10 +155,14 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
     win7 = _set_winver(wine, prefix, env, "win7")
     setup = blank_launch()
     evidence = dict(SETUP_EVIDENCE)
+    secondary = None
     restart = "NOT_RUN"
     try:
         if win7 == "APPLIED":
             log = private_setup_log(prefix)
+            # Snapshot before setup. Previous .NET 4.0 / msxml3 logs cannot
+            # be attributed to the signed .NET 4.8 installer.
+            secondary_before = snapshot_secondary_logs(prefix)
             try:
                 setup = launch(wine, prefix, installer, launcher,
                                timeout=465, fusion_builtin=True,
@@ -161,6 +170,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
             finally:
                 evidence = classify_log(log)
                 discard_log(log)
+                secondary = scan_secondary_logs(
+                    prefix, baseline=secondary_before, family="NETFX48")
             if (setup["status"] == "EXIT_CAPTURED"
                     and setup["category"] == "REBOOT_REQUIRED"):
                 if setup["child_lifecycle"] in {"PARTIAL", "STILL_ACTIVE", "UNKNOWN"}:
@@ -172,13 +183,18 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
         # installer-only Fusion preference is applied to the prefix.
         win10 = _set_winver(wine, prefix, env, "win10")
 
+    if secondary is None:
+        # Unavailable media/OS profile cannot result in a measured upgrade.
+        # This is not a native 4.8 success.
+        return blank()
     after = snapshot(prefix)
     delta = compare(before, after)
     current = probe(wine, prefix, managed, override="native_only")
     result = {
         "status": "MEASURED", "native40_persistent": True,
         "win7": win7, "win10": win10, "setup": setup,
-        "setup_evidence": evidence, "restart": restart,
+        "setup_evidence": evidence, "secondary_evidence": secondary,
+        "restart": restart,
         "clr64_changed": delta["changes"]["CLR64"] == "CHANGED",
         "release": _release(wine, prefix, env),
         "loader": load_clr(wine, prefix, loader),
@@ -226,6 +242,15 @@ def main(argv: list[str] | None = None) -> int:
             for name in ("status", "phase"):
                 print("Original .NET 4.8 private log", name, value[name])
             print("Original .NET 4.8 private log error classes", ",".join(value["codes"]))
+        elif field == "secondary_evidence":
+            if value is not None:
+                print("Original .NET 4.8 secondary status", value["status"])
+                print("Original .NET 4.8 secondary files_scanned", value["files_scanned"])
+                print("Original .NET 4.8 secondary fresh_files", value["stage_files"])
+                print("Original .NET 4.8 secondary named_files", value["prerequisite_files"])
+                for scope in ("prerequisite", "stage_prerequisite"):
+                    for name in ("status", "os_versions", "blockers", "5100_in_log"):
+                        print("Original .NET 4.8", scope, name, value[scope][name])
         else:
             print("Original .NET 4.8 intermediate", field, value)
     return 0

@@ -257,6 +257,44 @@ class NetFxSetupEvidenceTests(unittest.TestCase):
             for secret in ("tester", "dd_old_generic", "dd_current_generic", "one_new"):
                 self.assertNotIn(secret, json.dumps(result))
 
+    def test_direct_48_isolated_from_40_and_481_with_changed_generic_logs(self):
+        with tempfile.TemporaryDirectory() as td:
+            prefix = Path(td)
+            (prefix / "drive_c").mkdir()
+            (prefix / "system.reg").write_text("")
+            (prefix / trial.SENTINEL).write_text("")
+            local = prefix / "drive_c" / "users" / "runner" / "AppData" / "Local" / "Temp"
+            local.mkdir(parents=True)
+            private = b"User=C:\\Users\\runner\\secret-install.exe\n"
+            (local / "dd_dotNetFx40_old.log").write_bytes(
+                b"Final Result: failure 5100 StopBlock, missing update KB1234567\n" + private)
+            (local / "Microsoft .NET Framework 4.8.1 Setup_2026.html").write_bytes(
+                b"Final Result: 5100 StopBlock, missing update KB8888888\n" + private)
+            shared = local / "dd_generic_setup.log"
+            shared.write_bytes(b"previous source\n")
+            before = evidence.snapshot_secondary_logs(prefix)
+            (local / "Microsoft .NET Framework 4.8 Setup_2026.html").write_bytes(
+                b"OS Version = 6.1.7601\n"
+                b"Final Result: error 5100 StopBlock, Windows Update Service not available\n" + private)
+            shared.write_bytes(b"Final Result: error 5100 StopBlock.\n")
+            (local / "dd_NDP48-decomp.html").write_bytes(
+                b"Error: missing update KB12345678\n")
+            report = evidence.scan_secondary_logs(
+                prefix, baseline=before, family="NETFX48")
+            self.assertTrue(evidence.validate_secondary_report(report))
+            self.assertEqual(report["prerequisite_files"], 2)
+            self.assertEqual(report["stage_files"], 3)
+            self.assertEqual(report["stage_scope"], "CAPTURED")
+            self.assertEqual(report["prerequisite"]["os_versions"], ["BELOW_WINDOWS_10"])
+            self.assertTrue(report["prerequisite"]["5100_in_log"])
+            self.assertIn("WINDOWS_UPDATE_BLOCK", report["prerequisite"]["blockers"])
+            self.assertIn("MISSING_UPDATE_BLOCK", report["prerequisite"]["blockers"])
+            self.assertNotIn("KB8888888", json.dumps(report))
+            self.assertNotIn("secret-install.exe", json.dumps(report))
+            self.assertEqual(report["stage_prerequisite"]["status"], "CLASSIFIED")
+            with self.assertRaises(ValueError):
+                evidence.scan_secondary_logs(prefix, baseline=before, family="UNTRUSTED")
+
     def test_stage_snapshot_rejects_limits_and_symlink_roots(self):
         with tempfile.TemporaryDirectory() as td:
             prefix = Path(td) / "prefix"
