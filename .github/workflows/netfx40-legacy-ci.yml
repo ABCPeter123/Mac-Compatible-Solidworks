@@ -16,6 +16,11 @@ on:
         type: boolean
         required: false
         default: false
+      host_provenance_only:
+        description: 'Only authenticate and test genuine Microsoft .NET 4.0 CLR hosting after msxml3; skip 4.8 and 4.8.1'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -206,6 +211,7 @@ jobs:
             Set-Content -LiteralPath build/netfx40.sha256 -NoNewline -Encoding ascii
           Write-Output "Original .NET Framework 4.8 signed by Microsoft and digest bound"
       - name: Download and authenticate original Microsoft .NET Framework 4.8.1 upgrade media
+        if: '!inputs.host_provenance_only'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -224,7 +230,7 @@ jobs:
             Set-Content -LiteralPath build/netfx481.sha256 -NoNewline -Encoding ascii
           Write-Output "Verified signed official .NET 4.8.1 in-place upgrade package"
       - name: Download and authenticate original signed Microsoft .NET Framework 4.8 intermediate
-        if: inputs.try_48_direct
+        if: inputs.try_48_direct && !inputs.host_provenance_only
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -244,7 +250,7 @@ jobs:
             Set-Content -LiteralPath build/netfx48.sha256 -NoNewline -Encoding ascii
           Write-Output "Original signed Microsoft .NET 4.8 authenticated, checksum staged privately"
       - name: Compile distinct 4.8 original Windows process monitor
-        if: inputs.try_48_direct
+        if: inputs.try_48_direct && !inputs.host_provenance_only
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -290,7 +296,7 @@ jobs:
           retention-days: 1
 
   apple-silicon-native-baseline:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && !inputs.host_provenance_only
     name: Check genuine Microsoft .NET 4.0 on Apple Silicon Wine Staging 11.21
     needs: [authentic-netfx40-windows, absolute-path-regressions]
     runs-on: macos-15
@@ -624,6 +630,11 @@ jobs:
                 report["mscoree"], report["clr"],
                 report["managed"], report["native_host_confirmed"])
           PY
+      - name: Reject combining host-provenance-only with any 4.8 installer experiment
+        if: inputs.host_provenance_only && (inputs.try_48_intermediate || inputs.try_48_direct)
+        run: |
+          echo "Host-provenance-only cannot run a 4.8 installer."
+          exit 1
       - name: Reject conflicting 4.8 intermediate experiment selections
         if: inputs.try_48_intermediate && inputs.try_48_direct
         shell: bash
@@ -631,7 +642,7 @@ jobs:
           echo "Select either Winetricks 4.8 OR original signed 4.8, not both."
           exit 1
       - name: Install original signed 4.8 directly on the verified native 4.0 prefix
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_48_direct && !inputs.try_48_intermediate
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && inputs.try_48_direct && !inputs.try_48_intermediate
         shell: bash
         run: |
           set -euo pipefail
@@ -647,7 +658,7 @@ jobs:
             --output build/netfx40-to-48-direct.json \
             --agree-disposable-prefix
       - name: Gate original 4.8.1 on independently verified original native 4.8
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_48_direct && !inputs.try_48_intermediate
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && inputs.try_48_direct && !inputs.try_48_intermediate
         shell: bash
         run: |
           set -euo pipefail
@@ -665,7 +676,7 @@ jobs:
           print("Original signed Microsoft native 4.8 verified:", r["native48_candidate"])
           PY
       - name: Test pinned Winetricks dotnet48 on existing verified Microsoft 4.0 prefix
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_48_intermediate
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && inputs.try_48_intermediate
         shell: bash
         run: |
           set -euo pipefail
@@ -679,7 +690,7 @@ jobs:
             --output build/netfx40-to-48-intermediate.json \
             --timeout 840 --agree-disposable-prefix
       - name: Gate signed 4.8.1 upgrade on verified native 4.8 intermediate
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_48_intermediate
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && inputs.try_48_intermediate
         shell: bash
         run: |
           set -euo pipefail
@@ -697,7 +708,7 @@ jobs:
           print("Real native Microsoft 4.8 intermediate candidate verified:", r["native48_candidate"])
           PY
       - name: Read disk-space prerequisites on actual persistent native CLR 4.0 prefix
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && ((!inputs.try_48_intermediate && !inputs.try_48_direct) || env.SWCOMPAT_NATIVE48_READY == 'yes')
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct) || env.SWCOMPAT_NATIVE48_READY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
@@ -708,7 +719,7 @@ jobs:
             --output build/netfx481-disk-before-upgrade.json \
             --agree-disposable-prefix
       - name: Select Windows 10 reported version for original Microsoft 4.8.1 upgrade
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && ((!inputs.try_48_intermediate && !inputs.try_48_direct) || env.SWCOMPAT_NATIVE48_READY == 'yes')
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct) || env.SWCOMPAT_NATIVE48_READY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
@@ -716,7 +727,7 @@ jobs:
             --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
             --logs-dir "$RUNNER_TEMP/netfx40-msxml3-logs" set-winver win10
       - name: Upgrade functioning Microsoft .NET 4.x CLR with original Microsoft 4.8.1
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && ((!inputs.try_48_intermediate && !inputs.try_48_direct) || env.SWCOMPAT_NATIVE48_READY == 'yes')
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct) || env.SWCOMPAT_NATIVE48_READY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
@@ -733,7 +744,7 @@ jobs:
             --experiment-private-setup-evidence \
             --agree-disposable-prefix
       - name: Restore Windows 11 profile and verify native-only managed CLR
-        if: always() && env.SWCOMPAT_NATIVE40_READY == 'yes' && ((!inputs.try_48_intermediate && !inputs.try_48_direct) || env.SWCOMPAT_NATIVE48_READY == 'yes')
+        if: always() && env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct) || env.SWCOMPAT_NATIVE48_READY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
