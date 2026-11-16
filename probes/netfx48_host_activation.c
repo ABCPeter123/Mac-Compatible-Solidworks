@@ -42,6 +42,35 @@ void WINAPI host_entry(void) {
     HRESULT hr;
     DWORD n, dir_len, slash = 0, i, mapped_len;
     DWORD returned = 0;
+    wchar_t shim_only_mode[3];
+
+    /* A separate read-only native Windows/Wine differential. This branch
+       loads only the same privately authenticated original Microsoft shim.
+       It never calls hosting/managed APIs or inspects registered runtimes. */
+    n = GetEnvironmentVariableW(L"SWCOMPAT_SHIM_ONLY", shim_only_mode, 3);
+    if (n == 1 && shim_only_mode[0] == L'1') {
+        DWORD attrs;
+        n = GetEnvironmentVariableW(L"SWCOMPAT_ORIGINAL_SHIM_PATH", shim_path, 4096);
+        if (n == 0 || n >= 4096) RESULT("ORIGINAL_SHIM_INVALID_INPUT");
+        attrs = GetFileAttributesW(shim_path);
+        if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY))
+            RESULT("ORIGINAL_SHIM_MISSING");
+        if (attrs & FILE_ATTRIBUTE_REPARSE_POINT)
+            RESULT("ORIGINAL_SHIM_INVALID_INPUT");
+        shim = LoadLibraryExW(shim_path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+        if (shim == NULL) {
+            DWORD code = GetLastError();
+            switch (code) {
+                case ERROR_MOD_NOT_FOUND: RESULT("ORIGINAL_SHIM_MISSING_DEPENDENCY");
+                case ERROR_PROC_NOT_FOUND: RESULT("ORIGINAL_SHIM_MISSING_EXPORT");
+                case ERROR_BAD_EXE_FORMAT: RESULT("ORIGINAL_SHIM_BAD_IMAGE");
+                case ERROR_DLL_INIT_FAILED: RESULT("ORIGINAL_SHIM_INIT_FAILED");
+                case ERROR_ACCESS_DENIED: RESULT("ORIGINAL_SHIM_ACCESS_DENIED");
+                default: RESULT("ORIGINAL_SHIM_LOAD_FAILED");
+            }
+        }
+        RESULT("ORIGINAL_SHIM_ONLY_LOADED");
+    }
 
     n = GetEnvironmentVariableW(L"SWCOMPAT_CLR_PATH", clr_path, 4096);
     if (n == 0 || n >= 4096) RESULT("INVALID_INPUT");

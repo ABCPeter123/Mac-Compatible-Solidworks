@@ -123,6 +123,17 @@ class HostBoundaryTests(unittest.TestCase):
                 self.assertIn("mscoreei.dll", kwargs["env"]["SWCOMPAT_ORIGINAL_SHIM_PATH"])
                 kwargs["stdout"].write(host_output("ORIGINAL_SHIM_NO_HOST_EXPORT"))
                 return mock.Mock(returncode=0)
+            def shim_only_case(argv, **kwargs):
+                self.assertEqual(kwargs["env"]["SWCOMPAT_SHIM_ONLY"], "1")
+                self.assertIn("mscoreei.dll", kwargs["env"]["SWCOMPAT_ORIGINAL_SHIM_PATH"])
+                kwargs["stdout"].write(host_output("ORIGINAL_SHIM_INIT_FAILED"))
+                return mock.Mock(returncode=0)
+            with mock.patch.object(t.subprocess, "run", side_effect=shim_only_case):
+                self.assertEqual(t.host_check(root/"wine", prefix, fixture, managed, dll,
+                                              original_shim=shim, shim_only=True),
+                                 ("ORIGINAL_SHIM_INIT_FAILED", "EXIT_ZERO"))
+            with self.assertRaises(ValueError):
+                t.host_check(root/"wine", prefix, fixture, managed, dll, shim_only=True)
             with mock.patch.object(t.subprocess, "run", side_effect=original_shim_case):
                 self.assertEqual(t.host_check(root/"wine", prefix, fixture, managed, dll,
                                               original_shim=shim),

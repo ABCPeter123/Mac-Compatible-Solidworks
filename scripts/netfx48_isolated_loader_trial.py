@@ -46,7 +46,7 @@ HOST_STATES = {"NOT_RUN", "INVALID_INPUT", "ORIGINAL_MISSING",
                "ORIGINAL_SHIM_LOAD_FAILED", "ORIGINAL_SHIM_NO_HOST_EXPORT",
                "ORIGINAL_SHIM_MISSING_DEPENDENCY", "ORIGINAL_SHIM_MISSING_EXPORT",
                "ORIGINAL_SHIM_BAD_IMAGE", "ORIGINAL_SHIM_INIT_FAILED",
-               "ORIGINAL_SHIM_ACCESS_DENIED",
+               "ORIGINAL_SHIM_ACCESS_DENIED", "ORIGINAL_SHIM_ONLY_LOADED",
                "MANAGED_FIXTURE_MISSING", "MANAGED_EXECUTION_FAILED",
                "MANAGED_UNEXPECTED_RESULT", "MANAGED_ORIGINAL_PASS",
                "TIMEOUT", "PROBE_ERROR"}
@@ -120,6 +120,7 @@ def blank() -> dict:
         "original_shim_dependency_stage": stage_blank(),
         "original_shim_reused": 0,
         "original_shim_retry": "NOT_RUN", "original_shim_retry_process": "NOT_RUN",
+        "original_shim_only": "NOT_RUN", "original_shim_only_process": "NOT_RUN",
     }
 
 
@@ -147,7 +148,21 @@ def valid(report: object) -> bool:
             or type(report["original_shim_reused"]) is not int
             or not 0 <= report["original_shim_reused"] <= MAX_IMPORTS
             or report["original_shim_retry"] not in HOST_STATES
-            or report["original_shim_retry_process"] not in PROCESSES):
+            or report["original_shim_retry_process"] not in PROCESSES
+            or report["original_shim_only"] not in HOST_STATES
+            or report["original_shim_only_process"] not in PROCESSES):
+        return False
+    if ((report["original_shim_only"] == "NOT_RUN")
+            != (report["original_shim_only_process"] == "NOT_RUN")):
+        return False
+    if (report["original_shim_only"] != "NOT_RUN" and (
+            report["original_shim_staging"]["staged"] != 1
+            or report["loader_after_mzz"] != "LOADED")):
+        return False
+    if report["original_shim_only"] == "MANAGED_ORIGINAL_PASS":
+        return False
+    if report["original_shim_only"] == "ORIGINAL_SHIM_ONLY_LOADED" and (
+            report["original_shim_only_process"] != "EXIT_ZERO"):
         return False
     if ((report["original_shim_retry"] == "NOT_RUN")
             != (report["original_shim_retry_process"] == "NOT_RUN")):
@@ -451,7 +466,8 @@ def parse_host(raw: bytes, exit_code: int) -> str:
 
 def host_check(wine: Path, prefix: Path, host_fixture: Path,
                managed_fixture: Path, original: Path,
-               original_shim: Path | None = None) -> tuple[str, str]:
+               original_shim: Path | None = None,
+               shim_only: bool = False) -> tuple[str, str]:
     """Isolated hosting: no framework registration and no Mono success accepted."""
     z = prefix / "dosdevices" / "z:"
     if not z.is_symlink() or z.resolve() != Path("/"):
@@ -462,6 +478,12 @@ def host_check(wine: Path, prefix: Path, host_fixture: Path,
                 "WINEDEBUG": "-all", "WINEDLLOVERRIDES": "clr=n",
                 "SWCOMPAT_CLR_PATH": "Z:" + str(original.resolve(strict=True)).replace("/", "\\"),
                 "SWCOMPAT_MANAGED_DLL": "Z:" + str(managed_fixture.resolve(strict=True)).replace("/", "\\")})
+    if shim_only and original_shim is None:
+        raise ValueError("Original Microsoft shim required for native-only differential")
+    if shim_only:
+        env["SWCOMPAT_SHIM_ONLY"] = "1"
+    else:
+        env.pop("SWCOMPAT_SHIM_ONLY", None)
     if original_shim is not None:
         if original_shim.name != "mscoreei.dll" or original_shim.is_symlink():
             raise ValueError("Only original Microsoft signed-package host shim")
@@ -556,6 +578,9 @@ def trial(installer: Path, expected_sha: str, wine: Path, prefix: Path,
                             private, sevenzip, ["mscoreei.dll"])
                         if result["original_shim_staging"]["staged"] == 1:
                             shim_path = private / "mscoreei.dll"
+                            result["original_shim_only"], result["original_shim_only_process"] = host_check(
+                                wine, prefix, host_fixture, managed_fixture, original,
+                                original_shim=shim_path, shim_only=True)
                             result["original_shim_host"], result["original_shim_process"] = host_check(
                                 wine, prefix, host_fixture, managed_fixture,
                                 original, original_shim=shim_path)
@@ -638,6 +663,8 @@ def main(argv: list[str] | None = None) -> int:
           repair["located"], repair["staged"])
     print("AUTHENTIC_NETFX48_ORIGINAL_SHIM_RETRY",
           report["original_shim_retry"], report["original_shim_retry_process"])
+    print("AUTHENTIC_NETFX48_ORIGINAL_SHIM_NATIVE_ONLY",
+          report["original_shim_only"], report["original_shim_only_process"])
     staging = report["signed_mzz_staging"]
     print("AUTHENTIC_NETFX48_MZZ_STAGE", staging["status"],
           staging["missing_requested"], staging["located"], staging["staged"])
