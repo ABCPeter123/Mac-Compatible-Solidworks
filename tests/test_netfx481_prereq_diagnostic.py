@@ -113,6 +113,17 @@ class OriginalPrerequisiteTests(unittest.TestCase):
         self.assertIn("PROCESSOR_BLOCK", report["blockers"])
         self.assertEqual(set(report), set(empty()))
 
+    def test_error_prefix_can_report_missing_update_without_inventory_false_positive(self):
+        failed = classify_text(
+            b"Error: missing update KB12345678 prevents prerequisite setup\n"
+            b"System file C:\\\\Users\\\\secret\\\\private.dll\n")
+        self.assertEqual(failed["blockers"], ["MISSING_UPDATE_BLOCK"])
+        self.assertNotIn("secret", str(failed))
+        informational = classify_text(
+            b"Installed update KB12345678 detected.\n"
+            b"Info: KB12345678 is present.\n")
+        self.assertEqual(informational["blockers"], [])
+
     def test_malformed_or_missing_is_not_a_success(self):
         self.assertEqual(classify_text(b"x" * (8 * 1024 * 1024 + 1)),
                          empty("TOO_LARGE"))
