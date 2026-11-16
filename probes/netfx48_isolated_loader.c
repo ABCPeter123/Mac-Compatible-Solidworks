@@ -1,73 +1,67 @@
 /*
- * Self-authored Windows x64 probe for an original Microsoft CLR PE.
- * The parent verifies the Microsoft installer Authenticode + digest.
- * LoadLibraryExW resolves direct imports and runs DLL_PROCESS_ATTACH.
- * This is NOT managed execution, install registration, or a runtime fix.
- * No paths, DLL names, Win32 messages or vendor bytes are printed.
+ * Minimal, self-authored Windows x64 loader with NO CRT dependency.
+ * Compiled /NODEFAULTLIB /ENTRY:isolated_entry /GS-. A vanilla Wine prefix
+ * may lack the MSVC startup/runtime libraries required by an ordinary probe.
+ *
+ * The caller supplies only SWCOMPAT_LOAD_DLL_PATH privately via environment.
+ * It never prints paths, imported DLL names, addresses, Windows messages or
+ * application data. Genuine Microsoft media authentication happens outside
+ * this fixture. Loading a DLL never proves managed CLR execution.
  */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <wchar.h>
-#include <stdio.h>
 
-static const char *classify(DWORD error) {
-    switch (error) {
-        case ERROR_MOD_NOT_FOUND: return "MISSING_DEPENDENCY";
-        case ERROR_PROC_NOT_FOUND: return "MISSING_EXPORT";
-        case ERROR_BAD_EXE_FORMAT: return "BAD_IMAGE";
-        case ERROR_DLL_INIT_FAILED: return "DLL_INIT_FAILED";
-        case ERROR_ACCESS_DENIED: return "ACCESS_DENIED";
-        default: return "OTHER_LOAD_FAILURE";
+__declspec(noreturn)
+static void report(const char *line, DWORD length) {
+    static const char prefix[] = "SWCOMPAT_NETFX48_ISOLATED_SCHEMA=1\n";
+    static const char managed[] = "SWCOMPAT_NETFX48_ISOLATED_MANAGED=NOT_TESTED\n";
+    DWORD written;
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (out != INVALID_HANDLE_VALUE && out != NULL) {
+        WriteFile(out, prefix, (DWORD)sizeof(prefix) - 1, &written, NULL);
+        WriteFile(out, line, length, &written, NULL);
+        WriteFile(out, managed, (DWORD)sizeof(managed) - 1, &written, NULL);
     }
+    ExitProcess(0);
 }
-static void result(const char *state) {
-    printf("SWCOMPAT_NETFX48_ISOLATED_SCHEMA=1\n");
-    printf("SWCOMPAT_NETFX48_ISOLATED_LOADER=%s\n", state);
-    printf("SWCOMPAT_NETFX48_ISOLATED_MANAGED=NOT_TESTED\n");
-}
-int wmain(int argc, wchar_t **argv) {
+
+#define RESULT(STATE) do { \
+    static const char line[] = "SWCOMPAT_NETFX48_ISOLATED_LOADER=" STATE "\n"; \
+    report(line, (DWORD)sizeof(line) - 1); \
+} while (0)
+
+void WINAPI isolated_entry(void) {
+    wchar_t path[32768];
+    DWORD length;
     DWORD attrs;
-    HMODULE module;
-    DWORD code;
-    if (argc == 2 && wcscmp(argv[1], L"--selftest-missing") == 0) {
-        result("NOT_FOUND");
-        return 0;
+    DWORD error;
+    HMODULE loaded;
+
+    length = GetEnvironmentVariableW(L"SWCOMPAT_LOAD_DLL_PATH", path,
+                                     (DWORD)(sizeof(path) / sizeof(path[0])));
+    if (length == 0 || length >= (DWORD)(sizeof(path) / sizeof(path[0]))) {
+        RESULT("INVALID_ARGUMENT");
     }
-    if (argc == 2 && wcscmp(argv[1], L"--selftest-windows") == 0) {
-        wchar_t path[MAX_PATH];
-        UINT len = GetSystemDirectoryW(path, MAX_PATH);
-        if (len == 0 || len > MAX_PATH - 17) {
-            result("OTHER_LOAD_FAILURE");
-            return 0;
-        }
-        wcscat_s(path, MAX_PATH, L"\\kernel32.dll");
-        module = LoadLibraryExW(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
-        result(module ? "LOADED" : classify(GetLastError()));
-        if (module) FreeLibrary(module);
-        return 0;
-    }
-    if (argc != 2 || !argv[1] || wcslen(argv[1]) > 32760) {
-        result("INVALID_ARGUMENT");
-        return 0;
-    }
-    attrs = GetFileAttributesW(argv[1]);
+    attrs = GetFileAttributesW(path);
     if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
-        result("NOT_FOUND");
-        return 0;
+        RESULT("NOT_FOUND");
     }
     if (attrs & FILE_ATTRIBUTE_REPARSE_POINT) {
-        result("LINKED");
-        return 0;
+        RESULT("LINKED");
     }
-    /* Do not use DONT_RESOLVE_DLL_REFERENCES: that would mask dependencies. */
     SetLastError(0);
-    module = LoadLibraryExW(argv[1], NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
-    if (module == NULL) {
-        code = GetLastError();
-        result(classify(code));
-    } else {
-        result("LOADED");
-        FreeLibrary(module);
+    loaded = LoadLibraryExW(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    if (loaded != NULL) {
+        FreeLibrary(loaded);
+        RESULT("LOADED");
     }
-    return 0;
+    error = GetLastError();
+    switch (error) {
+        case ERROR_MOD_NOT_FOUND: RESULT("MISSING_DEPENDENCY");
+        case ERROR_PROC_NOT_FOUND: RESULT("MISSING_EXPORT");
+        case ERROR_BAD_EXE_FORMAT: RESULT("BAD_IMAGE");
+        case ERROR_DLL_INIT_FAILED: RESULT("DLL_INIT_FAILED");
+        case ERROR_ACCESS_DENIED: RESULT("ACCESS_DENIED");
+        default: RESULT("OTHER_LOAD_FAILURE");
+    }
 }
