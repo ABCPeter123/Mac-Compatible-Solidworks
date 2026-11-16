@@ -70,7 +70,7 @@ class PeImportSafetyTests(unittest.TestCase):
             "kernel32.dll", "mscoree.dll", "completelyprivate.dll"])
         self.assertNotIn("completelyprivate", json.dumps(report))
         damaged = bytearray(fixture())
-        damaged[0x400 + 12:0x400 + 16] = b"\\xff\\xff\\xff\\xff"
+        damaged[0x400 + 12:0x400 + 16] = b"\xff\xff\xff\xff"
         broken = evidence.parse_pe(bytes(damaged), _private_direct_names=names)
         self.assertEqual(broken["pe"], "INVALID_IMPORT_TABLE")
         self.assertEqual(names, [])
