@@ -46,9 +46,7 @@ class PublicArtifactPrivacyTests(unittest.TestCase):
         for workflow in paths:
             with self.subTest(workflow=workflow.name):
                 text = workflow.read_text(encoding="utf-8")
-                blocks = uploads(text)
-                self.assertTrue(blocks, "CI artifact publisher must be inspected")
-                for block in blocks:
+                for block in uploads(text):
                     for filename in PROPRIETARY_INSTALLERS:
                         self.assertNotIn(filename, block)
                     self.assertNotIn("authenticated-original-microsoft-netfx40-private", block)
@@ -70,7 +68,9 @@ class PublicArtifactPrivacyTests(unittest.TestCase):
                 )
                 self.assertIn("build/netfx" + version + ".sha256", text)
                 self.assertIn("Get-AuthenticodeSignature", text)
-                for block in uploads(text):
+                blocks = uploads(text)
+                self.assertTrue(blocks, "Must inspect the original workflow artifact")
+                for block in blocks:
                     self.assertNotIn(".exe\n            build/NDP", block)
 
 
