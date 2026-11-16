@@ -567,8 +567,13 @@ def trial(installer: Path, expected_sha: str, wine: Path, prefix: Path,
                                 genuinely_missing = []
                                 for dep in shim_missing:
                                     existing = private / dep
+                                    previously_staged = False
                                     if (existing.is_file() and not existing.is_symlink()
-                                            and pe_type(existing.read_bytes()[:8192]) == "PE_AMD64"):
+                                            and 512 <= existing.stat().st_size <= MAX_CLR):
+                                        with existing.open("rb") as native_stream:
+                                            previously_staged = (
+                                                pe_type(native_stream.read(8192)) == "PE_AMD64")
+                                    if previously_staged:
                                         result["original_shim_reused"] += 1
                                     else:
                                         genuinely_missing.append(dep)
