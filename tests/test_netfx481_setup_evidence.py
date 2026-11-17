@@ -305,23 +305,23 @@ class NetFxSetupEvidenceTests(unittest.TestCase):
             local.mkdir(parents=True)
             stale = local / "dd_ndp481_stale.log"
             stale.write_bytes(
-                b"OS Version = 6.1.7601\\n"
-                b"Error: OS version is unsupported, StopBlock 5100\\n"
-                b"Secret=stale-only\\n")
+                b"OS Version = 6.1.7601\n"
+                b"Error: OS version is unsupported, StopBlock 5100\n"
+                b"Secret=stale-only\n")
             other = local / "dd_ndp48_modified.log"
-            other.write_bytes(b"Prior framework log\\n")
+            other.write_bytes(b"Prior framework log\n")
             generic = local / "dd_generic_changed.log"
-            generic.write_bytes(b"Prior generic log\\n")
+            generic.write_bytes(b"Prior generic log\n")
             baseline = evidence.snapshot_secondary_logs(prefix)
 
             # Simulate .NET 4.8 activity in the wrong-family file during
             # the .NET 4.8.1 run, while a generic log also changes.
-            other.write_bytes(b"Error: pending reboot required\\nSecret=other-only\\n")
-            generic.write_bytes(b"Windows Update Service is not available\\n")
+            other.write_bytes(b"Error: pending reboot required\nSecret=other-only\n")
+            generic.write_bytes(b"Windows Update Service is not available\n")
             fresh = local / "dd_ndp481_fresh.log"
             fresh.write_bytes(
-                b"OS Version = 10.0.19045\\n"
-                b"Error: missing update KB2919355\\nSecret=fresh-only\\n")
+                b"OS Version = 10.0.19045\n"
+                b"Error: missing update KB2919355\nSecret=fresh-only\n")
             result = evidence.scan_secondary_logs(
                 prefix, baseline=baseline, family="NETFX481")
             self.assertTrue(evidence.validate_secondary_report(result))
