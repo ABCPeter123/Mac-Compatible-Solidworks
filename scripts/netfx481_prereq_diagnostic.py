@@ -62,9 +62,11 @@ CAUSE_REGEX = (
     ("WINDOWS_SERVICING_BLOCK", re.compile(r"(?i)\b(?:component store|servicing|CBS|DISM|windows update service)\b")),
     ("MISSING_UPDATE_BLOCK", re.compile(r"(?i)\b(?:KB\d{5,9}|missing update|cumulative update)\b")),
     ("PENDING_REBOOT_BLOCK", re.compile(
-        r"(?i)\b(?:pending reboot|reboot required|restart required)\b"\n        r"|\brequires?.{0,100}\b(?:restarted|restart|reboot)\b")),
+        r"(?i)\b(?:pending reboot|reboot required|restart required)\b"
+        r"|\brequires?.{0,100}\b(?:restarted|restart|reboot)\b")),
     ("ADMIN_RIGHTS_BLOCK", re.compile(
-        r"(?i)\b(?:administrator privileges|elevat(?:ed|ion)|access denied|"\n        r"insufficient privileges|not have sufficient privileges)\b")),
+        r"(?i)\b(?:administrator privileges|elevat(?:ed|ion)|access denied|"
+        r"insufficient privileges|not have sufficient privileges)\b")),
     ("PROCESSOR_BLOCK", re.compile(r"(?i)\b(?:processor architecture|unsupported processor|unsupported cpu)\b")),
     ("EXISTING_FRAMEWORK_BLOCK", re.compile(r"(?i)\b(?:already installed|higher version|later version|existing framework)\b")),
 )
