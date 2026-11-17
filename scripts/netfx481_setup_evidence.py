@@ -188,6 +188,22 @@ def _is_target_log_name(name: str, family: str) -> bool:
                                  "dd_dotnetfx48_")))
 
 
+def _explicit_other_framework_family(name: str, family: str) -> bool:
+    """Exclude fresh logs clearly named for a different .NET 4.x setup.
+
+    A changed generic dd_ log remains eligible for this stage, but an
+    unambiguous 4.0/4.8/4.8.1 name cannot become evidence for another
+    installer just because its timestamp changed.
+    """
+    lower = name.casefold()
+    if lower.startswith("microsoft .net framework"):
+        return not _is_target_log_name(name, family)
+    if re.match(r"dd_(?:ndp|netfx|dotnetfx)(?:40|48|481)(?=[^a-z0-9]|$)",
+                lower):
+        return not _is_target_log_name(name, family)
+    return False
+
+
 def _secondary_roots(prefix: Path) -> list[Path]:
     drive_c = prefix / "drive_c"
     return [
@@ -327,12 +343,16 @@ def scan_secondary_logs(prefix: Path, *,
                     continue
                 new_or_changed = baseline is not None and (
                     file not in baseline or _metadata(file) != baseline[file])
-                named_for_family = _is_target_log_name(name, family)
-                # Do not classify a preceding original .NET 4.0 / 4.8.1
-                # setup log as a .NET 4.8 failure merely because the file
-                # already existed before the 4.8 attempt.
-                family_stage_file = new_or_changed and (
-                    family == "NETFX481" or not _is_481_log_name(name))
+                # With a baseline, a pre-existing same-family file is NOT
+                # evidence from this run until it actually changes.
+                named_for_family = (_is_target_log_name(name, family)
+                                    and (baseline is None or new_or_changed))
+                # Even when modified, an explicitly other-version log
+                # cannot be attributed to this installer. Newly changed
+                # generic bootstrapper/CBS logs remain stage candidates.
+                family_stage_file = (new_or_changed
+                                     and not _explicit_other_framework_family(
+                                         name, family))
                 if named_for_family or family_stage_file:
                     prereq = classify_prerequisite_text(raw, family=family)
                     if prereq["status"] != "CLASSIFIED":
@@ -348,9 +368,12 @@ def scan_secondary_logs(prefix: Path, *,
                             stage_os.update(prereq["os_versions"])
                             stage_blockers.update(prereq["blockers"])
                             stage_5100 = stage_5100 or prereq["5100_in_log"]
-                # For the .NET 4.8 direct setup, prior msxml3 / .NET 4.0
-                # logs are not evidence of the current installer outcome.
-                if family == "NETFX48" and not (named_for_family or family_stage_file):
+                # When a pre-run baseline exists, phase and error codes
+                # must use the SAME stage scope as blocker attribution.
+                # Otherwise stale and cross-family logs can contaminate
+                # the result even when their prerequisite fields are empty.
+                if baseline is not None and not (
+                        named_for_family or family_stage_file):
                     continue
                 result = classify_text(raw)
                 if result["status"] != "CLASSIFIED":
