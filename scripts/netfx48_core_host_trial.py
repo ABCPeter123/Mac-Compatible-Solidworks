@@ -44,7 +44,7 @@ ERROR_PHASES = {"NOT_RUN", "INPUT", "ELIGIBILITY", "AUTHENTICATION",
                 "NATIVE40_BASELINE", "EXTRACTION", "IMPORTS",
                 "DEPENDENCIES", "MSCORLIB", "CORE", "REPLACEMENT",
                 "RESTORATION", "NATIVE40_RECHECK", "VALIDATION",
-                "EXTRA_NATIVE", "COHERENCE", "COHERENCE_HOST", "TRACE", "PRECHECK_BASELINE",
+                "EXTRA_NATIVE", "COHERENCE", "COHERENCE_REPLACEMENT", "COHERENCE_HOST", "TRACE", "PRECHECK_BASELINE",
                 "TRACE_BASELINE", "PRECHECK_48", "PRECHECK_RESTORED",
                 "ZAP_BASELINE", "ZAP_48", "ZAP_RESTORED",
                 "ACTIVATION_BASELINE", "ACTIVATION_48", "ACTIVATION_RESTORED"}
@@ -173,7 +173,21 @@ class ReversibleFramework:
             if not compatible_x64(stream.read(65536),
                                   allow_anycpu=allow_managed_anycpu):
                 raise ValueError("Original signed payload is not x64-compatible")
-        target = self.root / name
+        # Original .NET Framework names use Windows casing (System.Core.dll),
+        # while earlier signed MZZ arms use lowercase names. On default macOS
+        # APFS those resolve to one file. Normalize to its actual directory
+        # entry before looking up saved backups, so a second casing cannot
+        # cause a backup collision or hide a modified runtime file.
+        peers = [entry for entry in self.root.iterdir()
+                 if entry.name.casefold() == name.casefold()]
+        if len(peers) > 1:
+            # Never select one of multiple distinct case-sensitive files.
+            raise ValueError("Ambiguous original runtime target casing")
+        if peers:
+            target = peers[0]
+            name = target.name
+        else:
+            target = self.root / name
         if target.is_symlink() or (target.exists() and not target.is_file()):
             raise ValueError("Unsafe original Wine runtime target")
         if name not in self.saved:
@@ -386,6 +400,7 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
                         root, private, sevenzip)
                     result["coherent_staging"] = coherence
                     if coherence["status"] == "STAGED":
+                        mark("COHERENCE_REPLACEMENT")
                         for canonical, original_name in sorted(original_names.items()):
                             source = private / canonical
                             if source.is_file():
@@ -395,8 +410,14 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
                         result["coherent_host"] = host_execute(
                             wine, prefix, fixture, managed, "n")
         finally:
-            mark("RESTORATION")
-            replacement.restore()
+            # Always undo the temporary vendor-file swaps, but do not replace
+            # the actual failing phase with RESTORATION when the rollback
+            # itself succeeds. This hid the previous casing-collision error.
+            try:
+                replacement.restore()
+            except (OSError, ValueError, RuntimeError):
+                mark("RESTORATION")
+                raise
         mark("NATIVE40_RECHECK")
         result["native40_after"] = host_execute(
             wine, prefix, fixture, managed, "n")

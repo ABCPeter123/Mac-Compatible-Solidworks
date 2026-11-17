@@ -80,6 +80,55 @@ class CoreHostTrialTests(unittest.TestCase):
             self.assertEqual((root / "clr.dll").read_bytes(), original)
             self.assertFalse((root / "clrjit.dll").exists())
 
+    def test_mixed_case_original_framework_does_not_create_duplicate_backup(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            _, root = native_prefix(base)
+            original = root / "System.Core.dll"
+            original.write_bytes(pe(9))
+            private = base / "private"
+            private.mkdir()
+            payload = private / "system.core.dll"
+            payload.write_bytes(pe(10))
+            switch = t.ReversibleFramework(root, private)
+            # Earlier optional "extra native" arm uses lowercase.
+            switch.replace(payload, "system.core.dll")
+            self.assertEqual(original.read_bytes(), pe(10))
+            self.assertEqual(set(switch.saved), {"System.Core.dll"})
+            self.assertFalse((root / "system.core.dll").exists()
+                             and (root / "system.core.dll") != original
+                             and len([p for p in root.iterdir()
+                                      if p.name.casefold() == "system.core.dll"]) > 1)
+            # Coherent x64 Framework64 arm reuses original Microsoft casing.
+            switch.replace(payload, "System.Core.dll")
+            self.assertEqual(set(switch.saved), {"System.Core.dll"})
+            self.assertEqual(len(list(private.glob("saved-*"))), 1)
+            self.assertEqual(original.read_bytes(), pe(10))
+            switch.restore()
+            self.assertEqual(original.read_bytes(), pe(9))
+            self.assertEqual(len([p for p in root.iterdir()
+                                  if p.name.casefold() == "system.core.dll"]), 1)
+
+    def test_refuse_ambiguous_case_variants_on_case_sensitive_filesystems(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            _, root = native_prefix(base)
+            (root / "System.Core.dll").write_bytes(pe(9))
+            (root / "system.core.dll").write_bytes(pe(8))
+            if len([p for p in root.iterdir()
+                    if p.name.casefold() == "system.core.dll"]) < 2:
+                self.skipTest("The host filesystem is case-insensitive")
+            private = base / "private"
+            private.mkdir()
+            payload = private / "system.core.dll"
+            payload.write_bytes(pe(10))
+            switch = t.ReversibleFramework(root, private)
+            with self.assertRaisesRegex(ValueError, "Ambiguous"):
+                switch.replace(payload, "system.core.dll")
+            self.assertFalse(switch.saved)
+            self.assertEqual((root / "System.Core.dll").read_bytes(), pe(9))
+            self.assertEqual((root / "system.core.dll").read_bytes(), pe(8))
+
     def test_rejects_traversal_links_and_wrong_architecture(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
