@@ -82,3 +82,40 @@ activation log does not prove managed execution or an installed 4.8 runtime.
 If 4.8 reports no unique shim issue while Start still returns `E_FAIL`,
 the failure remains in a later initialization stage and requires different
 instrumentation. Original 4.8 and 4.8.1 setup error **5100 remains unresolved**.
+
+## November 17: genuine CLR activation A/B and complete-framework hypothesis
+
+Authenticated [Apple Silicon run 44104293015](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/44104293015)
+verified original native 4.0 managed execution before and after replacement.
+All tested original 4.8 payload combinations still returned `HOST_START_E_FAIL`.
+Microsoft CLR activation logs were `CAPTURED` (one per process) in all
+three arms. Both working 4.0 arms and failing staged 4.8 reported the same
+finite activation-event signals: activation header, installed runtime,
+and runtime-load call; **none** recorded selected-runtime, shim-failure,
+install-root failure, or a reported error. The independent Wine module/SEH
+trace also reported no missing module/export, unimplemented API or exception.
+Therefore the particular shim / activation errors tracked by these
+probes are not the current root cause, and copying another mscoree shim
+or re-running the same CLRLoadLogDir experiment is low value.
+
+### Next distinct controlled test: full x64 Framework64 consistency
+
+A March 2026 [Wine native .NET 4.8/WPF report](https://github.com/wine-mono/wine-mono/issues/223)
+describes approximately 100 framework DLLs remaining on the 4.0 versions
+after a Winetricks 4.8 installation, plus incomplete WPF/GAC registration.
+This is another user's report, **not proof of this repository's cause**.
+Our current signed 4.8 payload trial staged only the CLR, mscorlib, 4
+native core DLLs, 2 direct imports, and 1 extra. A larger coherent assembly
+set is a meaningful different experiment.
+
+The next arm enumerates only existing DLL names inside a marked, disposable
+native 4.0 Framework64 folder, matches their **x64** Microsoft MZZ names,
+normalizes dotted assembly names such as `System.Core.dll` to archive
+`System_Core_amd64.dll`, extracts at most 160 verified x64 members, and
+temporarily replaces exactly those names. The reversible replacement
+checks PE architecture, SHA256 and restores the authentic native 4.0
+prefix. Only category and count evidence leaves the private runner.
+After staging, it calls the same independent native-host managed fixture.
+A successful host alone remains insufficient for a genuine **installed**
+4.8/4.8.1 runtime or SOLIDWORKS. Missing .NET registry/GAC/WPF servicing
+is still a separate obstacle, and error 5100 remains unresolved.

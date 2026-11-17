@@ -34,6 +34,9 @@ from scripts.netfx48_start_trace import (
 from scripts.netfx48_clr_activation_logs import (
     blank as activation_blank, valid as activation_valid, probe as activation_probe,
 )
+from scripts.netfx48_full_framework_staging import (
+    blank as coherent_blank, valid as coherent_valid, stage_matching,
+)
 
 STATES = {"NOT_RUN", "BASELINE_FAILED", "EXTRACTION_FAILED",
           "PARTIAL", "MEASURED", "INTERNAL_ERROR"}
@@ -41,14 +44,14 @@ ERROR_PHASES = {"NOT_RUN", "INPUT", "ELIGIBILITY", "AUTHENTICATION",
                 "NATIVE40_BASELINE", "EXTRACTION", "IMPORTS",
                 "DEPENDENCIES", "MSCORLIB", "CORE", "REPLACEMENT",
                 "RESTORATION", "NATIVE40_RECHECK", "VALIDATION",
-                "EXTRA_NATIVE", "TRACE", "PRECHECK_BASELINE",
+                "EXTRA_NATIVE", "COHERENCE", "COHERENCE_HOST", "TRACE", "PRECHECK_BASELINE",
                 "TRACE_BASELINE", "PRECHECK_48", "PRECHECK_RESTORED",
                 "ZAP_BASELINE", "ZAP_48", "ZAP_RESTORED",
                 "ACTIVATION_BASELINE", "ACTIVATION_48", "ACTIVATION_RESTORED"}
 SOURCE = {"NOT_RUN", "PE_AMD64", "NO_MZZ", "NO_CLR", "MZZ_ERROR",
           "EXTRACT_FAILED", "INVALID_CLR_PE"}
 MAX_STAGE = 16
-NAME = re.compile(r"[a-z0-9_.-]{1,90}\.dll\Z")
+NAME = re.compile(r"[a-zA-Z0-9_.-]{1,90}\.dll\Z")
 FRAMEWORK = Path("drive_c/windows/Microsoft.NET/Framework64/v4.0.30319")
 CORE = ("mscoreei.dll", "clrjit.dll", "mscorrc.dll", "fusion.dll")
 EXTRA_NATIVE = (
@@ -82,6 +85,8 @@ def blank() -> dict:
         "clr_and_mscorlib": "NOT_RUN",
         "additional_core": "NOT_RUN",
         "extra_native": "NOT_RUN",
+        "coherent_staging": coherent_blank(),
+        "coherent_host": "NOT_RUN",
         "wine_start_trace": trace_blank(),
         "original40_restored": False,
         "framework48_installed": False,
@@ -102,7 +107,7 @@ def valid(value: object) -> bool:
             or any(value[k] not in HOST_STATUSES for k in (
                 "native40_before", "native40_after", "clr_only",
                 "clr_and_mscorlib", "additional_core", "extra_native",
-                "native40_precheck_before", "native40_precheck_after",
+                "coherent_host", "native40_precheck_before", "native40_precheck_after",
                 "original48_precheck", "native40_zap_disabled_before",
                 "native40_zap_disabled_after", "original48_zap_disabled"))
             or any(type(value[k]) is not bool for k in (
@@ -116,6 +121,7 @@ def valid(value: object) -> bool:
             or not 0 <= value["original48_extra_staged"] <= len(EXTRA_NATIVE)
             or not trace_valid(value["wine_start_trace"])
             or not trace_valid(value["native40_start_trace"])
+            or not coherent_valid(value["coherent_staging"])
             or any(not activation_valid(value[name]) for name in (
                 "native40_activation_before", "original48_activation",
                 "native40_activation_after"))
@@ -158,7 +164,7 @@ class ReversibleFramework:
         self.saved: dict[str, Path | None] = {}
 
     def replace(self, source: Path, name: str) -> None:
-        if (not NAME.fullmatch(name) or source.name != name
+        if (not NAME.fullmatch(name) or source.name.casefold() != name.casefold()
                 or source.is_symlink() or not source.is_file()
                 or source.resolve().is_relative_to(self.root.resolve())
                 or not 512 <= source.stat().st_size <= 100 * 1024 * 1024):
@@ -369,6 +375,23 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
                     mark("TRACE")
                     result["wine_start_trace"] = trace_probe(
                         wine, prefix, fixture, managed)
+                    # The preceding tests changed only a handful of native
+                    # components. Test a coherent set of all signed x64 .NET
+                    # 4.8 DLLs matching the existing native 4.0 Framework64
+                    # files, preserving exact original casing. This is still
+                    # a reversible experiment, NOT an installation or a GAC.
+                    mark("COHERENCE")
+                    coherence, original_names = stage_matching(
+                        root, private, sevenzip)
+                    result["coherent_staging"] = coherence
+                    if coherence["status"] == "STAGED":
+                        for canonical, original_name in sorted(original_names.items()):
+                            source = private / canonical
+                            if source.is_file():
+                                replacement.replace(source, original_name)
+                        mark("COHERENCE_HOST")
+                        result["coherent_host"] = host_execute(
+                            wine, prefix, fixture, managed, "n")
         finally:
             mark("RESTORATION")
             replacement.restore()
