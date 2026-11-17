@@ -139,7 +139,12 @@ def stage(original_private_dir: Path, sevenzip: Path,
     if not files:
         result["status"] = "NO_MZZ_MATCH"
         return result
-    found: dict[str, tuple[Path, str]] = {}
+    # The same signed MZZ can contain several encoding/architecture variants
+    # of one DLL. A matching basename does not prove that member is loadable.
+    # Test bounded, architecture-prioritized originals instead of permanently
+    # selecting the first matching member and discarding the whole DLL on a
+    # wrong-architecture or extraction failure.
+    found: dict[str, list[tuple[int, Path, str]]] = {}
     for archive in files:
         with tempfile.TemporaryFile() as stdout:
             try:
@@ -156,41 +161,44 @@ def stage(original_private_dir: Path, sevenzip: Path,
             continue
         members = mzz_members(listing)
         for dep in missing:
-            for variant in candidates(dep):
-                if variant in members:
-                    found.setdefault(dep, (archive, members[variant]))
+            for priority, variant in enumerate(candidates(dep)):
+                member = members.get(variant)
+                if member is not None:
+                    found.setdefault(dep, []).append((priority, archive, member))
     for dep in missing:
-        source = found.get(dep)
-        if source is None:
+        sources_for_dep = found.get(dep)
+        if not sources_for_dep:
             continue
         fam = family(dep)
         result["located"] += 1
         result["families"][fam]["located"] += 1
-        archive, member = source
         target = original_private_dir / dep
         if target.exists() or target.is_symlink():
             continue
-        try:
-            with target.open("xb") as output:
-                proc = subprocess.run(
-                    [str(sevenzip), "e", "-so", str(archive), member],
-                    cwd=original_private_dir, stdin=subprocess.DEVNULL,
-                    stdout=output, stderr=subprocess.DEVNULL,
-                    timeout=75, check=False)
-            if (proc.returncode != 0 or not 512 <= target.stat().st_size <= MAX_CLR):
+        for _, archive, member in sorted(sources_for_dep, key=lambda x: x[0])[:4]:
+            try:
+                with target.open("xb") as output:
+                    proc = subprocess.run(
+                        [str(sevenzip), "e", "-so", str(archive), member],
+                        cwd=original_private_dir, stdin=subprocess.DEVNULL,
+                        stdout=output, stderr=subprocess.DEVNULL,
+                        timeout=75, check=False)
+                if (proc.returncode != 0
+                        or not 512 <= target.stat().st_size <= MAX_CLR):
+                    target.unlink(missing_ok=True)
+                    continue
+                with target.open("rb") as stream:
+                    compatible = compatible_x64(
+                        stream.read(65536), allow_anycpu=allow_managed_anycpu)
+                if not compatible:
+                    target.unlink(missing_ok=True)
+                    continue
+            except (OSError, subprocess.TimeoutExpired):
                 target.unlink(missing_ok=True)
                 continue
-            with target.open("rb") as stream:
-                compatible = compatible_x64(stream.read(65536),
-                                            allow_anycpu=allow_managed_anycpu)
-            if not compatible:
-                target.unlink(missing_ok=True)
-                continue
-        except (OSError, subprocess.TimeoutExpired):
-            target.unlink(missing_ok=True)
-            continue
-        result["staged"] += 1
-        result["families"][fam]["staged"] += 1
+            result["staged"] += 1
+            result["families"][fam]["staged"] += 1
+            break
     result["status"] = (
         "NO_MZZ_MATCH" if result["located"] == 0 else
         "STAGED" if result["located"] == result["staged"] else "PARTIAL")

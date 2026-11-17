@@ -106,6 +106,69 @@ class OriginalMzzDependencyStage(unittest.TestCase):
                 self.assertNotIn(forbidden, json.dumps(report))
             self.assertFalse(report["original_runtime_installed"])
 
+    def test_retry_second_signed_amd64_candidate_when_first_is_native_x86(self):
+        with tempfile.TemporaryDirectory() as td:
+            private = Path(td) / "private"
+            archives = private / "archives"
+            archives.mkdir(parents=True)
+            (archives / "original.mzz").write_bytes(b"synthetic")
+            reader = Path(td) / "7zz"
+            reader.write_bytes(b"synthetic")
+            attempts = []
+            x86 = bytearray(synthetic_amd64())
+            struct.pack_into("<H", x86, 0x84, 0x14c)
+            struct.pack_into("<H", x86, 0x98, 0x10b)
+            first = "vcruntime140_amd64.dll"
+            second = "vcruntime140_dll_amd64"
+            def invoke(argv, **kwargs):
+                if "l" in argv:
+                    kwargs["stdout"].write(
+                        ("----------\nPath = " + first +
+                         "\nPath = " + second + "\n").encode())
+                else:
+                    attempts.append(argv[-1])
+                    kwargs["stdout"].write(
+                        bytes(x86) if argv[-1] == first else synthetic_amd64())
+                return mock.Mock(returncode=0)
+            with mock.patch.object(stage.subprocess, "run", side_effect=invoke):
+                report = stage.stage(private, reader, ["vcruntime140.dll"])
+            self.assertTrue(stage.valid(report))
+            self.assertEqual(report["status"], "STAGED")
+            self.assertEqual(report["located"], 1)
+            self.assertEqual(report["staged"], 1)
+            self.assertEqual(attempts, [first, second])
+            self.assertEqual(
+                (private / "vcruntime140.dll").read_bytes(), synthetic_amd64())
+            self.assertNotIn(first, json.dumps(report))
+            self.assertNotIn(second, json.dumps(report))
+
+    def test_all_signed_variants_invalid_does_not_claim_staged(self):
+        with tempfile.TemporaryDirectory() as td:
+            private = Path(td) / "private"
+            archives = private / "archives"
+            archives.mkdir(parents=True)
+            (archives / "original.mzz").write_bytes(b"synthetic")
+            reader = Path(td) / "7zz"
+            reader.write_bytes(b"synthetic")
+            attempts = []
+            def invoke(argv, **kwargs):
+                if "l" in argv:
+                    kwargs["stdout"].write(
+                        b"----------\nPath = vcruntime140_amd64.dll\n"
+                        b"Path = vcruntime140_dll_amd64\n")
+                else:
+                    attempts.append(argv[-1])
+                    kwargs["stdout"].write(b"not a valid portable executable" * 40)
+                return mock.Mock(returncode=0)
+            with mock.patch.object(stage.subprocess, "run", side_effect=invoke):
+                report = stage.stage(private, reader, ["vcruntime140.dll"])
+            self.assertTrue(stage.valid(report))
+            self.assertEqual(report["status"], "PARTIAL")
+            self.assertEqual(report["located"], 1)
+            self.assertEqual(report["staged"], 0)
+            self.assertEqual(len(attempts), 2)
+            self.assertFalse((private / "vcruntime140.dll").exists())
+
     def test_no_matching_mzz_cannot_claim_staged_or_loader_ready(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
