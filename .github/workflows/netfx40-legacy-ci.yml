@@ -1090,8 +1090,8 @@ jobs:
                   from scripts.netfx40_to_48_direct import SERVICE_NAMES
                   for service in SERVICE_NAMES:
                       out.write(f"original_direct_48_service_{service}: **{measured['service_prerequisites'][service]}**\n\n")
-                  from scripts.netfx48_registry_preflight import KEYS
-                  for view in KEYS:
+                  from scripts.netfx48_registry_preflight import FIELDS
+                  for view in FIELDS:
                       out.write(f"original_direct_48_release_preflight_{view}: **{measured['registry_preflight'][view]}**\n\n")
                   from scripts.netfx48_scm_service_probe import FIELDS
                   assert measured["service_api"]["status"] in {
