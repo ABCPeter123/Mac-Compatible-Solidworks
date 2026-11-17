@@ -32,7 +32,7 @@ FAIL_LINE = re.compile(
     r"(?i)\b(error|block(?:ed|ing)?|fail(?:ed|ure)?|unsupported|not supported|not applicable|"
     r"prerequisite|requirement|minimum|cannot (?:install|continue)|5100|stopblock|"
     r"compatibility mode|not enough disk space|insufficient disk space|"
-    r"bytes needed|windows update service|bits is not available)\b"
+    r"bytes needed|windows update service|bits is not available|"\n    r"needs? to be installed|does not apply to this operating system|"\n    r"not have sufficient privileges|insufficient privileges)\b"
 )
 DISK_ESTIMATE = re.compile(
     r"(?i)Bytes\s+Needed:\s*\[(\d{1,18})\].{0,150}?"
@@ -54,13 +54,13 @@ CAUSE_REGEX = (
         r"(?:windows\s+update\s+service|bits)")),
     ("OS_VERSION_BLOCK", re.compile(r"(?i)(?:operating system|os version|windows version).{0,90}"
                                    r"(?:not supported|unsupported|too old|requires|minimum|blocking|blocked)"
-                                   r"|(?:not supported|unsupported|requires|minimum).{0,90}"
+                                   r"|(?:not supported|unsupported|requires|minimum|does not apply).{0,90}"
                                    r"(?:operating system|os version|windows version)")),
     ("OS_EDITION_BLOCK", re.compile(r"(?i)\b(?:edition|server core|product type|sku)\b")),
     ("WINDOWS_SERVICING_BLOCK", re.compile(r"(?i)\b(?:component store|servicing|CBS|DISM|windows update service)\b")),
     ("MISSING_UPDATE_BLOCK", re.compile(r"(?i)\b(?:KB\d{5,9}|missing update|cumulative update)\b")),
-    ("PENDING_REBOOT_BLOCK", re.compile(r"(?i)\b(?:pending reboot|reboot required|restart required)\b")),
-    ("ADMIN_RIGHTS_BLOCK", re.compile(r"(?i)\b(?:administrator privileges|elevat(?:ed|ion)|access denied)\b")),
+    ("PENDING_REBOOT_BLOCK", re.compile(\n        r"(?i)\b(?:pending reboot|reboot required|restart required)\b"\n        r"|\brequires?.{0,100}\b(?:restarted|restart|reboot)\b")),
+    ("ADMIN_RIGHTS_BLOCK", re.compile(\n        r"(?i)\b(?:administrator privileges|elevat(?:ed|ion)|access denied|"\n        r"insufficient privileges|not have sufficient privileges)\b")),
     ("PROCESSOR_BLOCK", re.compile(r"(?i)\b(?:processor architecture|unsupported processor|unsupported cpu)\b")),
     ("EXISTING_FRAMEWORK_BLOCK", re.compile(r"(?i)\b(?:already installed|higher version|later version|existing framework)\b")),
 )
