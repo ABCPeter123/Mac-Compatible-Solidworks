@@ -443,11 +443,11 @@ class CoreHostTrialTests(unittest.TestCase):
                     return {"staged": len(names)}
 
                 def matching(root, private, sevenzip):
-                    (private / "system.core.dll").write_bytes(pe(5))
+                    (private / "fresh.dll").write_bytes(pe(5))
                     return (
                         dict(t.coherent_blank(), status="STAGED", candidates=1,
-                             additional=0, staged=0),
-                        {"system.core.dll": "System.Core.dll"},
+                             additional=1, staged=1),
+                        {"fresh.dll": "Fresh.dll"},
                     )
 
                 original_replace = t.ReversibleFramework.replace
