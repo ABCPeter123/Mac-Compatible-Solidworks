@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -82,7 +83,8 @@ def classify(raw: bytes, code: int) -> str:
 
 def execute(wine: Path, prefix: Path, fixture: Path, managed: Path,
             mode: str, *, precheck: bool = False,
-            disable_native_images: bool = False) -> str:
+            disable_native_images: bool = False,
+            clrload_log_dir: str | None = None) -> str:
     if mode not in ("n", "b"):
         raise ValueError("Unsupported CLR hosting override")
     env = os.environ.copy()
@@ -90,6 +92,12 @@ def execute(wine: Path, prefix: Path, fixture: Path, managed: Path,
     env.pop("SWCOMPAT_SHIM_ONLY", None)
     env.pop("SWCOMPAT_HOST_PRECHECK", None)
     env.pop("COMPlus_ZapDisable", None)
+    env.pop("COMPLUS_CLRLoadLogDir", None)
+    if clrload_log_dir is not None:
+        if not re.fullmatch(r"C:\\swcompat-clrload-[a-z0-9_-]{6,60}",
+                            clrload_log_dir):
+            raise ValueError("Untrusted CLR activation log destination")
+        env["COMPLUS_CLRLoadLogDir"] = clrload_log_dir
     if disable_native_images:
         # .NET Framework diagnostic switch: force IL/JIT instead of NGEN
         # native images, without touching registry or vendor files.
