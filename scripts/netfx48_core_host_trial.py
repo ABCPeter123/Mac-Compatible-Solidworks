@@ -38,6 +38,14 @@ from scripts.netfx48_full_framework_staging import (
 )
 from scripts.netfx48_x64_compatible_pe import compatible_x64
 
+SOURCE_PROBLEMS = {
+    "COHERENCE_SOURCE_NAME", "COHERENCE_SOURCE_LINKED",
+    "COHERENCE_SOURCE_MISSING", "COHERENCE_SOURCE_NOT_FILE",
+    "COHERENCE_SOURCE_SCOPE", "COHERENCE_SOURCE_SIZE",
+    "COHERENCE_SOURCE_METADATA",
+}
+
+
 STATES = {"NOT_RUN", "BASELINE_FAILED", "EXTRACTION_FAILED",
           "PARTIAL", "MEASURED", "INTERNAL_ERROR"}
 ERROR_PHASES = {"NOT_RUN", "INPUT", "ELIGIBILITY", "AUTHENTICATION",
@@ -153,14 +161,6 @@ def valid(value: object) -> bool:
 def sha256(path: Path) -> str:
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
-
-
-SOURCE_PROBLEMS = {
-    "COHERENCE_SOURCE_NAME", "COHERENCE_SOURCE_LINKED",
-    "COHERENCE_SOURCE_MISSING", "COHERENCE_SOURCE_NOT_FILE",
-    "COHERENCE_SOURCE_SCOPE", "COHERENCE_SOURCE_SIZE",
-    "COHERENCE_SOURCE_METADATA",
-}
 
 
 def source_problem(source: Path, name: str, root: Path) -> str | None:
