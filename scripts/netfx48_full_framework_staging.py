@@ -13,9 +13,10 @@ import subprocess
 import tempfile
 
 from scripts.netfx48_signed_mzz_dependency_staging import (
-    MAX_IMPORTS, MAX_LIST, MAX_MZZ, candidates, mzz_members,
+    MAX_CLR, MAX_IMPORTS, MAX_LIST, MAX_MZZ, candidates, mzz_members,
     stage, valid as valid_batch,
 )
+from scripts.netfx48_x64_compatible_pe import compatible_x64
 
 MAX_FRAMEWORK_DLLS = 160
 MAX_ROOT_ENTRIES = 1500
@@ -105,6 +106,23 @@ def matching(root: Path, private: Path, sevenzip: Path) -> dict[str, str] | None
     return eligible
 
 
+def trusted_staged_source(path: Path) -> bool:
+    """Check staged PE bytes, not just presence, before reusing prior MZZ files.
+
+    Stage only from previously authenticated Microsoft installer archives;
+    never accept an arbitrary file just because it has a Framework DLL name.
+    """
+    if path.is_symlink():
+        return False
+    try:
+        if not path.is_file() or not 512 <= path.stat().st_size <= MAX_CLR:
+            return False
+        with path.open("rb") as stream:
+            return compatible_x64(stream.read(65536), allow_anycpu=True)
+    except OSError:
+        return False
+
+
 def stage_matching(root: Path, private: Path, sevenzip: Path) -> tuple[dict, dict[str, str]]:
     """Stage x64 matches, but do not replace runtime files or touch registry."""
     names = matching(root, private, sevenzip)
@@ -116,20 +134,25 @@ def stage_matching(root: Path, private: Path, sevenzip: Path) -> tuple[dict, dic
     if not names:
         result["status"] = "NO_MATCH"
         return result, {}
-    # Existing files may have been staged by the earlier core + direct import
-    # arms. Reuse those exact authenticated MZZ files rather than extracting
-    # them twice; replacement still uses ReversibleFramework hash validation.
+    # A previous narrow CLR arm may have written a file in this ephemeral
+    # directory. Presence alone never proves it is a complete x64/ILONLY
+    # original Microsoft payload. If a regular cached member is invalid,
+    # discard it and extract it afresh from the same authenticated MZZ.
+    # Refuse linked/nonregular source paths rather than following them.
     missing: list[str] = []
     for name in names.keys():
         prior = private / name
-        if prior.is_symlink():
+        if prior.is_symlink() or (prior.exists() and not prior.is_file()):
             result["status"] = "ERROR"
             return result, {}
-        if not prior.exists():
+        if not trusted_staged_source(prior):
+            if prior.exists():
+                try:
+                    prior.unlink()
+                except OSError:
+                    result["status"] = "ERROR"
+                    return result, {}
             missing.append(name)
-        elif not prior.is_file():
-            result["status"] = "ERROR"
-            return result, {}
     result["additional"] = len(missing)
     for start in range(0, len(missing), MAX_IMPORTS):
         batch = stage(private, sevenzip, missing[start:start + MAX_IMPORTS],
@@ -138,6 +161,13 @@ def stage_matching(root: Path, private: Path, sevenzip: Path) -> tuple[dict, dic
             result["status"] = "ERROR"
             return result, {}
         result["staged"] += batch["staged"]
+    # The staging helper's fixed-count report is necessary but insufficient:
+    # do not claim a coherent set unless every source actually exists and
+    # passes the same PE architecture bound as the replacement transaction.
+    if result["staged"] == result["additional"] and any(
+            not trusted_staged_source(private / name) for name in names):
+        result["status"] = "ERROR"
+        return result, {}
     result["status"] = ("STAGED" if result["additional"] == result["staged"]
                         else "INCOMPLETE")
     assert valid(result)
