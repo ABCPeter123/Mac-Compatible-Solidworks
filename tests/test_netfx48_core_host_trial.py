@@ -134,7 +134,8 @@ class CoreHostTrialTests(unittest.TestCase):
                 self.assertTrue(installer.is_absolute())
                 self.assertTrue(sevenzip.is_absolute())
                 return "NO_MZZ", None
-            def check_host(wine, prefix, fixture, managed, mode, *, precheck=False):
+            def check_host(wine, prefix, fixture, managed, mode, *,
+                           precheck=False, disable_native_images=False):
                 self.assertTrue(wine.is_absolute())
                 self.assertTrue(prefix.is_absolute())
                 self.assertTrue(fixture.is_absolute())
@@ -200,11 +201,15 @@ class CoreHostTrialTests(unittest.TestCase):
                     (private / name).write_bytes(pe(4))
                 return {"staged": len(names)}
 
-            def execute(wine, prefix, fixture, managed, mode, *, precheck=False):
+            def execute(wine, prefix, fixture, managed, mode, *,
+                        precheck=False, disable_native_images=False):
                 self.assertEqual(mode, "n")
                 if precheck:
                     return "PRECHECK_LOADABLE_NOT_STARTED"
                 clr = (root / "clr.dll").read_bytes()
+                if disable_native_images:
+                    return ("MANAGED_ORIGINAL_PASS" if clr == original
+                            else "HOST_START_E_FAIL")
                 calls.append(clr)
                 if clr == original:
                     return "MANAGED_ORIGINAL_PASS"
@@ -234,6 +239,12 @@ class CoreHostTrialTests(unittest.TestCase):
             self.assertEqual(report["extra_native"], "MANAGED_ORIGINAL_PASS")
             self.assertEqual(report["original48_extra_staged"], len(t.EXTRA_NATIVE))
             self.assertEqual(report["native40_after"], "MANAGED_ORIGINAL_PASS")
+            self.assertEqual(report["native40_zap_disabled_before"],
+                             "MANAGED_ORIGINAL_PASS")
+            self.assertEqual(report["original48_zap_disabled"],
+                             "HOST_START_E_FAIL")
+            self.assertEqual(report["native40_zap_disabled_after"],
+                             "MANAGED_ORIGINAL_PASS")
             self.assertEqual(report["native40_precheck_before"],
                              "PRECHECK_LOADABLE_NOT_STARTED")
             self.assertEqual(report["original48_precheck"],
