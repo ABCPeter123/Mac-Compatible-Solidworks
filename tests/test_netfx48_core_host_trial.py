@@ -306,6 +306,43 @@ class CoreHostTrialTests(unittest.TestCase):
             self.assertFalse((root / "mscoreei.dll").exists())
             self.assertFalse((root / "clrjit.dll").exists())
 
+    def test_signed_source_invariants_expose_only_fixed_categories(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            _, root = native_prefix(base)
+            private = base / "private"
+            private.mkdir()
+            source = private / "Fresh.dll"
+            source.write_bytes(pe(3))
+            self.assertIsNone(t.source_problem(source, "Fresh.dll", root))
+            # Windows DLL extensions can be mixed or uppercase.
+            self.assertIsNone(t.source_problem(source, "FRESH.DLL", root))
+            self.assertEqual(t.source_problem(source, "Other.dll", root),
+                             "COHERENCE_SOURCE_NAME")
+            self.assertEqual(t.source_problem(private / "Missing.dll",
+                                              "Missing.dll", root),
+                             "COHERENCE_SOURCE_MISSING")
+            folder = private / "Folder.dll"
+            folder.mkdir()
+            self.assertEqual(t.source_problem(folder, "Folder.dll", root),
+                             "COHERENCE_SOURCE_NOT_FILE")
+            linked = private / "Linked.dll"
+            linked.symlink_to(source)
+            self.assertEqual(t.source_problem(linked, "Linked.dll", root),
+                             "COHERENCE_SOURCE_LINKED")
+            too_small = private / "Small.dll"
+            too_small.write_bytes(b"MZ")
+            self.assertEqual(t.source_problem(too_small, "Small.dll", root),
+                             "COHERENCE_SOURCE_SIZE")
+            in_root = root / "Internal.dll"
+            in_root.write_bytes(pe(4))
+            self.assertEqual(t.source_problem(in_root, "Internal.dll", root),
+                             "COHERENCE_SOURCE_SCOPE")
+            self.assertTrue(all(
+                category in t.ERROR_PHASES
+                for category in t.SOURCE_PROBLEMS))
+            self.assertNotIn(str(base), str(t.SOURCE_PROBLEMS))
+
     def test_coherence_reuses_already_swapped_original_microsoft_components(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
@@ -413,7 +450,7 @@ class CoreHostTrialTests(unittest.TestCase):
                                    return_value=t.activation_blank()):
                 with self.assertRaisesRegex(ValueError, "Coherent source"):
                     t.trial(**args, progress=progress)
-            self.assertEqual(progress[0], "COHERENCE_INVALID_SOURCE")
+            self.assertEqual(progress[0], "COHERENCE_SOURCE_MISSING")
             self.assertEqual((root / "clr.dll").read_bytes(), original)
 
     def test_coherence_failures_are_private_and_preserve_original_files(self):
