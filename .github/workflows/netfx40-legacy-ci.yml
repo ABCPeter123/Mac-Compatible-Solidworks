@@ -791,6 +791,17 @@ jobs:
                           "original48_zap_disabled",
                           "native40_zap_disabled_after"):
                   out.write(key + ": **" + str(r[key]) + "**\n\n")
+              out.write("### Original Microsoft CLR activation log differential\n\n")
+              for variant in ("native40_activation_before",
+                              "original48_activation",
+                              "native40_activation_after"):
+                  a = r[variant]
+                  out.write("**" + variant + "**: " + a["status"] +
+                            " / host=" + a["host"] +
+                            " / files=" + str(a["file_count"]) + "\n\n")
+                  out.write("Positive event categories: **" +
+                            (",".join(k for k,v in a["flags"].items() if v)
+                             or "NONE") + "**\n\n")
               out.write("### Original 4.0 versus 4.8 CLR startup traces\n\n")
               for variant in ("native40_start_trace", "wine_start_trace"):
                   out.write("**" + variant + "**\n\n")
