@@ -319,7 +319,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
     }
     result["native48_candidate"] = (
         result["setup_profile_applied"] == "APPLIED"
-        and         (result["setup_profile"] == "WIN10" or result["win7"] == "APPLIED")
+        and (result["setup_profile"] == "WIN10" or result["win7"] == "APPLIED")
         and result["win10"] == "APPLIED"
         and result["setup"]["status"] == "EXIT_CAPTURED"
         and result["setup"]["category"] in {"SUCCESS", "REBOOT_REQUIRED"}
