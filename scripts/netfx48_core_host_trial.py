@@ -26,7 +26,6 @@ from scripts.netfx48_isolated_loader_trial import (
 )
 from scripts.netfx48_signed_mzz_dependency_staging import stage, valid as valid_stage
 from scripts.netfx4x_mzz_import_evidence import parse_pe, family
-from scripts.netfx481_payload_audit import pe_type
 from scripts.netfx481_trial import validate_prefix
 from scripts.netfx48_start_trace import (
     blank as trace_blank, valid as trace_valid, probe as trace_probe,
