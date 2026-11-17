@@ -53,6 +53,8 @@ class DirectNative48Tests(unittest.TestCase):
             mock.patch.object(p, "validate_prefix"),
             mock.patch.object(p, "verify_original_media"),
             mock.patch.object(p, "validate_native40", return_value=True),
+            mock.patch.object(p, "inspect_registrations", return_value={
+                "native64": "OLDER_RELEASE", "wow32": "AT_LEAST_481"}),
             mock.patch.object(p, "inventory_services", return_value={
                 "TrustedInstaller": "ABSENT", "msiserver": "PRESENT",
                 "wuauserv": "PRESENT", "BITS": "UNKNOWN"}),
@@ -86,6 +88,8 @@ class DirectNative48Tests(unittest.TestCase):
         self.assertTrue(result["primary_prerequisite"]["5100_in_log"])
         self.assertTrue(evidence.validate_secondary_report(result["secondary_evidence"]))
         self.assertEqual(result["service_prerequisites"]["TrustedInstaller"], "ABSENT")
+        self.assertEqual(result["registry_preflight"]["native64"], "OLDER_RELEASE")
+        self.assertEqual(result["registry_preflight"]["wow32"], "AT_LEAST_481")
         self.assertTrue(p.valid_services(result["service_prerequisites"]))
         self.assertTrue(started.call_args.kwargs["fusion_builtin"])
         self.assertNotIn(str(root), str(result))
