@@ -96,7 +96,7 @@ def mzz_member_variants(raw: bytes) -> dict[str, tuple[str, ...]]:
     Never trust the first basename match without a strict native x64/ILONLY
     AnyCPU PE verification after extraction.
     """
-    if not raw or len(raw) > MAX_LIST or b"\\x00" in raw:
+    if not raw or len(raw) > MAX_LIST or b"\x00" in raw:
         return {}
     try:
         lines = raw.decode("utf-8-sig").splitlines()
@@ -118,7 +118,7 @@ def mzz_member_variants(raw: bytes) -> dict[str, tuple[str, ...]]:
         if count > MAX_MEMBERS:
             return {}
         value = match.group(1).strip()
-        base = value.replace("\\\\", "/").rsplit("/", 1)[-1]
+        base = value.replace("\\", "/").rsplit("/", 1)[-1]
         if len(base) > 128 or not re.fullmatch(r"[a-zA-Z0-9_.-]{1,128}", base):
             continue
         key = base.casefold()
