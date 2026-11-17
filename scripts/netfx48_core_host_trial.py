@@ -173,7 +173,21 @@ class ReversibleFramework:
             if not compatible_x64(stream.read(65536),
                                   allow_anycpu=allow_managed_anycpu):
                 raise ValueError("Original signed payload is not x64-compatible")
-        target = self.root / name
+        # Original .NET Framework names use Windows casing (System.Core.dll),
+        # while earlier signed MZZ arms use lowercase names. On default macOS
+        # APFS those resolve to one file. Normalize to its actual directory
+        # entry before looking up saved backups, so a second casing cannot
+        # cause a backup collision or hide a modified runtime file.
+        peers = [entry for entry in self.root.iterdir()
+                 if entry.name.casefold() == name.casefold()]
+        if len(peers) > 1:
+            # Never select one of multiple distinct case-sensitive files.
+            raise ValueError("Ambiguous original runtime target casing")
+        if peers:
+            target = peers[0]
+            name = target.name
+        else:
+            target = self.root / name
         if target.is_symlink() or (target.exists() and not target.is_file()):
             raise ValueError("Unsafe original Wine runtime target")
         if name not in self.saved:
