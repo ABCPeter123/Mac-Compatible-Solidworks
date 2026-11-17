@@ -801,12 +801,6 @@ jobs:
                       out.write(category + ": **" +
                                 ",".join(k for k, v in r[variant][category].items() if v) +
                                 "**\n\n")
-              out.write("### Sanitized original CLR startup trace\n\n")
-              for key in ("status", "host", "process", "trace",
-                          "module_missing", "export_missing", "seh_exception",
-                          "unimplemented_api", "native_clr_seen",
-                          "native_mscoree_seen", "native_mscoreei_seen"):
-                  out.write(key + ": **" + str(r["wine_start_trace"][key]) + "**\n\n")
           PY
       - name: Reject combining host-provenance-only with any 4.8 installer experiment
         if: inputs.host_provenance_only && (inputs.try_48_intermediate || inputs.try_48_direct)
