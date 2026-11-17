@@ -113,7 +113,7 @@ def blank() -> dict:
         "service_api": blank_scm(),
         "registry_preflight": blank_registrations(),
         "wine_mono_registration": "NOT_RUN",
-        "setup_profile": "NOT_RUN",
+        "setup_profile": "NOT_RUN", "setup_profile_applied": "NOT_RUN",
         "win7": "NOT_RUN", "win10": "NOT_RUN",
         "setup": blank_launch(), "setup_evidence": dict(SETUP_EVIDENCE),
         "secondary_evidence": None,
@@ -141,6 +141,7 @@ def validate(report: object) -> bool:
             or not validate_launch(report["setup"])
             or report["win7"] not in PROFILES or report["win10"] not in PROFILES
             or report["setup_profile"] not in {"NOT_RUN", "WIN7", "WIN10"}
+            or report["setup_profile_applied"] not in PROFILES
             or report["restart"] not in RESTARTS
             or report["release"] not in RELEASE
             or report["loader"] not in LOAD_STATES | {"NOT_VERIFIED"}
@@ -174,6 +175,7 @@ def validate(report: object) -> bool:
                     or report["restart"] == "COMPLETED")
                and report["setup"]["child_exit"] != "NONZERO")
     ready = (report["native40_persistent"]
+             and report["setup_profile_applied"] == "APPLIED"
              and (report["setup_profile"] == "WIN10"
                   or report["win7"] == "APPLIED")
              and report["win10"] == "APPLIED"
@@ -303,6 +305,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
         "registry_preflight": registrations,
         "wine_mono_registration": mono_registration,
         "setup_profile": setup_profile.upper(),
+        "setup_profile_applied": profile_applied,
         "win7": win7, "win10": win10, "setup": setup,
         "setup_evidence": evidence, "secondary_evidence": secondary,
         "primary_prerequisite": primary, "restart": restart,
@@ -315,7 +318,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
         "solidworks_compatibility": "NOT_DEMONSTRATED",
     }
     result["native48_candidate"] = (
-        (result["setup_profile"] == "WIN10" or result["win7"] == "APPLIED")
+        result["setup_profile_applied"] == "APPLIED"
+        and         (result["setup_profile"] == "WIN10" or result["win7"] == "APPLIED")
         and result["win10"] == "APPLIED"
         and result["setup"]["status"] == "EXIT_CAPTURED"
         and result["setup"]["category"] in {"SUCCESS", "REBOOT_REQUIRED"}
