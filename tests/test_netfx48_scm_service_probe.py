@@ -40,16 +40,30 @@ class NativeSCMProbeTests(unittest.TestCase):
             packet().replace(b"TRUSTEDINSTALLER=", b"TRUSTEDINSTALLER=PRIVATE"),
             packet().replace(b"MSISERVER=", b"OTHERSERVICE="),
             packet() + b"\x00",
-            packet() + b"x" * 513,
             b"\xff" + packet(),
         )
         for value in variants:
             with self.subTest(value=value[:50]):
                 self.assertEqual(scm.parse(value, 0), scm.blank("MALFORMED"))
-        self.assertEqual(scm.parse(packet(), 5), scm.blank("MALFORMED"))
+        self.assertEqual(scm.parse(packet(), 5), scm.blank("NONZERO_EXIT"))
+        self.assertEqual(scm.parse(b"", 0), scm.blank("EMPTY_OUTPUT"))
+        self.assertEqual(scm.parse(packet() + b"x" * 513, 0),
+                         scm.blank("OVERSIZED_OUTPUT"))
         self.assertFalse(scm.valid(dict(scm.blank(), original_log="secret")))
         self.assertFalse(scm.valid(dict(scm.blank(), services={
             **scm.blank()["services"], "TRUSTEDINSTALLER": "private path"})))
+
+    def test_finite_failure_categories_never_invent_service_presence(self):
+        for status in ("NONZERO_EXIT", "EMPTY_OUTPUT", "OVERSIZED_OUTPUT",
+                       "MALFORMED", "TIMEOUT", "PROCESS_FAILED"):
+            with self.subTest(status=status):
+                outcome = scm.blank(status)
+                self.assertTrue(scm.valid(outcome))
+                self.assertTrue(all(v == "NOT_RUN"
+                                    for v in outcome["services"].values()))
+                modified = dict(outcome, services={**outcome["services"],
+                                                  "TRUSTEDINSTALLER": "ABSENT"})
+                self.assertFalse(scm.valid(modified))
 
     def test_unavailable_manager_never_invents_present(self):
         unavailable = scm.parse(packet(
