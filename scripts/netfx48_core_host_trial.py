@@ -149,7 +149,8 @@ def valid(value: object) -> bool:
             or (value["clr_crt_host"] != "NOT_RUN" and (
                 value["coherent_host"] != "HOST_START_E_FAIL"
                 or value["clr_crt_staging"]["staged"] == 0
-                or value["clr_crt_staging"]["staged"] != len(CLR_CRT)))
+                or value["clr_crt_staging"]["staged"]
+                   != value["clr_crt_staging"]["missing_requested"]))
             or any(not activation_valid(value[name]) for name in (
                 "native40_activation_before", "original48_activation",
                 "native40_activation_after"))
