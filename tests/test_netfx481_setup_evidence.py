@@ -295,6 +295,52 @@ class NetFxSetupEvidenceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 evidence.scan_secondary_logs(prefix, baseline=before, family="UNTRUSTED")
 
+    def test_stage_rejects_stale_481_and_changed_other_framework_logs(self):
+        with tempfile.TemporaryDirectory() as td:
+            prefix = Path(td)
+            (prefix / "drive_c").mkdir()
+            (prefix / "system.reg").write_text("")
+            (prefix / trial.SENTINEL).write_text("")
+            local = prefix / "drive_c" / "users" / "runner" / "AppData" / "Local" / "Temp"
+            local.mkdir(parents=True)
+            stale = local / "dd_ndp481_stale.log"
+            stale.write_bytes(
+                b"OS Version = 6.1.7601\\n"
+                b"Error: OS version is unsupported, StopBlock 5100\\n"
+                b"Secret=stale-only\\n")
+            other = local / "dd_ndp48_modified.log"
+            other.write_bytes(b"Prior framework log\\n")
+            generic = local / "dd_generic_changed.log"
+            generic.write_bytes(b"Prior generic log\\n")
+            baseline = evidence.snapshot_secondary_logs(prefix)
+
+            # Simulate .NET 4.8 activity in the wrong-family file during
+            # the .NET 4.8.1 run, while a generic log also changes.
+            other.write_bytes(b"Error: pending reboot required\\nSecret=other-only\\n")
+            generic.write_bytes(b"Windows Update Service is not available\\n")
+            fresh = local / "dd_ndp481_fresh.log"
+            fresh.write_bytes(
+                b"OS Version = 10.0.19045\\n"
+                b"Error: missing update KB2919355\\nSecret=fresh-only\\n")
+            result = evidence.scan_secondary_logs(
+                prefix, baseline=baseline, family="NETFX481")
+            self.assertTrue(evidence.validate_secondary_report(result))
+            self.assertEqual(result["files_scanned"], 4)
+            self.assertEqual(result["prerequisite_files"], 1)
+            self.assertEqual(result["stage_files"], 2)
+            self.assertEqual(result["prerequisite"]["os_versions"],
+                             ["WINDOWS_10_SUPPORTED"])
+            self.assertEqual(result["prerequisite"]["blockers"],
+                             ["MISSING_UPDATE_BLOCK"])
+            self.assertNotIn("OS_VERSION_BLOCK",
+                             result["stage_prerequisite"]["blockers"])
+            self.assertNotIn("PENDING_REBOOT_BLOCK",
+                             result["stage_prerequisite"]["blockers"])
+            self.assertIn("WINDOWS_UPDATE_BLOCK",
+                          result["stage_prerequisite"]["blockers"])
+            for secret in ("stale-only", "other-only", "fresh-only", "runner"):
+                self.assertNotIn(secret, json.dumps(result))
+
     def test_stage_snapshot_rejects_limits_and_symlink_roots(self):
         with tempfile.TemporaryDirectory() as td:
             prefix = Path(td) / "prefix"
