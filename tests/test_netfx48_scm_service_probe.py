@@ -34,16 +34,16 @@ class NativeSCMProbeTests(unittest.TestCase):
 
     def test_exact_schema_and_private_text_fail_closed(self):
         variants = (
-            (packet() + b"PRIVATE=C:\\Users\\secret\\n", "UNEXPECTED_TEXT"),
+            (packet() + b"PRIVATE=C:\\Users\\secret\n", "UNEXPECTED_TEXT"),
             (packet() + packet(), "INVALID_FIELD"),
             (packet().replace(b"SCHEMA=1", b"SCHEMA=2"), "MALFORMED"),
             (packet().replace(b"TRUSTEDINSTALLER=", b"TRUSTEDINSTALLER=PRIVATE"),
              "MALFORMED"),
             (packet().replace(b"MSISERVER=", b"OTHERSERVICE="), "INVALID_FIELD"),
-            (packet().replace(b"SWCOMPAT_SCM_API_BITS=PRESENT\\n", b""),
+            (packet().replace(b"SWCOMPAT_SCM_API_BITS=PRESENT\n", b""),
              "INCOMPLETE_FIELDS"),
-            (packet() + b"\\x00", "MALFORMED"),
-            (b"\\xff" + packet(), "NONASCII_OUTPUT"),
+            (packet() + b"\x00", "MALFORMED"),
+            (b"\xff" + packet(), "NONASCII_OUTPUT"),
         )
         for value, expected in variants:
             with self.subTest(category=expected, value=value[:50]):
