@@ -19,7 +19,12 @@ on:
         required: false
         default: false
       host_provenance_only:
-        description: 'Authenticate and test genuine .NET 4.0 hosting, without .NET 4.8'
+        description: 'Authenticate genuine .NET 4.0 host; skip 4.8/4.8.1 installers'
+        type: boolean
+        required: false
+        default: false
+      try_48_payload_host:
+        description: 'Test signed original 4.8 runtime payload in disposable native 4.0 prefix; no installer'
         type: boolean
         required: false
         default: false
@@ -36,7 +41,12 @@ on:
         required: false
         default: false
       host_provenance_only:
-        description: 'Only authenticate and test genuine Microsoft .NET 4.0 CLR hosting after msxml3; skip 4.8 and 4.8.1'
+        description: 'Authenticate Microsoft .NET 4.0 CLR hosting after msxml3; skip 4.8 and 4.8.1 installers'
+        type: boolean
+        required: false
+        default: false
+      try_48_payload_host:
+        description: 'Reversibly stage original signed 4.8 CLR payload in proven native 4.0 Wine; no 4.8 setup'
         type: boolean
         required: false
         default: false
@@ -66,6 +76,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_restart.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_native_mscoree_provenance.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_host_api_diagnostic.py' -v
+          python -m unittest discover -s tests -p 'test_netfx48_core_host_trial.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_to_481_upgrade.py' -v
           python -m unittest discover -s tests -p 'test_netfx481_prereq_diagnostic.py' -v
           python -m unittest discover -s tests -p 'test_netfx4x_authenticated_media_fetch.py' -v
@@ -281,7 +292,7 @@ jobs:
             Set-Content -LiteralPath build/netfx481.sha256 -NoNewline -Encoding ascii
           Write-Output "Verified signed official .NET 4.8.1 in-place upgrade package"
       - name: Download and authenticate original signed Microsoft .NET Framework 4.8 intermediate
-        if: inputs.try_48_direct && !inputs.host_provenance_only
+        if: (inputs.try_48_direct && !inputs.host_provenance_only) || inputs.try_48_payload_host
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -570,18 +581,24 @@ jobs:
         with:
           name: self-authored-netfx40-probes-and-signed-digests
           path: build
+      - name: Reject payload-only mode outside native 4.0 host-only trial
+        if: inputs.try_48_payload_host && (!inputs.host_provenance_only || inputs.try_48_direct || inputs.try_48_intermediate)
+        run: |
+          echo "Original .NET 4.8 payload-host trial requires host-only and forbids all installer trials."
+          exit 1
       - name: Fetch selected Microsoft media privately using Windows authenticated SHA256
         shell: bash
         env:
           SWCOMPAT_PROVENANCE_ONLY: ${{ inputs.host_provenance_only }}
           SWCOMPAT_DIRECT_48: ${{ inputs.try_48_direct }}
+          SWCOMPAT_PAYLOAD_48: ${{ inputs.try_48_payload_host }}
         run: |
           set -euo pipefail
           versions=(--version 40)
           if [ "$SWCOMPAT_PROVENANCE_ONLY" != "true" ]; then
             versions+=(--version 481)
           fi
-          if [ "$SWCOMPAT_DIRECT_48" = "true" ]; then
+          if [ "$SWCOMPAT_DIRECT_48" = "true" ] || [ "$SWCOMPAT_PAYLOAD_48" = "true" ]; then
             versions+=(--version 48)
           fi
           python3 -m scripts.netfx4x_authenticated_media_fetch "${versions[@]}"
@@ -728,6 +745,45 @@ jobs:
               out.write("## Genuine installed .NET 4.0 public CLR hosting API\n\n")
               for field in ("native", "builtin", "native_managed_pass"):
                   out.write(field + ": **" + str(r[field]) + "**\n\n")
+          PY
+      - name: Reversibly test authenticated original .NET 4.8 CLR payload on native 4.0 host
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_48_payload_host
+        shell: bash
+        run: |
+          set -euo pipefail
+          SEVENZIP="$(command -v 7zz || command -v 7z || true)"
+          if [ -z "$SEVENZIP" ]; then
+            brew install sevenzip
+            SEVENZIP="$(command -v 7zz || command -v 7z || true)"
+          fi
+          test -n "$SEVENZIP" && test -x "$SEVENZIP"
+          python3 -m scripts.netfx48_core_host_trial \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --installer build/NDP48-x86-x64-AllOS-ENU.exe \
+            --signed-sha256 "$(cat build/netfx48.sha256)" \
+            --sevenzip "$SEVENZIP" \
+            --fixture build/netfx48_host_activation.exe \
+            --managed build/netfx48_managed_host_check.dll \
+            --restart build/netfx40-msxml3-restart.json \
+            --host build/netfx40-public-host-api.json \
+            --output build/netfx48-core-host-categories.json \
+            --agree-disposable-prefix
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx48_core_host_trial import valid
+          r = json.loads(Path("build/netfx48-core-host-categories.json").read_text())
+          assert valid(r)
+          assert r["original48_sha256_verified"]
+          assert r["framework48_installed"] is False
+          assert r["framework481_installed"] is False
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write("## Authenticated 4.8 CLR payload on genuine 4.0 Wine host (not installed)\n\n")
+              for key in ("status", "native40_before", "original48_clr",
+                          "clr_only", "clr_and_mscorlib", "additional_core",
+                          "native40_after", "original40_restored"):
+                  out.write(key + ": **" + str(r[key]) + "**\n\n")
           PY
       - name: Reject combining host-provenance-only with any 4.8 installer experiment
         if: inputs.host_provenance_only && (inputs.try_48_intermediate || inputs.try_48_direct)
@@ -1005,6 +1061,7 @@ jobs:
             build/netfx40-msxml3-restart.json
             build/netfx40-mscoree-provenance.json
             build/netfx40-public-host-api.json
+            build/netfx48-core-host-categories.json
             build/netfx40-to-48-intermediate.json
             build/netfx40-to-48-direct.json
             build/netfx481-disk-before-upgrade.json
@@ -1016,6 +1073,7 @@ jobs:
         if: always()
         env:
           SWCOMPAT_PROVENANCE_ONLY: ${{ inputs.host_provenance_only }}
+          SWCOMPAT_PAYLOAD_48: ${{ inputs.try_48_payload_host }}
         shell: bash
         run: |
           python3 - <<'PY'
@@ -1058,6 +1116,16 @@ jobs:
                   assert provenance_path.is_file(), "Original CLR DLL provenance evidence missing"
                   provenance = json.loads(provenance_path.read_text(encoding="ascii"))
                   assert provenance_valid(provenance) and provenance["status"] == "MEASURED"
+                  payload_requested = os.environ.get("SWCOMPAT_PAYLOAD_48") == "true"
+                  payload_path = Path("build/netfx48-core-host-categories.json")
+                  assert payload_path.is_file() == payload_requested, (
+                      "Requested original 4.8 CLR payload-host test missing")
+                  if payload_requested:
+                      from scripts.netfx48_core_host_trial import valid as payload_valid
+                      payload = json.loads(payload_path.read_text(encoding="ascii"))
+                      assert payload_valid(payload) and payload["original48_sha256_verified"]
+                      assert payload["framework48_installed"] is False
+                      assert payload["framework481_installed"] is False
                   host_only = os.environ.get("SWCOMPAT_PROVENANCE_ONLY") == "true"
                   from scripts.netfx40_to_481_upgrade import validate as upgrade_valid
                   intermediate_path = Path("build/netfx40-to-48-intermediate.json")
