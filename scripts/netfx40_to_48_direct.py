@@ -42,6 +42,7 @@ from scripts.netfx481_win32_exit import (
 
 STATUSES = {"NOT_ELIGIBLE", "MEASURED"}
 PROFILES = {"NOT_RUN", "APPLIED", "FAILED"}
+SETUP_PROFILES = {"win7", "win10"}
 RESTARTS = {"NOT_RUN", "COMPLETED", "TIMED_OUT", "START_FAILED",
             "EXIT_NONZERO", "SKIPPED_CHILD_UNVERIFIED"}
 SETUP_EVIDENCE = {"status": "NOT_REQUESTED", "phase": "UNKNOWN", "codes": []}
@@ -112,6 +113,7 @@ def blank() -> dict:
         "service_api": blank_scm(),
         "registry_preflight": blank_registrations(),
         "wine_mono_registration": "NOT_RUN",
+        "setup_profile": "NOT_RUN",
         "win7": "NOT_RUN", "win10": "NOT_RUN",
         "setup": blank_launch(), "setup_evidence": dict(SETUP_EVIDENCE),
         "secondary_evidence": None,
@@ -138,6 +140,7 @@ def validate(report: object) -> bool:
     if (report["status"] not in STATUSES
             or not validate_launch(report["setup"])
             or report["win7"] not in PROFILES or report["win10"] not in PROFILES
+            or report["setup_profile"] not in {"NOT_RUN", "WIN7", "WIN10"}
             or report["restart"] not in RESTARTS
             or report["release"] not in RELEASE
             or report["loader"] not in LOAD_STATES | {"NOT_VERIFIED"}
@@ -161,6 +164,9 @@ def validate(report: object) -> bool:
         return False
     if report["status"] == "NOT_ELIGIBLE":
         return report == blank()
+    if (report["setup_profile"] == "NOT_RUN"
+            or (report["setup_profile"] == "WIN10" and report["win7"] != "NOT_RUN")):
+        return False
     exit_ok = (report["setup"]["status"] == "EXIT_CAPTURED"
                and report["setup"]["category"] in {"SUCCESS", "REBOOT_REQUIRED"}
                and report["setup"]["child_lifecycle"] in {"ALL_EXITED", "NOT_OBSERVED"}
@@ -168,7 +174,9 @@ def validate(report: object) -> bool:
                     or report["restart"] == "COMPLETED")
                and report["setup"]["child_exit"] != "NONZERO")
     ready = (report["native40_persistent"]
-             and report["win7"] == "APPLIED" and report["win10"] == "APPLIED"
+             and (report["setup_profile"] == "WIN10"
+                  or report["win7"] == "APPLIED")
+             and report["win10"] == "APPLIED"
              and exit_ok and report["clr64_changed"]
              and report["release"] == "NETFX48_RANGE"
              and report["loader"] == "LOADED"
@@ -210,7 +218,10 @@ def private_setup_log(prefix: Path) -> Path:
 
 def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
             launcher: Path, loader: Path, managed: Path, native40: dict,
-            service_fixture: Path | None = None) -> dict:
+            service_fixture: Path | None = None, *,
+            setup_profile: str = "win7") -> dict:
+    if setup_profile not in SETUP_PROFILES:
+        raise ValueError("Only supported original Microsoft 4.8 OS profiles allowed")
     if os.name == "nt" or any(p.is_symlink() for p in (
             wine, prefix, installer, digest_file, launcher, loader, managed)):
         raise ValueError("Only explicit disposable Wine experiments allowed")
@@ -242,14 +253,15 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
     service_api = (measure_scm(wine, prefix, service_fixture)
                    if service_fixture is not None else blank_scm())
     env = _env(wine, prefix)
-    win7 = _set_winver(wine, prefix, env, "win7")
+    profile_applied = _set_winver(wine, prefix, env, setup_profile)
+    win7 = profile_applied if setup_profile == "win7" else "NOT_RUN"
     setup = blank_launch()
     evidence = dict(SETUP_EVIDENCE)
     secondary = None
     primary = empty_prerequisite()
     restart = "NOT_RUN"
     try:
-        if win7 == "APPLIED":
+        if profile_applied == "APPLIED":
             log = private_setup_log(prefix)
             # Snapshot before setup. Previous .NET 4.0 / msxml3 logs cannot
             # be attributed to the signed .NET 4.8 installer.
@@ -290,6 +302,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
         "service_api": service_api,
         "registry_preflight": registrations,
         "wine_mono_registration": mono_registration,
+        "setup_profile": setup_profile.upper(),
         "win7": win7, "win10": win10, "setup": setup,
         "setup_evidence": evidence, "secondary_evidence": secondary,
         "primary_prerequisite": primary, "restart": restart,
@@ -302,7 +315,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
         "solidworks_compatibility": "NOT_DEMONSTRATED",
     }
     result["native48_candidate"] = (
-        result["win7"] == "APPLIED" and result["win10"] == "APPLIED"
+        (result["setup_profile"] == "WIN10" or result["win7"] == "APPLIED")
+        and result["win10"] == "APPLIED"
         and result["setup"]["status"] == "EXIT_CAPTURED"
         and result["setup"]["category"] in {"SUCCESS", "REBOOT_REQUIRED"}
         and result["setup"]["child_lifecycle"] in {"ALL_EXITED", "NOT_OBSERVED"}
@@ -324,12 +338,13 @@ def main(argv: list[str] | None = None) -> int:
                 "managed", "native40-report", "output"):
         ap.add_argument("--" + key, type=Path, required=True)
     ap.add_argument("--service-fixture", type=Path, required=True)
+    ap.add_argument("--setup-profile", choices=sorted(SETUP_PROFILES), default="win7")
     ap.add_argument("--agree-disposable-prefix", action="store_true", required=True)
     args = ap.parse_args(argv)
     prior = json.loads(args.native40_report.read_text(encoding="ascii"))
     result = inspect(args.wine, args.prefix, args.installer, args.sha256_file,
                      args.launcher, args.loader, args.managed, prior,
-                     args.service_fixture)
+                     args.service_fixture, setup_profile=args.setup_profile)
     if not validate(result) or args.output.is_symlink():
         raise ValueError("Unverified original Microsoft .NET 4.8 outcome")
     args.output.parent.mkdir(parents=True, exist_ok=True)
