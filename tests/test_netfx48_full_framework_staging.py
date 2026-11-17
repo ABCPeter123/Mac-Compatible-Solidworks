@@ -1,6 +1,7 @@
 """Synthetic original-MZZ runtime coherence, privacy and boundedness tests."""
 from pathlib import Path
 import json
+import struct
 import tempfile
 import unittest
 from unittest import mock
@@ -95,6 +96,8 @@ class CoherentRuntimeTests(unittest.TestCase):
             root, private, reader = fixture(Path(td))
             (root / "System.dll").write_bytes(b"old")
             (root / "system.dll").write_bytes(b"old")
+            if len(list(root.iterdir())) == 1:
+                self.skipTest("Host filesystem is case-insensitive")
             data = listing("system_dll_amd64")
             def fake(argv, **kwargs):
                 kwargs["stdout"].write(data)
@@ -112,14 +115,20 @@ class CoherentRuntimeTests(unittest.TestCase):
         # while MZZ extraction normalizes archive names to lowercase.
         with tempfile.TemporaryDirectory() as td:
             root, private, reader = fixture(Path(td))
-            (root / "System.Core.dll").write_bytes(core.pe_type.__name__.encode())
+            (root / "System.Core.dll").write_bytes(b"original 4.0")
             source = private / "system.core.dll"
-            from tests.test_netfx48_core_host_trial import pe
-            source.write_bytes(pe(7))
+            data = bytearray(8192)
+            data[:2] = b"MZ"
+            struct.pack_into("<I", data, 0x3c, 0x80)
+            data[0x80:0x84] = b"PE\x00\x00"
+            struct.pack_into("<H", data, 0x84, 0x8664)
+            struct.pack_into("<H", data, 0x94, 240)
+            struct.pack_into("<H", data, 0x98, 0x20b)
+            source.write_bytes(data)
             before = (root / "System.Core.dll").read_bytes()
             swap = core.ReversibleFramework(root, private)
             swap.replace(source, "System.Core.dll")
-            self.assertEqual((root / "System.Core.dll").read_bytes(), pe(7))
+            self.assertEqual((root / "System.Core.dll").read_bytes(), bytes(data))
             swap.restore()
             self.assertEqual((root / "System.Core.dll").read_bytes(), before)
 
