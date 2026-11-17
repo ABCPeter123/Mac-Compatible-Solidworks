@@ -101,6 +101,10 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx40_wine_msi_errors.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msi_custom_type.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msi_logging_policy.py' -v
+          python -m unittest discover -s tests -p 'test_netfx48_direct_workflow_shell.py' -v
+          python -m unittest discover -s tests -p 'test_netfx48_registry_preflight.py' -v
+          python -m unittest discover -s tests -p 'test_netfx48_scm_service_probe.py' -v
+          python -m unittest discover -s tests -p 'test_netfx40_to_48_direct.py' -v
 
   authentic-netfx40-windows:
     name: Authenticate original Microsoft .NET 4.0 and compile CLR probes
@@ -1086,6 +1090,9 @@ jobs:
                   from scripts.netfx40_to_48_direct import SERVICE_NAMES
                   for service in SERVICE_NAMES:
                       out.write(f"original_direct_48_service_{service}: **{measured['service_prerequisites'][service]}**\n\n")
+                  from scripts.netfx48_registry_preflight import KEYS
+                  for view in KEYS:
+                      out.write(f"original_direct_48_release_preflight_{view}: **{measured['registry_preflight'][view]}**\n\n")
                   from scripts.netfx48_scm_service_probe import FIELDS
                   assert measured["service_api"]["status"] in {
                       "COMPLETE", "UNAVAILABLE", "TIMEOUT", "PROCESS_FAILED", "MALFORMED"}
