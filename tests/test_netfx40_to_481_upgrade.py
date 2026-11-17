@@ -123,7 +123,7 @@ class NativeUpgradeTests(unittest.TestCase):
             args = self._fixture(Path(td))
             evidence = {"status": "CLASSIFIED", "phase": "PREREQUISITE",
                         "codes": []}
-            original = {**self._setup(), "category": "OTHER",
+            original = {**self._setup(), "category": "PREREQUISITE_BLOCK_5100",
                         "exit_hex": "000013EC", "child_exit": "NONZERO"}
             with (mock.patch.object(upgrade, "_wine_host", return_value=True),
                   mock.patch.object(upgrade, "validate_prefix"),
