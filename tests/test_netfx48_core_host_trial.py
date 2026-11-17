@@ -306,6 +306,116 @@ class CoreHostTrialTests(unittest.TestCase):
             self.assertFalse((root / "mscoreei.dll").exists())
             self.assertFalse((root / "clrjit.dll").exists())
 
+    def test_coherence_reuses_already_swapped_original_microsoft_components(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            prefix, root = native_prefix(base)
+            original = (root / "clr.dll").read_bytes()
+            original_lib = (root / "mscorlib.dll").read_bytes()
+            (root / "Fresh.dll").write_bytes(pe(8))
+            args = self._args(base, prefix)
+            swapped: list[str] = []
+            real_replace = t.ReversibleFramework.replace
+
+            def spy(self, source, name, *, allow_managed_anycpu=False):
+                swapped.append(name.casefold())
+                return real_replace(self, source, name,
+                                    allow_managed_anycpu=allow_managed_anycpu)
+
+            def extract(installer, sevenzip, private):
+                (private / "archives").mkdir()
+                (private / "clr.dll").write_bytes(pe(3))
+                return "PE_AMD64", private / "clr.dll"
+
+            def stage(private, sevenzip, names, **kwargs):
+                for name in names:
+                    (private / name).write_bytes(pe(4))
+                return {"staged": len(names)}
+
+            def coherence(root, private, sevenzip):
+                (private / "fresh.dll").write_bytes(pe(5))
+                return (
+                    dict(t.coherent_blank(), status="STAGED", candidates=3,
+                         additional=1, staged=1),
+                    {"mscorlib.dll": "mscorlib.dll",
+                     "clrjit.dll": "clrjit.dll",
+                     "fresh.dll": "Fresh.dll"},
+                )
+
+            with mock.patch.object(t, "validate_prefix"), \
+                 mock.patch.object(t, "valid_restart", return_value=True), \
+                 mock.patch.object(t, "valid_host", return_value=True), \
+                 mock.patch.object(t, "verify_original"), \
+                 mock.patch.object(t, "host_execute",
+                                   return_value="MANAGED_ORIGINAL_PASS"), \
+                 mock.patch.object(t, "extract_clr", side_effect=extract), \
+                 mock.patch.object(t, "parse_pe", return_value={
+                     "pe": "PE_AMD64", "import_table": "READABLE"}), \
+                 mock.patch.object(t, "stage", side_effect=stage), \
+                 mock.patch.object(t, "stage_matching", side_effect=coherence), \
+                 mock.patch.object(t, "valid_stage", return_value=True), \
+                 mock.patch.object(t, "trace_probe",
+                                   return_value=t.trace_blank()), \
+                 mock.patch.object(t, "activation_probe",
+                                   return_value=t.activation_blank()), \
+                 mock.patch.object(t.ReversibleFramework, "replace", spy):
+                report = t.trial(**args)
+            self.assertTrue(t.valid(report))
+            self.assertEqual(report["coherent_host"], "MANAGED_ORIGINAL_PASS")
+            self.assertEqual(swapped.count("mscorlib.dll"), 1)
+            self.assertEqual(swapped.count("clrjit.dll"), 1)
+            self.assertEqual(swapped.count("fresh.dll"), 1)
+            self.assertEqual((root / "clr.dll").read_bytes(), original)
+            self.assertEqual((root / "mscorlib.dll").read_bytes(), original_lib)
+            self.assertEqual((root / "Fresh.dll").read_bytes(), pe(8))
+            self.assertFalse((root / "clrjit.dll").exists())
+
+    def test_coherence_rejects_missing_signed_source_instead_of_hosting_partial_set(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            prefix, root = native_prefix(base)
+            args = self._args(base, prefix)
+            original = (root / "clr.dll").read_bytes()
+            progress = ["INPUT"]
+
+            def extract(installer, sevenzip, private):
+                (private / "archives").mkdir()
+                (private / "clr.dll").write_bytes(pe(3))
+                return "PE_AMD64", private / "clr.dll"
+
+            def stage(private, sevenzip, names, **kwargs):
+                for name in names:
+                    (private / name).write_bytes(pe(4))
+                return {"staged": len(names)}
+
+            def coherence(root, private, sevenzip):
+                return (
+                    dict(t.coherent_blank(), status="STAGED", candidates=1,
+                         additional=1, staged=1),
+                    {"missing.dll": "Missing.dll"},
+                )
+
+            with mock.patch.object(t, "validate_prefix"), \
+                 mock.patch.object(t, "valid_restart", return_value=True), \
+                 mock.patch.object(t, "valid_host", return_value=True), \
+                 mock.patch.object(t, "verify_original"), \
+                 mock.patch.object(t, "host_execute",
+                                   return_value="MANAGED_ORIGINAL_PASS"), \
+                 mock.patch.object(t, "extract_clr", side_effect=extract), \
+                 mock.patch.object(t, "parse_pe", return_value={
+                     "pe": "PE_AMD64", "import_table": "READABLE"}), \
+                 mock.patch.object(t, "stage", side_effect=stage), \
+                 mock.patch.object(t, "stage_matching", side_effect=coherence), \
+                 mock.patch.object(t, "valid_stage", return_value=True), \
+                 mock.patch.object(t, "trace_probe",
+                                   return_value=t.trace_blank()), \
+                 mock.patch.object(t, "activation_probe",
+                                   return_value=t.activation_blank()):
+                with self.assertRaisesRegex(ValueError, "Coherent source"):
+                    t.trial(**args, progress=progress)
+            self.assertEqual(progress[0], "COHERENCE_INVALID_SOURCE")
+            self.assertEqual((root / "clr.dll").read_bytes(), original)
+
     def test_coherence_failures_are_private_and_preserve_original_files(self):
         for message, expected in (
             ("Backup collision", "COHERENCE_BACKUP_COLLISION"),
@@ -333,11 +443,11 @@ class CoreHostTrialTests(unittest.TestCase):
                     return {"staged": len(names)}
 
                 def matching(root, private, sevenzip):
-                    (private / "system.core.dll").write_bytes(pe(5))
+                    (private / "fresh.dll").write_bytes(pe(5))
                     return (
                         dict(t.coherent_blank(), status="STAGED", candidates=1,
-                             additional=0, staged=0),
-                        {"system.core.dll": "System.Core.dll"},
+                             additional=1, staged=1),
+                        {"fresh.dll": "Fresh.dll"},
                     )
 
                 original_replace = t.ReversibleFramework.replace
