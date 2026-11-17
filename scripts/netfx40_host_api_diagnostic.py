@@ -81,13 +81,19 @@ def classify(raw: bytes, code: int) -> str:
 
 
 def execute(wine: Path, prefix: Path, fixture: Path, managed: Path,
-            mode: str, *, precheck: bool = False) -> str:
+            mode: str, *, precheck: bool = False,
+            disable_native_images: bool = False) -> str:
     if mode not in ("n", "b"):
         raise ValueError("Unsupported CLR hosting override")
     env = os.environ.copy()
     env.pop("SWCOMPAT_ORIGINAL_SHIM_PATH", None)
     env.pop("SWCOMPAT_SHIM_ONLY", None)
     env.pop("SWCOMPAT_HOST_PRECHECK", None)
+    env.pop("COMPlus_ZapDisable", None)
+    if disable_native_images:
+        # .NET Framework diagnostic switch: force IL/JIT instead of NGEN
+        # native images, without touching registry or vendor files.
+        env["COMPlus_ZapDisable"] = "1"
     if precheck:
         env["SWCOMPAT_HOST_PRECHECK"] = "1"
     env["WINEPREFIX"] = str(prefix)

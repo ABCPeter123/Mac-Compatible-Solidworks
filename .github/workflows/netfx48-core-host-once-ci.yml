@@ -1,7 +1,7 @@
 name: One-shot authenticated .NET 4.8 CLR payload hosting trial
 
 # A main-branch change to this workflow triggers the experiment once.
-# Next run compares public CLR IsLoadable/IsStarted and private Wine error channels on genuine 4.0 vs 4.8.
+# Next run tests original 4.8 CLR startup with native images disabled, with original 4.0 controls.
 # Genuine original 4.0 must first pass native CLR hosting. The 4.8 media
 # is Authenticode-bound and staged only inside a disposable Wine prefix.
 # Neither 4.8 nor 4.8.1 installers are executed.

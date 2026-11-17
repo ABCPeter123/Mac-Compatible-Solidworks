@@ -786,7 +786,10 @@ jobs:
                           "original48_extra_staged", "extra_native",
                           "native40_after", "original40_restored",
                           "native40_precheck_before", "original48_precheck",
-                          "native40_precheck_after"):
+                          "native40_precheck_after",
+                          "native40_zap_disabled_before",
+                          "original48_zap_disabled",
+                          "native40_zap_disabled_after"):
                   out.write(key + ": **" + str(r[key]) + "**\n\n")
               out.write("### Original 4.0 versus 4.8 CLR startup traces\n\n")
               for variant in ("native40_start_trace", "wine_start_trace"):

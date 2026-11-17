@@ -39,7 +39,8 @@ ERROR_PHASES = {"NOT_RUN", "INPUT", "ELIGIBILITY", "AUTHENTICATION",
                 "DEPENDENCIES", "MSCORLIB", "CORE", "REPLACEMENT",
                 "RESTORATION", "NATIVE40_RECHECK", "VALIDATION",
                 "EXTRA_NATIVE", "TRACE", "PRECHECK_BASELINE",
-                "TRACE_BASELINE", "PRECHECK_48", "PRECHECK_RESTORED"}
+                "TRACE_BASELINE", "PRECHECK_48", "PRECHECK_RESTORED",
+                "ZAP_BASELINE", "ZAP_48", "ZAP_RESTORED"}
 SOURCE = {"NOT_RUN", "PE_AMD64", "NO_MZZ", "NO_CLR", "MZZ_ERROR",
           "EXTRACT_FAILED", "INVALID_CLR_PE"}
 MAX_STAGE = 16
@@ -59,7 +60,10 @@ def blank() -> dict:
         "native40_before": "NOT_RUN", "native40_after": "NOT_RUN",
         "native40_precheck_before": "NOT_RUN",
         "native40_precheck_after": "NOT_RUN",
+        "native40_zap_disabled_before": "NOT_RUN",
+        "native40_zap_disabled_after": "NOT_RUN",
         "original48_precheck": "NOT_RUN",
+        "original48_zap_disabled": "NOT_RUN",
         "native40_start_trace": trace_blank(),
         "original48_sha256_verified": False,
         "original48_clr": "NOT_RUN",
@@ -92,7 +96,8 @@ def valid(value: object) -> bool:
                 "native40_before", "native40_after", "clr_only",
                 "clr_and_mscorlib", "additional_core", "extra_native",
                 "native40_precheck_before", "native40_precheck_after",
-                "original48_precheck"))
+                "original48_precheck", "native40_zap_disabled_before",
+                "native40_zap_disabled_after", "original48_zap_disabled"))
             or any(type(value[k]) is not bool for k in (
                 "original48_sha256_verified", "original48_mscorlib_staged",
                 "original40_restored"))
@@ -259,6 +264,9 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
     mark("PRECHECK_BASELINE")
     result["native40_precheck_before"] = host_execute(
         wine, prefix, fixture, managed, "n", precheck=True)
+    mark("ZAP_BASELINE")
+    result["native40_zap_disabled_before"] = host_execute(
+        wine, prefix, fixture, managed, "n", disable_native_images=True)
     mark("TRACE_BASELINE")
     result["native40_start_trace"] = trace_probe(
         wine, prefix, fixture, managed)
@@ -335,6 +343,10 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
                                 replacement.replace(path, name)
                         result["extra_native"] = host_execute(
                             wine, prefix, fixture, managed, "n")
+                    mark("ZAP_48")
+                    result["original48_zap_disabled"] = host_execute(
+                        wine, prefix, fixture, managed, "n",
+                        disable_native_images=True)
                     mark("PRECHECK_48")
                     result["original48_precheck"] = host_execute(
                         wine, prefix, fixture, managed, "n", precheck=True)
@@ -350,6 +362,9 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
         mark("PRECHECK_RESTORED")
         result["native40_precheck_after"] = host_execute(
             wine, prefix, fixture, managed, "n", precheck=True)
+        mark("ZAP_RESTORED")
+        result["native40_zap_disabled_after"] = host_execute(
+            wine, prefix, fixture, managed, "n", disable_native_images=True)
         result["original40_restored"] = (
             result["native40_after"] == "MANAGED_ORIGINAL_PASS")
         result["status"] = ("MEASURED" if result["original40_restored"]

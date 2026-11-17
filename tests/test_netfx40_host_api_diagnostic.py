@@ -64,9 +64,11 @@ class NativeHostAPITests(unittest.TestCase):
             report = {"persistent_native_managed": True,
                       "native_only_managed": "PASS"}
             calls = []
+            zap_values = []
             def fake(argv, **kwargs):
                 env = kwargs["env"]
                 calls.append(env["WINEDLLOVERRIDES"])
+                zap_values.append(env.get("COMPlus_ZapDisable"))
                 self.assertEqual(env["SWCOMPAT_CLR_PATH"], t.CLR_PATH)
                 self.assertTrue(env["SWCOMPAT_MANAGED_DLL"].startswith("Z:"))
                 self.assertNotIn("SWCOMPAT_ORIGINAL_SHIM_PATH", env)
@@ -79,9 +81,15 @@ class NativeHostAPITests(unittest.TestCase):
             with mock.patch.object(t, "validate_restart", return_value=True), \
                  mock.patch.object(t.subprocess, "run", side_effect=fake):
                 result = t.audit(wine, prefix, fixture, managed, report)
+                zap_status = t.execute(
+                    wine, prefix, fixture, managed, "n",
+                    disable_native_images=True)
             self.assertTrue(t.valid(result))
             self.assertTrue(result["native_managed_pass"])
-            self.assertEqual(calls, ["mscoree=n;clr=n", "mscoree=b;clr=n"])
+            self.assertEqual(calls, ["mscoree=n;clr=n", "mscoree=b;clr=n",
+                                     "mscoree=n;clr=n"])
+            self.assertEqual(zap_values, [None, None, "1"])
+            self.assertEqual(zap_status, "MANAGED_ORIGINAL_PASS")
             self.assertEqual(result["builtin"], "OTHER_RUNTIME_SELECTED")
             with mock.patch.object(t, "validate_restart", return_value=True):
                 self.assertEqual(t.audit(wine, prefix, fixture, managed,
