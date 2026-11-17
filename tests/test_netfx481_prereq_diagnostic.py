@@ -142,6 +142,29 @@ class OriginalPrerequisiteTests(unittest.TestCase):
             b"Info: KB12345678 is present.\n")
         self.assertEqual(informational["blockers"], [])
 
+    def test_microsoft_documented_blocking_messages_without_error_prefix(self):
+        # Real setup messages can be plain English, with no "error" prefix.
+        # Only precise blocking phrases should classify a prerequisite.
+        examples = (
+            (b"The update corresponding to KB2919355 needs to be installed "
+             b"before you can install this product.\n", "MISSING_UPDATE_BLOCK"),
+            (b"Setup cannot continue because a previous installation requires "
+             b"your computer to be restarted.\n", "PENDING_REBOOT_BLOCK"),
+            (b"You do not have sufficient privileges to complete this "
+             b"operation for all users of this computer.\n", "ADMIN_RIGHTS_BLOCK"),
+            (b"The .NET Framework 4.8.1 redistributable does not apply to "
+             b"this operating system.\n", "OS_VERSION_BLOCK"),
+        )
+        for message, category in examples:
+            with self.subTest(category=category):
+                report = classify_text(message)
+                self.assertTrue(validate(report))
+                self.assertIn(category, report["blockers"])
+        # The mere mention of a KB or a restart is not an installer failure.
+        self.assertEqual(classify_text(
+            b"Installed update KB2919355 detected.\n"
+            b"Restart is not required.\n")["blockers"], [])
+
     def test_malformed_or_missing_is_not_a_success(self):
         self.assertEqual(classify_text(b"x" * (8 * 1024 * 1024 + 1)),
                          empty("TOO_LARGE"))
