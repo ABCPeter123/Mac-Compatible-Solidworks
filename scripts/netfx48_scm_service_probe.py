@@ -15,7 +15,8 @@ from scripts.netfx481_trial import validate_prefix
 FIELDS = ("TRUSTEDINSTALLER", "MSISERVER", "WUAUSERV", "BITS")
 VALUES = {"NOT_RUN", "PRESENT", "ABSENT", "ACCESS_DENIED", "UNKNOWN"}
 STATUSES = {"NOT_RUN", "COMPLETE", "UNAVAILABLE", "MALFORMED", "TIMEOUT",
-            "PROCESS_FAILED", "EMPTY_OUTPUT", "OVERSIZED_OUTPUT", "NONZERO_EXIT"}
+            "PROCESS_FAILED", "EMPTY_OUTPUT", "OVERSIZED_OUTPUT", "NONZERO_EXIT",
+            "NONASCII_OUTPUT", "UNEXPECTED_TEXT", "INVALID_FIELD", "INCOMPLETE_FIELDS"}
 MAX_BYTES = 512
 PREFIX = "SWCOMPAT_SCM_API_"
 
@@ -36,7 +37,9 @@ def valid(report: object) -> bool:
                    for value in report["services"].values())):
         return False
     if report["status"] in {"NOT_RUN", "MALFORMED", "TIMEOUT", "PROCESS_FAILED",
-                            "EMPTY_OUTPUT", "OVERSIZED_OUTPUT", "NONZERO_EXIT"}:
+                            "EMPTY_OUTPUT", "OVERSIZED_OUTPUT", "NONZERO_EXIT",
+                            "NONASCII_OUTPUT", "UNEXPECTED_TEXT", "INVALID_FIELD",
+                            "INCOMPLETE_FIELDS"}:
         return report == blank(report["status"])
     if report["status"] == "UNAVAILABLE":
         return all(value == "UNKNOWN" for value in report["services"].values())
@@ -55,17 +58,18 @@ def parse(raw: bytes, exit_code: int) -> dict:
     try:
         lines = raw.decode("ascii").splitlines()
     except UnicodeDecodeError:
-        return blank("MALFORMED")
+        return blank("NONASCII_OUTPUT")
     values: dict[str, str] = {}
     for line in lines:
         if not line.startswith(PREFIX) or "=" not in line:
-            return blank("MALFORMED")
+            return blank("UNEXPECTED_TEXT")
         key, value = line[len(PREFIX):].split("=", 1)
         if key in values or key not in set(FIELDS) | {"SCHEMA", "STATUS"}:
-            return blank("MALFORMED")
+            return blank("INVALID_FIELD")
         values[key] = value
-    if (set(values) != set(FIELDS) | {"SCHEMA", "STATUS"}
-            or values["SCHEMA"] != "1"
+    if set(values) != set(FIELDS) | {"SCHEMA", "STATUS"}:
+        return blank("INCOMPLETE_FIELDS")
+    if (values["SCHEMA"] != "1"
             or values["STATUS"] not in {"COMPLETE", "UNAVAILABLE"}
             or any(values[field] not in VALUES - {"NOT_RUN"} for field in FIELDS)):
         return blank("MALFORMED")
