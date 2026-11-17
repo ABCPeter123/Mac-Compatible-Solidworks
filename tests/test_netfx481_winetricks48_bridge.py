@@ -51,7 +51,7 @@ class Native48BridgeTests(unittest.TestCase):
                  clr64_change="CHANGED", native_loader="LOADED",
                  native_only_managed="PASS", runtime_family="MICROSOFT_CLR_CANDIDATE",
                  framework481_registry="AT_LEAST_481", restart="NOT_RUN")
-        r["setup"] = {"status": "EXIT_CAPTURED", "category": "OTHER",
+        r["setup"] = {"status": "EXIT_CAPTURED", "category": "PREREQUISITE_BLOCK_5100",
                       "exit_hex": "000013EC", "child_seen": "OBSERVED",
                       "child_lifecycle": "ALL_EXITED", "child_exit": "NONZERO"}
         self.assertTrue(validate(r))
