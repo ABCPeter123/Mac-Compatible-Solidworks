@@ -65,15 +65,26 @@ def valid(r: object) -> bool:
     return r["located"] > 0
 
 
-def candidates(dll: str) -> set[str]:
+def candidates(dll: str) -> tuple[str, ...]:
+    """Prefer architecture-qualified Microsoft MZZ names over bare DLL names.
+
+    Framework names containing dots (for example System.Core.dll) often
+    encode those dots as underscores in the original MZZ. Keep stable order:
+    falling back to a bare DLL can accidentally select an x86 member when an
+    explicit amd64 member also exists.
+    """
     if not DLL.fullmatch(dll) or dll != dll.casefold():
         raise ValueError("Unsafe original CLR direct-import member name")
     stem = dll[:-4]
-    return {
-        dll, stem + "_dll_amd64", stem + "_dll_x64",
-        stem + "-dll-amd64", stem + "_amd64.dll",
+    normalized = stem.replace(".", "_")
+    return tuple(dict.fromkeys((
+        normalized + "_amd64.dll", normalized + "_dll_amd64",
+        normalized + "_amd64", normalized + "_x64.dll",
+        stem + "_amd64.dll", stem + "_dll_amd64",
+        stem + "_dll_x64", stem + "-dll-amd64",
         dll.replace(".", "_") + "_amd64",
-    }
+        dll,
+    )))
 
 
 def mzz_members(raw: bytes) -> dict[str, str]:
