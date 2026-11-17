@@ -31,7 +31,8 @@ SHIM_ERROR = re.compile(
     r"cannot (?:find|load) (?:a )?(?:suitable )?runtime)\b"
 )
 ROOT_ERROR = re.compile(
-    r"(?i)\b(?:install(?:ation)? root|installroot|installcomp|component missing)\b"
+    r"(?i)\b(?:CLR_E_SHIM_INSTALLROOT|CLR_E_SHIM_INSTALLCOMP|"
+    r"install(?:ation)? root|component missing)\b"
 )
 
 
