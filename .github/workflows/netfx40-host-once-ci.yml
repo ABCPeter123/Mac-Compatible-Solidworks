@@ -1,0 +1,26 @@
+name: One-shot authenticated .NET 4.0 host diagnostic
+
+# Fires on main when this new file first lands. No repeated .NET setup
+# on unrelated pushes, pull requests, or compatibility foundation runs.
+# Deliberately retains a manual workflow_dispatch path in the called workflow.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netfx40-host-once-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: netfx40-host-once-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  authentic-netfx40-host:
+    name: Run authenticated native .NET 4.0 hosting comparison
+    uses: ./.github/workflows/netfx40-legacy-ci.yml
+    with:
+      host_provenance_only: true
+      try_48_intermediate: false
+      try_48_direct: false
