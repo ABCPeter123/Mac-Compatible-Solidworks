@@ -37,6 +37,9 @@ class CoreHostTrialTests(unittest.TestCase):
     def test_bounded_fixed_schema_cannot_claim_installed_48_or_solidworks(self):
         self.assertTrue(t.valid(t.blank()))
         self.assertFalse(t.valid(dict(t.blank(), framework48_installed=True)))
+        self.assertTrue(t.valid(dict(t.blank(), status="INTERNAL_ERROR", error_phase="ELIGIBILITY")))
+        self.assertFalse(t.valid(dict(t.blank(), status="INTERNAL_ERROR", error_phase="Z:\\private")))
+        self.assertFalse(t.valid(dict(t.blank(), status="MEASURED", error_phase="EXTRACTION")))
         self.assertFalse(t.valid(dict(t.blank(), framework481_installed=True)))
         self.assertFalse(t.valid(dict(t.blank(), path="C:\\private")))
         self.assertFalse(t.valid(dict(t.blank(), original48_core_staged=99)))
@@ -146,6 +149,35 @@ class CoreHostTrialTests(unittest.TestCase):
                  mock.patch.object(t, "extract_clr", side_effect=check_extract):
                 report = t.trial(**args)
             self.assertEqual(report["status"], "EXTRACTION_FAILED")
+            self.assertTrue(t.valid(report))
+
+    def test_homebrew_symlinked_archive_reader_is_allowed_after_resolution(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            prefix, root = native_prefix(base)
+            args = self._args(base, prefix)
+            reader = args["sevenzip"]
+            link = base / "homebrew-7zz"
+            link.symlink_to(reader)
+            args["sevenzip"] = link
+            seen = []
+            def check_extract(installer, sevenzip, private):
+                seen.append(sevenzip)
+                self.assertTrue(sevenzip.is_absolute())
+                self.assertFalse(sevenzip.is_symlink())
+                self.assertEqual(sevenzip, reader)
+                return "NO_MZZ", None
+            progress = ["INPUT"]
+            with mock.patch.object(t, "validate_prefix"), \
+                 mock.patch.object(t, "valid_restart", return_value=True), \
+                 mock.patch.object(t, "valid_host", return_value=True), \
+                 mock.patch.object(t, "verify_original"), \
+                 mock.patch.object(t, "host_execute", return_value="MANAGED_ORIGINAL_PASS"), \
+                 mock.patch.object(t, "extract_clr", side_effect=check_extract):
+                report = t.trial(**args, progress=progress)
+            self.assertEqual(report["status"], "EXTRACTION_FAILED")
+            self.assertEqual(progress, ["EXTRACTION"])
+            self.assertEqual(seen, [reader])
             self.assertTrue(t.valid(report))
 
     def test_three_staged_variants_and_restored_native40(self):
