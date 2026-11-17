@@ -165,6 +165,83 @@ class OriginalPrerequisiteTests(unittest.TestCase):
             b"Installed update KB2919355 detected.\n"
             b"Restart is not required.\n")["blockers"], [])
 
+    def test_true_windows_installer_block_not_false_os_or_permissions(self):
+        raw = (
+            b"[11/17/2026, 14:01:01]Global Block Checks: Checking for global blockers\n"
+            b"[11/17/2026, 14:01:01]BlockIf: The .NET Framework 4.8 "
+            b"redistributable does not apply to this operating system.\n"
+            b"[11/17/2026, 14:01:01]evaluating BlockIf:\n"
+            b"[11/17/2026, 14:01:02] LessThan evaluated to false\n"
+            b"[11/17/2026, 14:01:02]BlockIf evaluated to false\n"
+            b"[11/17/2026, 14:01:02]BlockIf: You do not have sufficient "
+            b"privileges to complete this operation.\n"
+            b"[11/17/2026, 14:01:02]evaluating BlockIf:\n"
+            b"[11/17/2026, 14:01:02]BlockIf evaluated to false\n"
+            b"[11/17/2026, 14:01:02]BlockIf: Setup cannot run because "
+            b"the Windows Installer Service is not available on this computer.\n"
+            b"[11/17/2026, 14:01:02]evaluating BlockIf:\n"
+            b"[11/17/2026, 14:01:02]BlockIf evaluated to true\n"
+            b"Final Result: Installation failed with error code: 5100 StopBlock\n"
+        )
+        report = classify_text(raw, family="NETFX48")
+        self.assertEqual(report["blockers"], ["WINDOWS_INSTALLER_BLOCK"])
+        self.assertTrue(report["5100_in_log"])
+        self.assertTrue(validate(report))
+        self.assertNotIn("Installer Service", str(report))
+
+    def test_all_false_native_blockif_is_not_a_prerequisite_failure(self):
+        raw = (
+            b"BlockIf: The .NET Framework 4.8.1 is not supported "
+            b"on this operating system.\n"
+            b"evaluating BlockIf:\n"
+            b"Exists evaluated to false\n"
+            b"BlockIf evaluated to false\n"
+            b"BlockIf: Setup cannot continue because a previous "
+            b"installation requires restarting.\n"
+            b"evaluating BlockIf:\n"
+            b"BlockIf evaluated to false\n"
+            b"Global Block Checks no blocking conditions found\n"
+        )
+        report = classify_text(raw)
+        self.assertEqual(report["blockers"], [])
+        self.assertFalse(report["5100_in_log"])
+
+    def test_all_false_native_blockif_with_real_5100_is_unknown_not_os(self):
+        raw = (
+            b"BlockIf: This version is not supported on this operating system.\n"
+            b"evaluating BlockIf:\n"
+            b"BlockIf evaluated to false\n"
+            b"Final Result: Installation failed with error code: "
+            b"(0x000013EC), A StopBlock was hit.\n"
+        )
+        report = classify_text(raw)
+        self.assertEqual(report["blockers"], ["UNKNOWN_PREREQUISITE"])
+        self.assertTrue(report["5100_in_log"])
+
+    def test_wrapped_description_and_true_safe_mode(self):
+        raw = (
+            b"[11/17/2026, 14:02:05] BlockIf: You cannot run the .NET "
+            b"Framework setup program in safe\n"
+            b"[11/17/2026, 14:02:05] mode. Restart Windows normally.\n"
+            b"[11/17/2026, 14:02:05] evaluating BlockIf:\n"
+            b"[11/17/2026, 14:02:05] Exists: evaluating\n"
+            b"[11/17/2026, 14:02:05] BlockIf evaluated to true\n"
+        )
+        report = classify_text(raw)
+        self.assertEqual(report["blockers"], ["SAFE_MODE_BLOCK"])
+
+    def test_incomplete_block_does_not_become_true_when_other_block_is_false(self):
+        raw = (
+            b"BlockIf: The operating system is not supported.\n"
+            b"evaluating BlockIf:\n"
+            b"BlockIf: You cannot run the setup in safe mode.\n"
+            b"evaluating BlockIf:\n"
+            b"BlockIf evaluated to false\n"
+            b"Global Block Checks no blocking conditions found\n"
+        )
+        report = classify_text(raw)
+        self.assertEqual(report["blockers"], [])
+
     def test_malformed_or_missing_is_not_a_success(self):
         self.assertEqual(classify_text(b"x" * (8 * 1024 * 1024 + 1)),
                          empty("TOO_LARGE"))
