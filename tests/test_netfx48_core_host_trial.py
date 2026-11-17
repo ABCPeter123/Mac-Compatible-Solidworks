@@ -306,6 +306,91 @@ class CoreHostTrialTests(unittest.TestCase):
             self.assertFalse((root / "mscoreei.dll").exists())
             self.assertFalse((root / "clrjit.dll").exists())
 
+    def test_authentic_clr_crt_recovery_is_reversible_and_separate_from_62_files(self):
+        for available in (2, 1):
+            with self.subTest(available=available), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                prefix, root = native_prefix(base)
+                args = self._args(base, prefix)
+                original = (root / "clr.dll").read_bytes()
+                original_lib = (root / "mscorlib.dll").read_bytes()
+                (root / "Fresh.dll").write_bytes(pe(7))
+                host_calls = []
+
+                def extract(installer, sevenzip, private):
+                    (private / "archives").mkdir()
+                    (private / "clr.dll").write_bytes(pe(3))
+                    return "PE_AMD64", private / "clr.dll"
+
+                def stage(private, sevenzip, names, **kwargs):
+                    if list(names) == list(t.CLR_CRT):
+                        report = t.signed_stage_blank()
+                        report["missing_requested"] = len(names)
+                        report["located"] = len(names)
+                        report["staged"] = available
+                        report["status"] = "STAGED" if available == len(names) else "PARTIAL"
+                        for name in names:
+                            report["families"][t.family(name)]["located"] += 1
+                        for name in names[:available]:
+                            (private / name).write_bytes(pe(5))
+                            report["families"][t.family(name)]["staged"] += 1
+                        return report
+                    for name in names:
+                        (private / name).write_bytes(pe(4))
+                    return {"staged": len(names)}
+
+                def matching(root, private, sevenzip):
+                    (private / "fresh.dll").write_bytes(pe(6))
+                    return (
+                        dict(t.coherent_blank(), status="STAGED",
+                             candidates=1, additional=1, staged=1),
+                        {"fresh.dll": "Fresh.dll"},
+                    )
+
+                def execute(wine, prefix, fixture, managed, mode,
+                            *, precheck=False, disable_native_images=False):
+                    if precheck:
+                        return "PRECHECK_LOADABLE_NOT_STARTED"
+                    if (root / "clr.dll").read_bytes() == original:
+                        return "MANAGED_ORIGINAL_PASS"
+                    crt_loaded = all((root / name).exists() for name in t.CLR_CRT)
+                    host_calls.append(crt_loaded)
+                    return ("MANAGED_ORIGINAL_PASS" if crt_loaded
+                            else "HOST_START_E_FAIL")
+
+                with mock.patch.object(t, "validate_prefix"), \
+                     mock.patch.object(t, "valid_restart", return_value=True), \
+                     mock.patch.object(t, "valid_host", return_value=True), \
+                     mock.patch.object(t, "verify_original"), \
+                     mock.patch.object(t, "host_execute", side_effect=execute), \
+                     mock.patch.object(t, "extract_clr", side_effect=extract), \
+                     mock.patch.object(t, "parse_pe", return_value={
+                         "pe": "PE_AMD64", "import_table": "READABLE"}), \
+                     mock.patch.object(t, "stage", side_effect=stage), \
+                     mock.patch.object(t, "valid_stage", side_effect=lambda r: True), \
+                     mock.patch.object(t, "stage_matching", side_effect=matching), \
+                     mock.patch.object(t, "trace_probe", return_value=t.trace_blank()), \
+                     mock.patch.object(t, "activation_probe",
+                                       return_value=t.activation_blank()):
+                    report = t.trial(**args)
+
+                self.assertTrue(t.valid(report))
+                self.assertEqual(report["status"], "MEASURED")
+                self.assertEqual(report["coherent_host"], "HOST_START_E_FAIL")
+                self.assertEqual(report["clr_crt_staging"]["staged"], available)
+                if available == len(t.CLR_CRT):
+                    self.assertEqual(report["clr_crt_host"], "MANAGED_ORIGINAL_PASS")
+                    self.assertTrue(host_calls[-1])
+                else:
+                    self.assertEqual(report["clr_crt_host"], "NOT_RUN")
+                    self.assertNotIn(True, host_calls)
+                self.assertEqual((root / "clr.dll").read_bytes(), original)
+                self.assertEqual((root / "mscorlib.dll").read_bytes(), original_lib)
+                self.assertEqual((root / "Fresh.dll").read_bytes(), pe(7))
+                self.assertTrue(all(not (root / name).exists() for name in t.CLR_CRT))
+                self.assertTrue(report["original40_restored"])
+                self.assertNotIn(str(base), json.dumps(report))
+
     def test_signed_source_invariants_expose_only_fixed_categories(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
