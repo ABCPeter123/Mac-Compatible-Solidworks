@@ -220,15 +220,18 @@ class CoreHostTrialTests(unittest.TestCase):
                  mock.patch.object(t, "parse_pe", return_value={
                      "pe": "PE_AMD64", "import_table": "READABLE"}), \
                  mock.patch.object(t, "stage", side_effect=stage), \
-                 mock.patch.object(t, "valid_stage", return_value=True):
+                 mock.patch.object(t, "valid_stage", return_value=True), \
+                 mock.patch.object(t, "trace_probe", return_value=t.trace_blank()):
                 report = t.trial(**args)
             self.assertTrue(t.valid(report))
             self.assertEqual(report["status"], "MEASURED")
             self.assertEqual(report["clr_only"], "HOST_START_FAILED")
             self.assertEqual(report["clr_and_mscorlib"], "MANAGED_EXECUTION_FAILED")
             self.assertEqual(report["additional_core"], "MANAGED_ORIGINAL_PASS")
+            self.assertEqual(report["extra_native"], "MANAGED_ORIGINAL_PASS")
+            self.assertEqual(report["original48_extra_staged"], len(t.EXTRA_NATIVE))
             self.assertEqual(report["native40_after"], "MANAGED_ORIGINAL_PASS")
-            self.assertEqual(len(calls), 5)
+            self.assertEqual(len(calls), 6)
             self.assertEqual((root / "clr.dll").read_bytes(), original)
             self.assertEqual((root / "mscorlib.dll").read_bytes(), original_lib)
             self.assertFalse((root / "mscoreei.dll").exists())
