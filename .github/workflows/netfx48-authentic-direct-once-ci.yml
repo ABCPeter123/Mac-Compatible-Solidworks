@@ -9,8 +9,10 @@ name: One-shot original Microsoft .NET 4.8 installer and gated 4.8.1 trial
 # other services were PRESENT. This one-shot uses merged PR #185's native
 # OpenSCManagerW/OpenServiceW differential to test real missing service
 # versus API failure, with native Windows 2025 positive control.
-# Retry after correcting the reusable workflow's broken Bash argument
-# continuations (commit 31cca05); regression guard added in eaa6f05.
+# Run one controlled preflight after merged shell repair, SCM API probe,
+# and read-only x64/WOW64 .NET Release census. Reject unsupported registry
+# conditions only as diagnostics, never create fake installed versions.
+# The reusable workflow executes cheap Python validation before Microsoft setup.
 # Keep macOS 26 ARM64 and pinned Wine Staging 11.21 unchanged.
 # The reusable workflow MUST prove original native Microsoft .NET 4.0 managed
 # execution before it executes the signed 4.8 installer in a disposable Wine
