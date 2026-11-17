@@ -102,7 +102,7 @@ class DirectNative48Tests(unittest.TestCase):
                 {"changed": False},
                 {"registry": "NOT_FOUND"},
                 {"registry": "AT_LEAST_481"},
-                {"setup": self.setup("000013EC", "OTHER")},
+                {"setup": self.setup("000013EC", "PREREQUISITE_BLOCK_5100")},
                 {"setup": win32.blank("TIMEOUT")},
             )):
                 root = Path(td) / str(index)
