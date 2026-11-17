@@ -119,3 +119,35 @@ After staging, it calls the same independent native-host managed fixture.
 A successful host alone remains insufficient for a genuine **installed**
 4.8/4.8.1 runtime or SOLIDWORKS. Missing .NET registry/GAC/WPF servicing
 is still a separate obstacle, and error 5100 remains unresolved.
+
+## November 17: measured coherent staging shortfall and validated AnyCPU follow-up
+
+Authenticated [run 44107111594](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/44107111594)
+executed the original 4.0 to signed 4.8 file-swap differential on the
+checksum-pinned Apple Silicon Wine runtime. A privacy-safe artifact reports:
+
+| Measurement | Original signed 4.8 result |
+| --- | --- |
+| Original 4.8 signed x64 CLR | PE_AMD64 |
+| Framework64 names matching original MZZ | 62 |
+| Of those, additionally requiring extraction | 53 |
+| Successfully staged additional DLLs | 26 |
+| Staging status | INCOMPLETE |
+| Full-coherence CLR host | NOT_RUN |
+| Partial-payload original 4.8 CLR Start | HOST_START_E_FAIL |
+| Original Microsoft 4.0 managed host before and after restoration | MANAGED_ORIGINAL_PASS |
+
+The 27 additional unstaged members have **not** been individually
+attributed to one cause. A .NET Framework AnyCPU managed DLL can use a
+PE_I386 header while remaining valid inside Framework64; the first
+test's PE_AMD64-only acceptance can reject such legitimate files.
+
+Merged [PR #167](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/pull/167)
+adds a strictly opt-in PE32 **ILONLY** CLR metadata validation path,
+rejecting any 32BITREQUIRED, 32BITPREFERRED or native x86 image.
+Only the full Framework64 consistency test uses it; the original CLR
+loader and direct native imports remain x64-only. A subsequent authenticated
+run is required to determine whether this accounts for the incomplete
+staging. Neither the prior run nor this code change demonstrates
+genuine .NET 4.8 managed execution, an installed 4.8/4.8.1 runtime,
+or SOLIDWORKS usability.
