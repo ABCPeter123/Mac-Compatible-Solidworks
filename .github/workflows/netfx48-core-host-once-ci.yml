@@ -1,7 +1,7 @@
 name: One-shot authenticated .NET 4.8 CLR payload hosting trial
 
 # A main-branch change to this workflow triggers the experiment once.
-# Retry after fixing absolute paths for build-relative fixtures and media.
+# Retry after resolving Homebrew 7zz symlinks and adding fixed-stage error reporting.
 # Genuine original 4.0 must first pass native CLR hosting. The 4.8 media
 # is Authenticode-bound and staged only inside a disposable Wine prefix.
 # Neither 4.8 nor 4.8.1 installers are executed.
