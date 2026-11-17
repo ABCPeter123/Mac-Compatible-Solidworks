@@ -54,3 +54,31 @@ See Microsoft CLR team's [description of mscoree vs mscoreei](https://devblogs.m
 4. **SOLIDWORKS acceptance.** Only after native framework hosting and installation work, validate a properly licensed genuine SOLIDWORKS build on an interactive Apple Silicon Mac, including sketch, extrude, save and reopen.
 
 **Current verified milestone:** the genuine Microsoft .NET 4.0 native CLR executes managed code on hosted Apple Silicon Wine. Genuine Microsoft .NET 4.8 x64 CLR and its original imports load and pass `IsLoadable`, but `ICLRRuntimeHost::Start` returns `E_FAIL` even with staged original framework support files. No native .NET 4.8/4.8.1 managed execution or usable SOLIDWORKS has been shown.
+
+
+## Process-scoped Microsoft CLR activation-log differential (November 17)
+
+The genuine 4.8 payload-host run established that setting `COMPlus_ZapDisable=1`
+does **not** resolve `ICLRRuntimeHost::Start -> E_FAIL`. Repeating that NGEN
+experiment with the same payload adds no evidence. The next distinct test
+is the documented **Microsoft CLR activation log**, which reports runtime
+discovery and selection decisions rather than Fusion binding or post-
+activation managed-code execution:
+
+https://learn.microsoft.com/dotnet/framework/deployment/how-to-debug-clr-activation-issues
+
+`COMPLUS_CLRLoadLogDir` is supplied **only** to one self-authored native CLR
+host subprocess at a time. Three temporary directories are created and
+destroyed independently for working original 4.0, reversibly staged signed
+original 4.8, and restored original 4.0. Logs remain private inside the
+marked disposable Wine prefix. Each run exports only bounded fixed categories:
+activation header, installed/selected runtime, runtime-load calls, shim
+failure, install-root/component errors, or general reported error, plus
+the already allowlisted host status. A native Windows host control records
+whether Microsoft emits activation logs under the same variable.
+
+**Interpretation:** `NO_LOG` does not mean CLR startup succeeded. Even an
+activation log does not prove managed execution or an installed 4.8 runtime.
+If 4.8 reports no unique shim issue while Start still returns `E_FAIL`,
+the failure remains in a later initialization stage and requires different
+instrumentation. Original 4.8 and 4.8.1 setup error **5100 remains unresolved**.

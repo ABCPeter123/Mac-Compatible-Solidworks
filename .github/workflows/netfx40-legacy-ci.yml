@@ -184,6 +184,26 @@ jobs:
             if ($LASTEXITCODE -ne 0 -or $positive -notcontains 'SWCOMPAT_NETFX48_HOST_STATUS=MANAGED_ORIGINAL_PASS') {
               throw "Official Windows public CLR hosting positive control failed"
             }
+            # Positive native-Windows control for Microsoft's documented
+            # process-only CLR activation logging. Never emit log contents,
+            # runtime paths, vendor files or arbitrary file names.
+            $activationDir = Join-Path $env:RUNNER_TEMP 'swcompat-clr-activation-native-control'
+            if (Test-Path -LiteralPath $activationDir) { throw 'Unsafe preexisting activation folder' }
+            New-Item -ItemType Directory -Path $activationDir | Out-Null
+            try {
+              $env:COMPLUS_CLRLoadLogDir = $activationDir
+              $activation = & build\netfx48_host_activation.exe
+              if ($LASTEXITCODE -ne 0 -or $activation -notcontains 'SWCOMPAT_NETFX48_HOST_STATUS=MANAGED_ORIGINAL_PASS') {
+                throw 'Native Windows activation log control host failed'
+              }
+              $captured = @(Get-ChildItem -LiteralPath $activationDir -File -Force).Count
+              Write-Output ('WINDOWS_NATIVE_CLR_ACTIVATION_LOG ' +
+                $(if ($captured -gt 0) { 'EMITTED' } else { 'NOT_EMITTED' }))
+            }
+            finally {
+              Remove-Item env:COMPLUS_CLRLoadLogDir -ErrorAction SilentlyContinue
+              Remove-Item -LiteralPath $activationDir -Force -Recurse -ErrorAction SilentlyContinue
+            }
             $env:SWCOMPAT_CLR_PATH = Join-Path $env:WINDIR 'System32\kernel32.dll'
             $negative = & build\netfx48_host_activation.exe
             if ($LASTEXITCODE -ne 0 -or $negative -notcontains 'SWCOMPAT_NETFX48_HOST_STATUS=OTHER_RUNTIME_SELECTED') {
@@ -791,6 +811,17 @@ jobs:
                           "original48_zap_disabled",
                           "native40_zap_disabled_after"):
                   out.write(key + ": **" + str(r[key]) + "**\n\n")
+              out.write("### Original Microsoft CLR activation log differential\n\n")
+              for variant in ("native40_activation_before",
+                              "original48_activation",
+                              "native40_activation_after"):
+                  a = r[variant]
+                  out.write("**" + variant + "**: " + a["status"] +
+                            " / host=" + a["host"] +
+                            " / files=" + str(a["file_count"]) + "\n\n")
+                  out.write("Positive event categories: **" +
+                            (",".join(k for k,v in a["flags"].items() if v)
+                             or "NONE") + "**\n\n")
               out.write("### Original 4.0 versus 4.8 CLR startup traces\n\n")
               for variant in ("native40_start_trace", "wine_start_trace"):
                   out.write("**" + variant + "**\n\n")
