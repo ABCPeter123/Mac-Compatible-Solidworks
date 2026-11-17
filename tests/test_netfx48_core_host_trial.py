@@ -306,6 +306,75 @@ class CoreHostTrialTests(unittest.TestCase):
             self.assertFalse((root / "mscoreei.dll").exists())
             self.assertFalse((root / "clrjit.dll").exists())
 
+    def test_coherence_failures_are_private_and_preserve_original_files(self):
+        for message, expected in (
+            ("Backup collision", "COHERENCE_BACKUP_COLLISION"),
+            ("Original signed payload is not x64-compatible",
+             "COHERENCE_INVALID_PE"),
+            ("Ambiguous original runtime target casing",
+             "COHERENCE_CASE_AMBIGUITY"),
+        ):
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                prefix, root = native_prefix(base)
+                args = self._args(base, prefix)
+                original = (root / "clr.dll").read_bytes()
+                original_lib = (root / "mscorlib.dll").read_bytes()
+                progress = ["INPUT"]
+
+                def extract(installer, sevenzip, private):
+                    (private / "archives").mkdir()
+                    (private / "clr.dll").write_bytes(pe(3))
+                    return "PE_AMD64", private / "clr.dll"
+
+                def stage(private, sevenzip, names, **kwargs):
+                    for name in names:
+                        (private / name).write_bytes(pe(4))
+                    return {"staged": len(names)}
+
+                def matching(root, private, sevenzip):
+                    (private / "system.core.dll").write_bytes(pe(5))
+                    return (
+                        dict(t.coherent_blank(), status="STAGED", candidates=1,
+                             additional=0, staged=0),
+                        {"system.core.dll": "System.Core.dll"},
+                    )
+
+                original_replace = t.ReversibleFramework.replace
+
+                def replaced(self, source, name, *, allow_managed_anycpu=False):
+                    if allow_managed_anycpu:
+                        raise ValueError(message)
+                    return original_replace(self, source, name,
+                                            allow_managed_anycpu=False)
+
+                with mock.patch.object(t, "validate_prefix"), \
+                     mock.patch.object(t, "valid_restart", return_value=True), \
+                     mock.patch.object(t, "valid_host", return_value=True), \
+                     mock.patch.object(t, "verify_original"), \
+                     mock.patch.object(t, "host_execute",
+                                       return_value="MANAGED_ORIGINAL_PASS"), \
+                     mock.patch.object(t, "extract_clr", side_effect=extract), \
+                     mock.patch.object(t, "parse_pe", return_value={
+                         "pe": "PE_AMD64", "import_table": "READABLE"}), \
+                     mock.patch.object(t, "stage", side_effect=stage), \
+                     mock.patch.object(t, "stage_matching", side_effect=matching), \
+                     mock.patch.object(t, "valid_stage", return_value=True), \
+                     mock.patch.object(t, "trace_probe",
+                                       return_value=t.trace_blank()), \
+                     mock.patch.object(t, "activation_probe",
+                                       return_value=t.activation_blank()), \
+                     mock.patch.object(t.ReversibleFramework, "replace",
+                                       new=replaced):
+                    with self.assertRaises(ValueError):
+                        t.trial(**args, progress=progress)
+                self.assertEqual(progress, [expected])
+                self.assertEqual((root / "clr.dll").read_bytes(), original)
+                self.assertEqual((root / "mscorlib.dll").read_bytes(),
+                                 original_lib)
+                self.assertFalse((root / "clrjit.dll").exists())
+                self.assertNotIn(message, expected)
+
     @staticmethod
     def _args(base: Path, prefix: Path) -> dict:
         def f(name):
