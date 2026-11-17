@@ -1,8 +1,9 @@
 name: One-shot authenticated .NET 4.8 CLR payload hosting trial
 
 # A main-branch change to this workflow triggers the experiment once.
-# Next run captures Microsoft CLR activation decisions at working original 4.0,
-# staged original 4.8, and restored original 4.0. NGEN-negative result is established.
+# Next run compares signed original .NET 4.8 matched Framework64 x64 DLLs
+# against the prior partial-payload CLR failure, with original 4.0 controls.
+# The activation-log and NGEN-negative experiments are complete.
 # Genuine original 4.0 must first pass native CLR hosting. The 4.8 media
 # is Authenticode-bound and staged only inside a disposable Wine prefix.
 # Neither 4.8 nor 4.8.1 installers are executed.
