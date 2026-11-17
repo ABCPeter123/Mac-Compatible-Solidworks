@@ -123,8 +123,8 @@ class OriginalMzzDependencyStage(unittest.TestCase):
             def invoke(argv, **kwargs):
                 if "l" in argv:
                     kwargs["stdout"].write(
-                        ("----------\\nPath = " + first +
-                         "\\nPath = " + second + "\\n").encode())
+                        ("----------\nPath = " + first +
+                         "\nPath = " + second + "\n").encode())
                 else:
                     attempts.append(argv[-1])
                     kwargs["stdout"].write(
@@ -154,8 +154,8 @@ class OriginalMzzDependencyStage(unittest.TestCase):
             def invoke(argv, **kwargs):
                 if "l" in argv:
                     kwargs["stdout"].write(
-                        b"----------\\nPath = vcruntime140_amd64.dll\\n"
-                        b"Path = vcruntime140_dll_amd64\\n")
+                        b"----------\nPath = vcruntime140_amd64.dll\n"
+                        b"Path = vcruntime140_dll_amd64\n")
                 else:
                     attempts.append(argv[-1])
                     kwargs["stdout"].write(b"not a valid portable executable" * 40)
