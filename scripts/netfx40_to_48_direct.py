@@ -84,11 +84,11 @@ def inventory_services(wine: Path, prefix: Path) -> dict:
             if len(raw) > SERVICE_MAX_BYTES:
                 result[name] = "UNKNOWN"
             elif (process.returncode == 0 and
-                  re.search(rb"(?i)\\bSERVICE_NAME\\s*:\\s*" +
-                            re.escape(name.encode("ascii")) + rb"\\b", raw)):
+                  re.search(rb"(?i)\bSERVICE_NAME\s*:\s*" +
+                            re.escape(name.encode("ascii")) + rb"\b", raw)):
                 result[name] = "PRESENT"
             elif process.returncode != 0 and re.search(
-                    rb"(?i)(?:\\b1060\\b|service.{0,80}does not exist)", raw):
+                    rb"(?i)(?:\b1060\b|service.{0,80}does not exist)", raw):
                 result[name] = "ABSENT"
             else:
                 result[name] = "UNKNOWN"
