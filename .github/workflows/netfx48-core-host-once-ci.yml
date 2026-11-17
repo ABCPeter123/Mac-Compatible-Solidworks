@@ -1,10 +1,10 @@
 name: One-shot authenticated .NET 4.8 CLR payload hosting trial
 
 # A main-branch change to this workflow triggers the experiment once.
-# Next run checks architecture-prioritized alternatives from the same
-# authenticated .NET 4.8 MZZ for original Framework64 DLLs, after correcting
-# the macOS mixed-case rollback collision. The full-coherence arm is only
-# attempted if every matched original component is safely staged.
+# Next run classifies which exact self-authored Framework64 replacement
+# invariant failed in authenticated run 44114768754, using fixed privacy-safe
+# reasons, with signed x64/AnyCPU alternate-member staging from PR #171.
+# All original Microsoft 4.0 files must still be restored after the trial.
 # Genuine original 4.0 must first pass native CLR hosting. The 4.8 media
 # is Authenticode-bound and staged only inside a disposable Wine prefix.
 # Neither 4.8 nor 4.8.1 installers are executed.
