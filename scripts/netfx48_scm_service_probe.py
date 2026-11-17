@@ -14,7 +14,8 @@ from scripts.netfx481_trial import validate_prefix
 
 FIELDS = ("TRUSTEDINSTALLER", "MSISERVER", "WUAUSERV", "BITS")
 VALUES = {"NOT_RUN", "PRESENT", "ABSENT", "ACCESS_DENIED", "UNKNOWN"}
-STATUSES = {"NOT_RUN", "COMPLETE", "UNAVAILABLE", "MALFORMED", "TIMEOUT", "PROCESS_FAILED"}
+STATUSES = {"NOT_RUN", "COMPLETE", "UNAVAILABLE", "MALFORMED", "TIMEOUT",
+            "PROCESS_FAILED", "EMPTY_OUTPUT", "OVERSIZED_OUTPUT", "NONZERO_EXIT"}
 MAX_BYTES = 512
 PREFIX = "SWCOMPAT_SCM_API_"
 
@@ -34,7 +35,8 @@ def valid(report: object) -> bool:
             or any(type(value) is not str or value not in VALUES
                    for value in report["services"].values())):
         return False
-    if report["status"] in {"NOT_RUN", "MALFORMED", "TIMEOUT", "PROCESS_FAILED"}:
+    if report["status"] in {"NOT_RUN", "MALFORMED", "TIMEOUT", "PROCESS_FAILED",
+                            "EMPTY_OUTPUT", "OVERSIZED_OUTPUT", "NONZERO_EXIT"}:
         return report == blank(report["status"])
     if report["status"] == "UNAVAILABLE":
         return all(value == "UNKNOWN" for value in report["services"].values())
@@ -42,8 +44,13 @@ def valid(report: object) -> bool:
 
 
 def parse(raw: bytes, exit_code: int) -> dict:
-    if (not 0 <= len(raw) <= MAX_BYTES or b"\x00" in raw
-            or exit_code != 0):
+    if exit_code != 0:
+        return blank("NONZERO_EXIT")
+    if not raw:
+        return blank("EMPTY_OUTPUT")
+    if len(raw) > MAX_BYTES:
+        return blank("OVERSIZED_OUTPUT")
+    if b"\x00" in raw:
         return blank("MALFORMED")
     try:
         lines = raw.decode("ascii").splitlines()
