@@ -54,7 +54,8 @@ class DirectNative48Tests(unittest.TestCase):
             mock.patch.object(p, "verify_original_media"),
             mock.patch.object(p, "validate_native40", return_value=True),
             mock.patch.object(p, "inspect_registrations", return_value={
-                "native64": "OLDER_RELEASE", "wow32": "AT_LEAST_481"}),
+                "native64": "OLDER_RELEASE", "wow32": "AT_LEAST_481",
+                "native64_version": "V4_0", "wow32_version": "V4_7_PLUS"}),
             mock.patch.object(p, "inventory_services", return_value={
                 "TrustedInstaller": "ABSENT", "msiserver": "PRESENT",
                 "wuauserv": "PRESENT", "BITS": "UNKNOWN"}),
