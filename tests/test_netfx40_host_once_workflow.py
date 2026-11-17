@@ -36,6 +36,10 @@ class HostOnceWorkflowTests(unittest.TestCase):
         self.assertIn("if: env.SWCOMPAT_NATIVE40_READY == 'yes'", source)
         self.assertIn("python3 -m scripts.netfx40_host_api_diagnostic", source)
         self.assertIn("AUTHENTIC_NETFX40_HOST_FIXTURE_WINDOWS_CONTROL", source)
+        self.assertIn("not host_only and (", source)
+        self.assertIn('assert not upgrade_path.is_file(), "Host-only must skip 4.8.1"', source)
+        self.assertIn('host_valid(host) and host["status"] == "MEASURED"', source)
+        self.assertIn('provenance_valid(provenance) and provenance["status"] == "MEASURED"', source)
 
 
 if __name__ == "__main__":
