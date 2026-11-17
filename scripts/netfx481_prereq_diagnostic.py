@@ -180,6 +180,8 @@ def classify_text(raw: bytes, *, family: str = "NETFX481") -> dict:
     for line in candidates:
         if len(line) > 8192 or not FAIL_LINE.search(line):
             continue
+        if evaluated and re.search(r"(?i)\bno blocking conditions found\b", line):
+            continue
         # The generic terminal error is not itself a specific cause.
         specific = classify_cause(line)
         estimate = DISK_ESTIMATE.search(line)
