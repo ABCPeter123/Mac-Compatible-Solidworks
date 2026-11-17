@@ -1,0 +1,28 @@
+name: One-shot authenticated .NET 4.8 CLR payload hosting trial
+
+# A single main-branch merge of this workflow triggers the experiment.
+# Genuine original 4.0 must first pass native CLR hosting. The 4.8 media
+# is Authenticode-bound and staged only inside a disposable Wine prefix.
+# Neither 4.8 nor 4.8.1 installers are executed.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netfx48-core-host-once-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: netfx48-core-host-once-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  authenticated-48-payload:
+    name: Test original 4.8 CLR against verified native 4.0 Wine
+    uses: ./.github/workflows/netfx40-legacy-ci.yml
+    with:
+      host_provenance_only: true
+      try_48_payload_host: true
+      try_48_intermediate: false
+      try_48_direct: false
