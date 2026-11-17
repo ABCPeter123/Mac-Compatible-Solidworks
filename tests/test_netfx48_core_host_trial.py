@@ -134,13 +134,14 @@ class CoreHostTrialTests(unittest.TestCase):
                 self.assertTrue(installer.is_absolute())
                 self.assertTrue(sevenzip.is_absolute())
                 return "NO_MZZ", None
-            def check_host(wine, prefix, fixture, managed, mode):
+            def check_host(wine, prefix, fixture, managed, mode, *, precheck=False):
                 self.assertTrue(wine.is_absolute())
                 self.assertTrue(prefix.is_absolute())
                 self.assertTrue(fixture.is_absolute())
                 self.assertTrue(managed.is_absolute())
                 self.assertTrue(fixture.is_file())
-                return "MANAGED_ORIGINAL_PASS"
+                return ("PRECHECK_LOADABLE_NOT_STARTED" if precheck
+                        else "MANAGED_ORIGINAL_PASS")
             with mock.patch.object(t, "validate_prefix"), \
                  mock.patch.object(t, "valid_restart", return_value=True), \
                  mock.patch.object(t, "valid_host", return_value=True), \
@@ -199,8 +200,10 @@ class CoreHostTrialTests(unittest.TestCase):
                     (private / name).write_bytes(pe(4))
                 return {"staged": len(names)}
 
-            def execute(wine, prefix, fixture, managed, mode):
+            def execute(wine, prefix, fixture, managed, mode, *, precheck=False):
                 self.assertEqual(mode, "n")
+                if precheck:
+                    return "PRECHECK_LOADABLE_NOT_STARTED"
                 clr = (root / "clr.dll").read_bytes()
                 calls.append(clr)
                 if clr == original:
@@ -231,6 +234,12 @@ class CoreHostTrialTests(unittest.TestCase):
             self.assertEqual(report["extra_native"], "MANAGED_ORIGINAL_PASS")
             self.assertEqual(report["original48_extra_staged"], len(t.EXTRA_NATIVE))
             self.assertEqual(report["native40_after"], "MANAGED_ORIGINAL_PASS")
+            self.assertEqual(report["native40_precheck_before"],
+                             "PRECHECK_LOADABLE_NOT_STARTED")
+            self.assertEqual(report["original48_precheck"],
+                             "PRECHECK_LOADABLE_NOT_STARTED")
+            self.assertEqual(report["native40_precheck_after"],
+                             "PRECHECK_LOADABLE_NOT_STARTED")
             self.assertEqual(len(calls), 6)
             self.assertEqual((root / "clr.dll").read_bytes(), original)
             self.assertEqual((root / "mscorlib.dll").read_bytes(), original_lib)
