@@ -28,6 +28,30 @@ class HostBoundaryTests(unittest.TestCase):
         ):
             self.assertEqual(t.parse_host(data, code), "PROBE_ERROR")
 
+    def test_start_hresult_categories_are_bounded_and_never_raw(self):
+        source = (Path(__file__).resolve().parents[1] /
+                  "probes/netfx48_host_activation.c").read_text(encoding="utf-8")
+        statuses = (
+            "HOST_START_E_FAIL", "HOST_START_NOT_IMPLEMENTED",
+            "HOST_START_UNEXPECTED", "HOST_START_ACCESS_DENIED",
+            "HOST_START_OUT_OF_MEMORY", "HOST_START_INVALID_ARGUMENT",
+            "HOST_START_MISSING_MODULE", "HOST_START_MISSING_EXPORT",
+            "HOST_START_BAD_IMAGE", "HOST_START_WIN32_NOT_IMPLEMENTED",
+            "HOST_START_WIN32_NOT_SUPPORTED", "HOST_START_CLR_FACILITY",
+            "HOST_START_WIN32_FACILITY", "HOST_START_OTHER",
+        )
+        for status in statuses:
+            with self.subTest(status=status):
+                self.assertIn('RESULT("' + status + '")', source)
+                self.assertIn(status, t.HOST_STATES)
+                self.assertEqual(t.parse_host(host_output(status), 0), status)
+        self.assertIn("HRESULT_FROM_WIN32(ERROR_MOD_NOT_FOUND)", source)
+        self.assertIn("HRESULT_FROM_WIN32(ERROR_CALL_NOT_IMPLEMENTED)", source)
+        self.assertEqual(t.parse_host(host_output("HOST_START_80004005"), 0),
+                         "PROBE_ERROR")
+        self.assertNotIn("WriteFile(out, &hr", source)
+        self.assertNotIn("printf(", source)
+
     def test_only_original_runtime_execution_can_mark_managed(self):
         r = t.blank()
         self.assertTrue(t.valid(r))
