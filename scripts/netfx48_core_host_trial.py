@@ -44,7 +44,7 @@ ERROR_PHASES = {"NOT_RUN", "INPUT", "ELIGIBILITY", "AUTHENTICATION",
                 "NATIVE40_BASELINE", "EXTRACTION", "IMPORTS",
                 "DEPENDENCIES", "MSCORLIB", "CORE", "REPLACEMENT",
                 "RESTORATION", "NATIVE40_RECHECK", "VALIDATION",
-                "EXTRA_NATIVE", "COHERENCE", "COHERENCE_HOST", "TRACE", "PRECHECK_BASELINE",
+                "EXTRA_NATIVE", "COHERENCE", "COHERENCE_REPLACEMENT", "COHERENCE_HOST", "TRACE", "PRECHECK_BASELINE",
                 "TRACE_BASELINE", "PRECHECK_48", "PRECHECK_RESTORED",
                 "ZAP_BASELINE", "ZAP_48", "ZAP_RESTORED",
                 "ACTIVATION_BASELINE", "ACTIVATION_48", "ACTIVATION_RESTORED"}
@@ -400,6 +400,7 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
                         root, private, sevenzip)
                     result["coherent_staging"] = coherence
                     if coherence["status"] == "STAGED":
+                        mark("COHERENCE_REPLACEMENT")
                         for canonical, original_name in sorted(original_names.items()):
                             source = private / canonical
                             if source.is_file():
@@ -409,8 +410,14 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
                         result["coherent_host"] = host_execute(
                             wine, prefix, fixture, managed, "n")
         finally:
-            mark("RESTORATION")
-            replacement.restore()
+            # Always undo the temporary vendor-file swaps, but do not replace
+            # the actual failing phase with RESTORATION when the rollback
+            # itself succeeds. This hid the previous casing-collision error.
+            try:
+                replacement.restore()
+            except (OSError, ValueError, RuntimeError):
+                mark("RESTORATION")
+                raise
         mark("NATIVE40_RECHECK")
         result["native40_after"] = host_execute(
             wine, prefix, fixture, managed, "n")
