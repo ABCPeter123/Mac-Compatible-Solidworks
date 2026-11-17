@@ -117,6 +117,37 @@ class CoreHostTrialTests(unittest.TestCase):
             self.assertEqual(report["original48_clr"], "NO_MZZ")
             self.assertEqual((root / "clr.dll").read_bytes(), original)
 
+    def test_relative_media_and_fixtures_resolve_before_child_working_directory(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            prefix, root = native_prefix(base)
+            args = self._args(base, prefix)
+            for key in ("installer", "fixture", "managed"):
+                args[key] = Path(__import__("os").path.relpath(args[key], Path.cwd()))
+            def check_original(installer, digest):
+                self.assertTrue(installer.is_absolute())
+                self.assertTrue(installer.is_file())
+            def check_extract(installer, sevenzip, private):
+                self.assertTrue(installer.is_absolute())
+                self.assertTrue(sevenzip.is_absolute())
+                return "NO_MZZ", None
+            def check_host(wine, prefix, fixture, managed, mode):
+                self.assertTrue(wine.is_absolute())
+                self.assertTrue(prefix.is_absolute())
+                self.assertTrue(fixture.is_absolute())
+                self.assertTrue(managed.is_absolute())
+                self.assertTrue(fixture.is_file())
+                return "MANAGED_ORIGINAL_PASS"
+            with mock.patch.object(t, "validate_prefix"), \
+                 mock.patch.object(t, "valid_restart", return_value=True), \
+                 mock.patch.object(t, "valid_host", return_value=True), \
+                 mock.patch.object(t, "verify_original", side_effect=check_original), \
+                 mock.patch.object(t, "host_execute", side_effect=check_host), \
+                 mock.patch.object(t, "extract_clr", side_effect=check_extract):
+                report = t.trial(**args)
+            self.assertEqual(report["status"], "EXTRACTION_FAILED")
+            self.assertTrue(t.valid(report))
+
     def test_three_staged_variants_and_restored_native40(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
