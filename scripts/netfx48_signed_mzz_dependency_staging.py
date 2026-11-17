@@ -20,6 +20,7 @@ MAX_LIST = 8 * 1024 * 1024
 MAX_MZZ = 24
 MAX_CLR = 100 * 1024 * 1024
 MAX_MEMBERS = 30000
+MAX_DUPLICATE_MEMBERS = 4
 NAME = re.compile(r"^Path = (.{1,512})$")
 DLL = re.compile(r"[a-z0-9_.-]{1,90}\.dll\Z")
 RESULTS = {"NOT_RUN", "NO_MZZ_MATCH", "STAGED", "PARTIAL"}
@@ -87,16 +88,22 @@ def candidates(dll: str) -> tuple[str, ...]:
     )))
 
 
-def mzz_members(raw: bytes) -> dict[str, str]:
-    """Keep original MZZ member names in process memory only."""
-    if not raw or len(raw) > MAX_LIST or b"\x00" in raw:
+def mzz_member_variants(raw: bytes) -> dict[str, tuple[str, ...]]:
+    """Retain bounded same-basename archive alternatives in private memory.
+
+    Original signed MZZ payloads can have matching basename entries under
+    different directory prefixes, including differently encoded architectures.
+    Never trust the first basename match without a strict native x64/ILONLY
+    AnyCPU PE verification after extraction.
+    """
+    if not raw or len(raw) > MAX_LIST or b"\\x00" in raw:
         return {}
     try:
         lines = raw.decode("utf-8-sig").splitlines()
     except UnicodeError:
         return {}
     begun = False
-    found: dict[str, str] = {}
+    found: dict[str, list[str]] = {}
     count = 0
     for line in lines:
         if line.startswith("----------"):
@@ -104,19 +111,30 @@ def mzz_members(raw: bytes) -> dict[str, str]:
             continue
         if not begun:
             continue
-        m = NAME.fullmatch(line)
-        if m is None:
+        match = NAME.fullmatch(line)
+        if match is None:
             continue
         count += 1
         if count > MAX_MEMBERS:
             return {}
-        value = m.group(1).strip()
-        base = value.replace("\\", "/").rsplit("/", 1)[-1]
+        value = match.group(1).strip()
+        base = value.replace("\\\\", "/").rsplit("/", 1)[-1]
         if len(base) > 128 or not re.fullmatch(r"[a-zA-Z0-9_.-]{1,128}", base):
             continue
-        if base.casefold() not in found:
-            found[base.casefold()] = value
-    return found
+        key = base.casefold()
+        alternatives = found.setdefault(key, [])
+        if (value not in alternatives
+                and len(alternatives) < MAX_DUPLICATE_MEMBERS):
+            alternatives.append(value)
+    return {key: tuple(paths) for key, paths in found.items()}
+
+
+def mzz_members(raw: bytes) -> dict[str, str]:
+    """Preserve the original public helper's one-member-per-name contract."""
+    return {key: variants[0] for key, variants in
+            mzz_member_variants(raw).items()}
+
+
 
 
 def stage(original_private_dir: Path, sevenzip: Path,
@@ -141,9 +159,9 @@ def stage(original_private_dir: Path, sevenzip: Path,
         return result
     # The same signed MZZ can contain several encoding/architecture variants
     # of one DLL. A matching basename does not prove that member is loadable.
-    # Test bounded, architecture-prioritized originals instead of permanently
-    # selecting the first matching member and discarding the whole DLL on a
-    # wrong-architecture or extraction failure.
+    # Test bounded, architecture-prioritized original entries, including
+    # different archive paths with the same basename. Do not discard a DLL
+    # because the first signed member was the wrong architecture.
     found: dict[str, list[tuple[int, Path, str]]] = {}
     for archive in files:
         with tempfile.TemporaryFile() as stdout:
@@ -159,11 +177,10 @@ def stage(original_private_dir: Path, sevenzip: Path,
                 continue
         if proc.returncode != 0:
             continue
-        members = mzz_members(listing)
+        members = mzz_member_variants(listing)
         for dep in missing:
             for priority, variant in enumerate(candidates(dep)):
-                member = members.get(variant)
-                if member is not None:
+                for member in members.get(variant, ()):
                     found.setdefault(dep, []).append((priority, archive, member))
     for dep in missing:
         sources_for_dep = found.get(dep)
