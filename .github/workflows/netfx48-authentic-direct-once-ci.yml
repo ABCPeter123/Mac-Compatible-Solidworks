@@ -3,10 +3,12 @@ name: One-shot original Microsoft .NET 4.8 installer and gated 4.8.1 trial
 # Intentionally authorized main-only direct original installer experiment.
 # The previously authenticated 4.8 payload DLL-hosting test reached E_FAIL
 # even with a coherent signed Framework64 cohort plus CLR-specific CRT.
-# Real signed 4.8 direct setup on macOS 26 reached Windows 7 SP1 StopBlock
-# error 5100 after native Microsoft 4.0 managed PASS; earlier report UNKNOWN.
-# This bounded retry adds PR #183's private, read-only TrustedInstaller/SCM
-# inventory and evaluated true BlockIf categories to determine exact root.
+# Real signed 4.8 direct setup on macOS 26 twice reached signed 5100
+# after native Microsoft 4.0 managed PASS. The private original BlockIf
+# classifier says UNKNOWN; Wine sc query gave TrustedInstaller=UNKNOWN but
+# other services were PRESENT. This one-shot uses merged PR #185's native
+# OpenSCManagerW/OpenServiceW differential to test real missing service
+# versus API failure, with native Windows 2025 positive control.
 # Keep macOS 26 ARM64 and pinned Wine Staging 11.21 unchanged.
 # The reusable workflow MUST prove original native Microsoft .NET 4.0 managed
 # execution before it executes the signed 4.8 installer in a disposable Wine
