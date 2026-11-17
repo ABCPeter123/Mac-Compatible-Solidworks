@@ -56,7 +56,7 @@ ERROR_PHASES = {"NOT_RUN", "INPUT", "ELIGIBILITY", "AUTHENTICATION",
 SOURCE = {"NOT_RUN", "PE_AMD64", "NO_MZZ", "NO_CLR", "MZZ_ERROR",
           "EXTRACT_FAILED", "INVALID_CLR_PE"}
 MAX_STAGE = 16
-NAME = re.compile(r"[a-zA-Z0-9_.-]{1,90}\.dll\Z")
+NAME = re.compile(r"[a-zA-Z0-9_.-]{1,90}\.dll\Z", re.IGNORECASE)
 FRAMEWORK = Path("drive_c/windows/Microsoft.NET/Framework64/v4.0.30319")
 CORE = ("mscoreei.dll", "clrjit.dll", "mscorrc.dll", "fusion.dll")
 EXTRA_NATIVE = (
