@@ -10,6 +10,9 @@ import argparse
 import hashlib
 import json
 import os
+import re
+import subprocess
+import tempfile
 from pathlib import Path
 
 from scripts.netfx40_msxml3_restart import validate as validate_native40
@@ -38,11 +41,66 @@ LOG_FOLDER = "swcompat-netfx48-private"
 LOG_FILE = "framework-setup.txt"
 MIN_BYTES = 15 * 1024 * 1024
 MAX_BYTES = 250 * 1024 * 1024
+# Read-only Wine Service Control Manager differential. An absent service is
+# evidence of an unsupported installer prerequisite, not permission to forge
+# its registration or claim genuine Windows component servicing.
+SERVICE_NAMES = ("TrustedInstaller", "msiserver", "wuauserv", "BITS")
+SERVICE_VALUES = {"NOT_RUN", "PRESENT", "ABSENT", "UNKNOWN"}
+SERVICE_MAX_BYTES = 4096
+
+
+def blank_services() -> dict:
+    return {key: "NOT_RUN" for key in SERVICE_NAMES}
+
+
+def valid_services(value: object) -> bool:
+    return (type(value) is dict and set(value) == set(SERVICE_NAMES)
+            and all(type(v) is str and v in SERVICE_VALUES
+                    for v in value.values()))
+
+
+def inventory_services(wine: Path, prefix: Path) -> dict:
+    """Read only SCM names, never expose raw Wine stdout or registry paths."""
+    validate_prefix(prefix)
+    if wine.is_symlink() or not wine.is_file():
+        raise ValueError("Invalid signed Wine service probe runtime")
+    env = os.environ.copy()
+    env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64",
+                "WINEDEBUG": "-all"})
+    env.pop("WINEDLLOVERRIDES", None)
+    result = blank_services()
+    for name in SERVICE_NAMES:
+        with tempfile.TemporaryFile() as output:
+            try:
+                process = subprocess.run(
+                    [str(wine), "sc", "query", name], env=env,
+                    stdin=subprocess.DEVNULL, stdout=output,
+                    stderr=subprocess.DEVNULL, timeout=15, check=False)
+            except (OSError, subprocess.TimeoutExpired):
+                result[name] = "UNKNOWN"
+                continue
+            output.seek(0)
+            raw = output.read(SERVICE_MAX_BYTES + 1)
+            if len(raw) > SERVICE_MAX_BYTES:
+                result[name] = "UNKNOWN"
+            elif (process.returncode == 0 and
+                  re.search(rb"(?i)\bSERVICE_NAME\s*:\s*" +
+                            re.escape(name.encode("ascii")) + rb"\b", raw)):
+                result[name] = "PRESENT"
+            elif process.returncode != 0 and re.search(
+                    rb"(?i)(?:\b1060\b|service.{0,80}does not exist)", raw):
+                result[name] = "ABSENT"
+            else:
+                result[name] = "UNKNOWN"
+    assert valid_services(result)
+    return result
+
 
 
 def blank() -> dict:
     return {
         "status": "NOT_ELIGIBLE", "native40_persistent": False,
+        "service_prerequisites": blank_services(),
         "win7": "NOT_RUN", "win10": "NOT_RUN",
         "setup": blank_launch(), "setup_evidence": dict(SETUP_EVIDENCE),
         "secondary_evidence": None,
@@ -80,6 +138,7 @@ def validate(report: object) -> bool:
             or report["framework481_confirmed"] is not False
             or report["solidworks_compatibility"] != "NOT_DEMONSTRATED"
             or not validate_prerequisite(report["primary_prerequisite"])
+            or not valid_services(report["service_prerequisites"])
             or (report["status"] == "MEASURED"
                 and not validate_secondary_report(report["secondary_evidence"]))
             or (report["status"] == "NOT_ELIGIBLE"
@@ -158,6 +217,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
             or initial["managed"] != "PASS"):
         return blank()
 
+    services = inventory_services(wine, prefix)
     env = _env(wine, prefix)
     win7 = _set_winver(wine, prefix, env, "win7")
     setup = blank_launch()
@@ -203,6 +263,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
     current = probe(wine, prefix, managed, override="native_only")
     result = {
         "status": "MEASURED", "native40_persistent": True,
+        "service_prerequisites": services,
         "win7": win7, "win10": win10, "setup": setup,
         "setup_evidence": evidence, "secondary_evidence": secondary,
         "primary_prerequisite": primary, "restart": restart,

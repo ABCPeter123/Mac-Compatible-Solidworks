@@ -1065,6 +1065,16 @@ jobs:
                   for key in ("status", "phase"):
                       out.write(f"original_direct_48_log_{key}: **{measured['setup_evidence'][key]}**\n\n")
                   out.write(f"original_direct_48_log_codes: **{','.join(measured['setup_evidence']['codes'])}**\n\n")
+                  # Read-only SCM query output is discarded privately; only
+                  # fixed service names and statuses leave this runner.
+                  from scripts.netfx40_to_48_direct import SERVICE_NAMES
+                  for service in SERVICE_NAMES:
+                      out.write(f"original_direct_48_service_{service}: **{measured['service_prerequisites'][service]}**\n\n")
+                  prereq = measured["primary_prerequisite"]
+                  for key in ("status", "5100_in_log"):
+                      out.write(f"original_direct_48_prerequisite_{key}: **{prereq[key]}**\n\n")
+                  for key in ("os_versions", "blockers"):
+                      out.write(f"original_direct_48_prerequisite_{key}: **{','.join(prereq[key])}**\n\n")
               disk_path = Path("build/netfx481-disk-before-upgrade.json")
               if disk_path.is_file():
                   from scripts.netfx481_disk_space_gate import valid as valid_disk

@@ -165,6 +165,55 @@ class OriginalPrerequisiteTests(unittest.TestCase):
             b"Installed update KB2919355 detected.\n"
             b"Restart is not required.\n")["blockers"], [])
 
+    def test_true_trustedinstaller_service_block_separate_from_msiserver(self):
+        # Mirrors the Microsoft 4.8 bootstrapper's wrapped description and
+        # its evaluated TRUE BlockIf. The private source is never serialized.
+        log = (
+            b"[11/17/2026, 15:14:00]OS Version = 6.1.7601, SP = 1.0\n"
+            b"[11/17/2026, 15:14:01]BlockIf: Setup may not run properly, "
+            b"because the Windows\n"
+            b"[11/17/2026, 15:14:01]Modules Installer Service is not "
+            b"available on this computer.\n"
+            b"[11/17/2026, 15:14:01]evaluating BlockIf:\n"
+            b"[11/17/2026, 15:14:01]Not: evaluating\n"
+            b"[11/17/2026, 15:14:01]Service 'TrustedInstaller' doesn't exist. "
+            b"Error 1060\n"
+            b"[11/17/2026, 15:14:01]BlockIf evaluated to true\n"
+            b"Final Result: Installation failed with code (0x000013EC), "
+            b"A StopBlock was hit\n"
+            b"Private path C:\\Users\\redacted\\setup.exe\n"
+        )
+        classified = classify_text(log, family="NETFX48")
+        self.assertTrue(validate(classified))
+        self.assertEqual(classified["os_versions"], ["WINDOWS_7_SP1_REPORTED_48"])
+        self.assertEqual(classified["blockers"], ["WINDOWS_MODULES_INSTALLER_BLOCK"])
+        self.assertTrue(classified["5100_in_log"])
+        self.assertNotIn("TrustedInstaller", str(classified))
+        self.assertNotIn("redacted", str(classified))
+        # An explicitly FALSE BlockIf must not cause classification from
+        # its description even if it mentions the missing service.
+        false_log = log.replace(b"BlockIf evaluated to true",
+                                b"BlockIf evaluated to false").replace(
+                                    b"Final Result: Installation failed with code "
+                                    b"(0x000013EC), A StopBlock was hit",
+                                    b"Global Block Checks: no blocking conditions found")
+        negative = classify_text(false_log, family="NETFX48")
+        self.assertEqual(negative["blockers"], [])
+        self.assertFalse(negative["5100_in_log"])
+
+    def test_microsoft_windows_modules_and_windows_installer_are_not_equivalent(self):
+        plain = classify_text(
+            b"BlockIf: Windows Modules Installer service (TrustedInstaller) "
+            b"is not available\n"
+            b"evaluating BlockIf:\nBlockIf evaluated to true\n",
+            family="NETFX48")
+        self.assertEqual(plain["blockers"], ["WINDOWS_MODULES_INSTALLER_BLOCK"])
+        msi = classify_text(
+            b"BlockIf: Windows Installer service (msiserver) is not available\n"
+            b"evaluating BlockIf:\nBlockIf evaluated to true\n",
+            family="NETFX48")
+        self.assertEqual(msi["blockers"], ["WINDOWS_INSTALLER_BLOCK"])
+
     def test_true_windows_installer_block_not_false_os_or_permissions(self):
         raw = (
             b"[11/17/2026, 14:01:01]Global Block Checks: Checking for global blockers\n"

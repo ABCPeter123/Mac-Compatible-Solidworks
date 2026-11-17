@@ -23,7 +23,8 @@ CAUSES = {
     "PROCESSOR_BLOCK", "EXISTING_FRAMEWORK_BLOCK",
     "DISK_SPACE_BLOCK", "COMPATIBILITY_MODE_BLOCK", "WINDOWS_UPDATE_BLOCK",
     "UNKNOWN_PREREQUISITE", "SAFE_MODE_BLOCK",
-    "WINDOWS_INSTALLER_BLOCK", "IMAGING_COMPONENT_BLOCK",
+    "WINDOWS_INSTALLER_BLOCK", "WINDOWS_MODULES_INSTALLER_BLOCK",
+    "IMAGING_COMPONENT_BLOCK",
 }
 STATES = {"NOT_REQUESTED", "NOT_FOUND", "READ_FAILED", "TOO_LARGE",
           "INVALID_ENCODING", "CLASSIFIED"}
@@ -43,6 +44,14 @@ DISK_ESTIMATE = re.compile(
     r"Bytes\s+Available:\s*\[(\d{1,18})\]?"
 )
 CAUSE_REGEX = (
+    # Windows Modules Installer is the TrustedInstaller servicing service,
+    # not the ordinary msiserver (Windows Installer) MSI service. Wine may
+    # lack the former even when native MSI and genuine .NET 4.0 work.
+    ("WINDOWS_MODULES_INSTALLER_BLOCK", re.compile(
+        r"(?i)(?:windows\s+modules?\s+installer(?:\s+service)?|trustedinstaller)"
+        r".{0,160}(?:not available|not installed|missing|disabled|not running|cannot start|doesn.t exist)"
+        r"|(?:not available|not installed|missing|disabled|not running|cannot start)"
+        r".{0,160}(?:windows\s+modules?\s+installer|trustedinstaller)")),
     ("SAFE_MODE_BLOCK", re.compile(r"(?i)\bsafe mode\b")),
     ("WINDOWS_INSTALLER_BLOCK", re.compile(
         r"(?i)\b(?:windows installer service|msiserver)\b.{0,120}"
