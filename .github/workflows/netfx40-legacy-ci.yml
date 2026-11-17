@@ -18,6 +18,11 @@ on:
         type: boolean
         required: false
         default: false
+      original_48_profile:
+        description: 'Original signed 4.8 setup reported Windows profile; Win10 is distinct experiment'
+        type: string
+        required: false
+        default: win7
       host_provenance_only:
         description: 'Authenticate genuine .NET 4.0 host; skip 4.8/4.8.1 installers'
         type: boolean
@@ -45,6 +50,12 @@ on:
         type: boolean
         required: false
         default: false
+      original_48_profile:
+        description: 'Original 4.8 profile for distinct Win7/Win10 compatibility trial'
+        type: choice
+        required: false
+        default: win7
+        options: [win7, win10]
       host_provenance_only:
         description: 'Authenticate Microsoft .NET 4.0 CLR hosting after msxml3; skip 4.8 and 4.8.1 installers'
         type: boolean
@@ -896,6 +907,7 @@ jobs:
             --sha256-file build/netfx48.sha256 \
             --launcher build/netfx48_win32_launch.exe \
             --service-fixture build/netfx48_scm_service_probe.exe \
+            --setup-profile "${{ inputs.original_48_profile }}" \
             --loader build/netfx481_clr_load.exe \
             --managed build/netfx481_runtime_probe.exe \
             --native40-report build/netfx40-msxml3-restart.json \
