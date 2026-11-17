@@ -48,7 +48,8 @@ ERROR_PHASES = {"NOT_RUN", "INPUT", "ELIGIBILITY", "AUTHENTICATION",
                 "COHERENCE_INVALID_SOURCE", "COHERENCE_INVALID_PE",
                 "COHERENCE_CASE_AMBIGUITY", "COHERENCE_BACKUP_COLLISION",
                 "COHERENCE_TEMP_COLLISION", "COHERENCE_FILESYSTEM_FAILURE",
-                "COHERENCE_UNCLASSIFIED_FAILURE", "TRACE", "PRECHECK_BASELINE",
+                "COHERENCE_UNCLASSIFIED_FAILURE", *SOURCE_PROBLEMS,
+                "TRACE", "PRECHECK_BASELINE",
                 "TRACE_BASELINE", "PRECHECK_48", "PRECHECK_RESTORED",
                 "ZAP_BASELINE", "ZAP_48", "ZAP_RESTORED",
                 "ACTIVATION_BASELINE", "ACTIVATION_48", "ACTIVATION_RESTORED"}
@@ -154,6 +155,38 @@ def sha256(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+SOURCE_PROBLEMS = {
+    "COHERENCE_SOURCE_NAME", "COHERENCE_SOURCE_LINKED",
+    "COHERENCE_SOURCE_MISSING", "COHERENCE_SOURCE_NOT_FILE",
+    "COHERENCE_SOURCE_SCOPE", "COHERENCE_SOURCE_SIZE",
+    "COHERENCE_SOURCE_METADATA",
+}
+
+
+def source_problem(source: Path, name: str, root: Path) -> str | None:
+    """Classify local original-MZZ source trust failures without private data.
+
+    Only the fixed enum leaves the runner. The caller must still independently
+    perform its normal PE and SHA checks before writing to a Wine prefix.
+    """
+    if not NAME.fullmatch(name) or source.name.casefold() != name.casefold():
+        return "COHERENCE_SOURCE_NAME"
+    if source.is_symlink():
+        return "COHERENCE_SOURCE_LINKED"
+    try:
+        if not source.is_file():
+            return ("COHERENCE_SOURCE_MISSING" if not source.exists()
+                    else "COHERENCE_SOURCE_NOT_FILE")
+        if source.resolve().is_relative_to(root.resolve()):
+            return "COHERENCE_SOURCE_SCOPE"
+        size = source.stat().st_size
+    except (OSError, ValueError):
+        return "COHERENCE_SOURCE_METADATA"
+    if not 512 <= size <= 100 * 1024 * 1024:
+        return "COHERENCE_SOURCE_SIZE"
+    return None
+
+
 class ReversibleFramework:
     """Replace a strict allowlist in a marked, throwaway Wine Framework64 tree."""
 
@@ -168,10 +201,7 @@ class ReversibleFramework:
         self.saved: dict[str, Path | None] = {}
 
     def replace(self, source: Path, name: str, *, allow_managed_anycpu: bool = False) -> None:
-        if (not NAME.fullmatch(name) or source.name.casefold() != name.casefold()
-                or source.is_symlink() or not source.is_file()
-                or source.resolve().is_relative_to(self.root.resolve())
-                or not 512 <= source.stat().st_size <= 100 * 1024 * 1024):
+        if source_problem(source, name, self.root) is not None:
             raise ValueError("Untrusted original runtime payload")
         with source.open("rb") as stream:
             if not compatible_x64(stream.read(65536),
@@ -418,9 +448,10 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
                             if original_name.casefold() in active:
                                 continue
                             source = private / canonical
-                            if not source.is_file() or source.is_symlink():
-                                mark("COHERENCE_INVALID_SOURCE")
-                                raise ValueError("Coherent source must exist")
+                            problem = source_problem(source, original_name, root)
+                            if problem is not None:
+                                mark(problem)
+                                raise ValueError("Coherent source rejected")
                             try:
                                 replacement.replace(
                                     source, original_name,
