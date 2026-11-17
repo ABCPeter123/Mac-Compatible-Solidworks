@@ -87,6 +87,7 @@ class DirectNative48Tests(unittest.TestCase):
         self.assertEqual([c.args[-1] for c in profile_switch.call_args_list],
                          [profile, "win10"])
         self.assertEqual(result["setup_profile"], profile.upper())
+        self.assertEqual(result["setup_profile_applied"], "APPLIED")
         self.assertEqual(result["win7"], "APPLIED" if profile == "win7" else "NOT_RUN")
         self.assertEqual(started.call_args.kwargs["setup_family"], "NETFX48")
         self.assertEqual(secondary_scan.call_args.kwargs["family"], "NETFX48")
@@ -124,6 +125,7 @@ class DirectNative48Tests(unittest.TestCase):
             self.assertEqual(result["win7"], "NOT_RUN")
             self.assertEqual(result["win10"], "APPLIED")
             self.assertFalse(p.validate(dict(result, setup_profile="WIN7")))
+            self.assertFalse(p.validate(dict(result, setup_profile_applied="FAILED")))
             self.assertFalse(p.validate(dict(result, win7="APPLIED")))
             # A signed original setup 5100 remains a prerequisite block on Win10.
         with TemporaryDirectory() as td:
