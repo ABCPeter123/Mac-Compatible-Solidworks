@@ -197,6 +197,16 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
           sevenzip: Path, fixture: Path, managed: Path,
           restart: dict, host: dict) -> dict:
     _eligible(wine, prefix, sevenzip, fixture, managed, installer, restart, host)
+    # CLI callers supply build-relative fixtures and media. The Wine child
+    # runs with cwd=build, while 7-Zip runs in a private temporary directory.
+    # Canonicalize every path BEFORE spawning either process, or both tools
+    # silently look under the wrong working directory.
+    wine = wine.resolve(strict=True)
+    prefix = prefix.resolve(strict=True)
+    sevenzip = sevenzip.resolve(strict=True)
+    fixture = fixture.resolve(strict=True)
+    managed = managed.resolve(strict=True)
+    installer = installer.resolve(strict=True)
     verify_original(installer, signed_sha)
     result = blank()
     result["original48_sha256_verified"] = True
