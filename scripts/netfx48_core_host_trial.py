@@ -26,7 +26,6 @@ from scripts.netfx48_isolated_loader_trial import (
 )
 from scripts.netfx48_signed_mzz_dependency_staging import stage, valid as valid_stage
 from scripts.netfx4x_mzz_import_evidence import parse_pe, family
-from scripts.netfx481_payload_audit import pe_type
 from scripts.netfx481_trial import validate_prefix
 from scripts.netfx48_start_trace import (
     blank as trace_blank, valid as trace_valid, probe as trace_probe,
@@ -37,6 +36,7 @@ from scripts.netfx48_clr_activation_logs import (
 from scripts.netfx48_full_framework_staging import (
     blank as coherent_blank, valid as coherent_valid, stage_matching,
 )
+from scripts.netfx48_x64_compatible_pe import compatible_x64
 
 STATES = {"NOT_RUN", "BASELINE_FAILED", "EXTRACTION_FAILED",
           "PARTIAL", "MEASURED", "INTERNAL_ERROR"}
@@ -163,15 +163,16 @@ class ReversibleFramework:
         self.private = private
         self.saved: dict[str, Path | None] = {}
 
-    def replace(self, source: Path, name: str) -> None:
+    def replace(self, source: Path, name: str, *, allow_managed_anycpu: bool = False) -> None:
         if (not NAME.fullmatch(name) or source.name.casefold() != name.casefold()
                 or source.is_symlink() or not source.is_file()
                 or source.resolve().is_relative_to(self.root.resolve())
                 or not 512 <= source.stat().st_size <= 100 * 1024 * 1024):
             raise ValueError("Untrusted original runtime payload")
         with source.open("rb") as stream:
-            if pe_type(stream.read(8192)) != "PE_AMD64":
-                raise ValueError("Original x64 runtime payload not PE_AMD64")
+            if not compatible_x64(stream.read(65536),
+                                  allow_anycpu=allow_managed_anycpu):
+                raise ValueError("Original signed payload is not x64-compatible")
         target = self.root / name
         if target.is_symlink() or (target.exists() and not target.is_file()):
             raise ValueError("Unsafe original Wine runtime target")
@@ -388,7 +389,8 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
                         for canonical, original_name in sorted(original_names.items()):
                             source = private / canonical
                             if source.is_file():
-                                replacement.replace(source, original_name)
+                                replacement.replace(source, original_name,
+                                                    allow_managed_anycpu=True)
                         mark("COHERENCE_HOST")
                         result["coherent_host"] = host_execute(
                             wine, prefix, fixture, managed, "n")
