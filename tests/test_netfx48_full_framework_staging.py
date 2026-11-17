@@ -14,7 +14,7 @@ def synthetic_pe(seed: int = 0) -> bytes:
     data = bytearray([seed & 255] * 8192)
     data[:2] = b"MZ"
     struct.pack_into("<I", data, 0x3c, 0x80)
-    data[0x80:0x84] = b"PE\\x00\\x00"
+    data[0x80:0x84] = b"PE\x00\x00"
     struct.pack_into("<H", data, 0x84, 0x8664)
     struct.pack_into("<H", data, 0x94, 240)
     struct.pack_into("<H", data, 0x98, 0x20b)
