@@ -1093,9 +1093,9 @@ jobs:
                   from scripts.netfx48_registry_preflight import FIELDS
                   for view in FIELDS:
                       out.write(f"original_direct_48_release_preflight_{view}: **{measured['registry_preflight'][view]}**\n\n")
-                  from scripts.netfx48_scm_service_probe import FIELDS
-                  assert measured["service_api"]["status"] in {
-                      "COMPLETE", "UNAVAILABLE", "TIMEOUT", "PROCESS_FAILED", "MALFORMED"}
+                  out.write(f"original_direct_48_wine_mono_registration: **{measured['wine_mono_registration']}**\n\n")
+                  from scripts.netfx48_scm_service_probe import FIELDS, STATUSES
+                  assert measured["service_api"]["status"] in STATUSES
                   out.write(f"original_direct_48_scm_api_status: **{measured['service_api']['status']}**\n\n")
                   for service in FIELDS:
                       out.write(f"original_direct_48_scm_api_{service}: **{measured['service_api']['services'][service]}**\n\n")
