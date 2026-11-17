@@ -28,6 +28,11 @@ on:
         type: boolean
         required: false
         default: false
+      use_macos26_runner:
+        description: 'Select macOS 26 Apple Silicon runner; default remains macOS 15'
+        type: boolean
+        required: false
+        default: false
   workflow_dispatch:
     inputs:
       try_48_intermediate:
@@ -47,6 +52,12 @@ on:
         default: false
       try_48_payload_host:
         description: 'Reversibly stage original signed 4.8 CLR payload in proven native 4.0 Wine; no 4.8 setup'
+        type: boolean
+        required: false
+        default: false
+
+      use_macos26_runner:
+        description: 'Select macOS 26 Apple Silicon runner; default remains macOS 15'
         type: boolean
         required: false
         default: false
@@ -386,7 +397,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && !inputs.host_provenance_only
     name: Check genuine Microsoft .NET 4.0 on Apple Silicon Wine Staging 11.21
     needs: [authentic-netfx40-windows, absolute-path-regressions]
-    runs-on: macos-15
+    runs-on: ${{ inputs.use_macos26_runner && 'macos-26' || 'macos-15' }}
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
@@ -588,7 +599,7 @@ jobs:
   apple-silicon-msxml3-fix:
     name: Try genuine .NET 4.0 after msxml3 in a fresh Apple Silicon Wine prefix
     needs: [authentic-netfx40-windows, absolute-path-regressions]
-    runs-on: macos-15
+    runs-on: ${{ inputs.use_macos26_runner && 'macos-26' || 'macos-15' }}
     timeout-minutes: 35
     env:
       SWCOMPAT_TRY_48_INTERMEDIATE: ${{ inputs.try_48_intermediate }}
