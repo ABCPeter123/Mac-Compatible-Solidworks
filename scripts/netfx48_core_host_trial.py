@@ -405,34 +405,47 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
                     result["coherent_staging"] = coherence
                     if coherence["status"] == "STAGED":
                         mark("COHERENCE_REPLACEMENT")
+                        # The early CLR, mscorlib, core and native-import arms
+                        # already replaced some of these same DLLs from the
+                        # same signed MZZ. On case-insensitive macOS filesystems
+                        # repeating those swaps adds no coherence but can
+                        # create unnecessary backup/rename collisions.
+                        # Reuse only names already successfully swapped by
+                        # this ReversibleFramework instance. Other 4.8
+                        # candidates still require strict PE + hash checks.
+                        active = {name.casefold() for name in replacement.saved}
                         for canonical, original_name in sorted(original_names.items()):
+                            if original_name.casefold() in active:
+                                continue
                             source = private / canonical
-                            if source.is_file():
-                                try:
-                                    replacement.replace(
-                                        source, original_name,
-                                        allow_managed_anycpu=True)
-                                except ValueError as exc:
-                                    # All known messages originate in our own
-                                    # vetted replace(), not in Microsoft files.
-                                    # Never emit the raw message or any paths.
-                                    category = {
-                                        "Untrusted original runtime payload":
-                                            "COHERENCE_INVALID_SOURCE",
-                                        "Original signed payload is not x64-compatible":
-                                            "COHERENCE_INVALID_PE",
-                                        "Ambiguous original runtime target casing":
-                                            "COHERENCE_CASE_AMBIGUITY",
-                                        "Backup collision":
-                                            "COHERENCE_BACKUP_COLLISION",
-                                        "Untrusted temporary runtime target":
-                                            "COHERENCE_TEMP_COLLISION",
-                                    }.get(str(exc), "COHERENCE_UNCLASSIFIED_FAILURE")
-                                    mark(category)
-                                    raise
+                            if not source.is_file() or source.is_symlink():
+                                mark("COHERENCE_INVALID_SOURCE")
+                                raise ValueError("Coherent source must exist")
+                            try:
+                                replacement.replace(
+                                    source, original_name,
+                                    allow_managed_anycpu=True)
+                            except ValueError as exc:
+                                # All known messages originate in our own
+                                # vetted replace(), not in Microsoft files.
+                                # Never emit the raw message or any paths.
+                                category = {
+                                    "Untrusted original runtime payload":
+                                        "COHERENCE_INVALID_SOURCE",
+                                    "Original signed payload is not x64-compatible":
+                                        "COHERENCE_INVALID_PE",
+                                    "Ambiguous original runtime target casing":
+                                        "COHERENCE_CASE_AMBIGUITY",
+                                    "Backup collision":
+                                        "COHERENCE_BACKUP_COLLISION",
+                                    "Untrusted temporary runtime target":
+                                        "COHERENCE_TEMP_COLLISION",
+                                }.get(str(exc), "COHERENCE_UNCLASSIFIED_FAILURE")
+                                mark(category)
+                                raise
                                 except OSError:
-                                    mark("COHERENCE_FILESYSTEM_FAILURE")
-                                    raise
+                                mark("COHERENCE_FILESYSTEM_FAILURE")
+                                raise
                         mark("COHERENCE_HOST")
                         result["coherent_host"] = host_execute(
                             wine, prefix, fixture, managed, "n")
