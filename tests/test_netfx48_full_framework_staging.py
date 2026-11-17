@@ -10,6 +10,17 @@ from scripts import netfx48_full_framework_staging as t
 from scripts import netfx48_core_host_trial as core
 
 
+def synthetic_pe(seed: int = 0) -> bytes:
+    data = bytearray([seed & 255] * 8192)
+    data[:2] = b"MZ"
+    struct.pack_into("<I", data, 0x3c, 0x80)
+    data[0x80:0x84] = b"PE\\x00\\x00"
+    struct.pack_into("<H", data, 0x84, 0x8664)
+    struct.pack_into("<H", data, 0x94, 240)
+    struct.pack_into("<H", data, 0x98, 0x20b)
+    return bytes(data)
+
+
 def fixture(path: Path) -> tuple[Path, Path, Path]:
     root = path / "prefix" / core.FRAMEWORK
     root.mkdir(parents=True)
@@ -52,7 +63,7 @@ class CoherentRuntimeTests(unittest.TestCase):
             root, private, reader = fixture(Path(td))
             for i in range(19):
                 (root / ("System" + str(i) + ".dll")).write_bytes(b"old")
-            (private / "system0.dll").write_bytes(b"previous verified member")
+            (private / "system0.dll").write_bytes(synthetic_pe(1))
             matches = {"system" + str(i) + ".dll": "System" + str(i) + ".dll"
                        for i in range(19)}
             requested = []
@@ -60,7 +71,7 @@ class CoherentRuntimeTests(unittest.TestCase):
                 self.assertTrue(allow_managed_anycpu)
                 requested.extend(names)
                 for name in names:
-                    (private_dir / name).write_bytes(b"synthetic source")
+                    (private_dir / name).write_bytes(synthetic_pe(2))
                 return {"status": "STAGED", "staged": len(names)}
             with mock.patch.object(t, "matching", return_value=matches), \
                  mock.patch.object(t, "stage", side_effect=staged), \
@@ -74,6 +85,59 @@ class CoherentRuntimeTests(unittest.TestCase):
             self.assertEqual(len(mapping), 19)
             self.assertTrue(t.valid(result))
             self.assertNotIn("System", json.dumps(result))
+
+    def test_corrupt_cached_mzz_member_is_reextracted_from_signed_archive(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, private, reader = fixture(Path(td))
+            (root / "System.Core.dll").write_bytes(b"genuine old 4.0")
+            corrupted = private / "system.core.dll"
+            corrupted.write_bytes(b"partial archive member")
+            requested = []
+            def staged(private_dir, sevenzip, names, *, allow_managed_anycpu=False):
+                self.assertTrue(allow_managed_anycpu)
+                requested.extend(names)
+                for name in names:
+                    (private_dir / name).write_bytes(synthetic_pe(7))
+                return {"staged": len(names)}
+            with mock.patch.object(t, "matching", return_value={
+                    "system.core.dll": "System.Core.dll"}), \
+                 mock.patch.object(t, "stage", side_effect=staged), \
+                 mock.patch.object(t, "valid_batch", return_value=True):
+                report, names = t.stage_matching(root, private, reader)
+            self.assertEqual(report["status"], "STAGED")
+            self.assertEqual(report["additional"], 1)
+            self.assertEqual(report["staged"], 1)
+            self.assertEqual(requested, ["system.core.dll"])
+            self.assertEqual(corrupted.read_bytes(), synthetic_pe(7))
+            self.assertEqual(names, {"system.core.dll": "System.Core.dll"})
+            self.assertNotIn(str(private), str(report))
+            self.assertTrue(t.valid(report))
+
+    def test_stager_cannot_claim_coherent_set_if_report_count_lies(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, private, reader = fixture(Path(td))
+            with mock.patch.object(t, "matching", return_value={
+                    "missing.dll": "Missing.dll"}), \
+                 mock.patch.object(t, "stage", return_value={"staged": 1}), \
+                 mock.patch.object(t, "valid_batch", return_value=True):
+                report, mapping = t.stage_matching(root, private, reader)
+            self.assertEqual(report["status"], "ERROR")
+            self.assertEqual(mapping, {})
+            self.assertTrue(t.valid(report))
+
+    def test_preexisting_linked_member_never_reextracted(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, private, reader = fixture(Path(td))
+            linked = private / "danger.dll"
+            linked.symlink_to(private / "archives" / "original.mzz")
+            with mock.patch.object(t, "matching", return_value={
+                    "danger.dll": "Danger.dll"}), \
+                 mock.patch.object(t, "stage") as mock_stage:
+                report, mapping = t.stage_matching(root, private, reader)
+            self.assertEqual(report["status"], "ERROR")
+            self.assertEqual(mapping, {})
+            mock_stage.assert_not_called()
+            self.assertTrue(linked.is_symlink())
 
     def test_bounded_and_partial_are_not_success(self):
         with tempfile.TemporaryDirectory() as td:
