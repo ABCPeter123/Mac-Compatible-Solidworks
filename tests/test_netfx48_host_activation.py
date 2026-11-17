@@ -28,6 +28,28 @@ class HostBoundaryTests(unittest.TestCase):
         ):
             self.assertEqual(t.parse_host(data, code), "PROBE_ERROR")
 
+    def test_read_only_clr_loadability_precheck_is_bounded(self):
+        source = (Path(__file__).resolve().parents[1] /
+                  "probes/netfx48_host_activation.c").read_text(encoding="utf-8")
+        statuses = (
+            "PRECHECK_LOADABLE_FAILED", "PRECHECK_STARTED_FAILED",
+            "PRECHECK_LOADABLE_ALREADY_STARTED",
+            "PRECHECK_LOADABLE_NOT_STARTED",
+            "PRECHECK_UNLOADABLE_ALREADY_STARTED",
+            "PRECHECK_UNLOADABLE_NOT_STARTED",
+        )
+        for status in statuses:
+            with self.subTest(status=status):
+                self.assertIn('RESULT("' + status + '")', source)
+                self.assertIn(status, t.HOST_STATES)
+                self.assertEqual(t.parse_host(host_output(status), 0), status)
+        self.assertIn("ICLRRuntimeInfo_IsLoadable(info, &loadable)", source)
+        self.assertIn("ICLRRuntimeInfo_IsStarted(info, &started, &flags)", source)
+        self.assertLess(source.index("ICLRRuntimeInfo_IsLoadable"),
+                        source.index("ICLRRuntimeInfo_GetInterface"))
+        self.assertEqual(t.parse_host(host_output("PRECHECK_LOADABLE_0x80004005"), 0),
+                         "PROBE_ERROR")
+
     def test_start_hresult_categories_are_bounded_and_never_raw(self):
         source = (Path(__file__).resolve().parents[1] /
                   "probes/netfx48_host_activation.c").read_text(encoding="utf-8")

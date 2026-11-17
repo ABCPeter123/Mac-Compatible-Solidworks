@@ -141,6 +141,28 @@ void WINAPI host_entry(void) {
             != CSTR_EQUAL)
         RESULT("OTHER_RUNTIME_SELECTED");
 
+    /* Read-only public CLR hosting metadata, run as a separate process.
+       IsLoadable/IsStarted do not invoke Start or execute managed code.
+       Compare known-good original 4.0 and failing original 4.8 CLR without
+       exposing HRESULTs, paths, registry values, or runtime binaries. */
+    {
+        wchar_t precheck_mode[3];
+        n = GetEnvironmentVariableW(L"SWCOMPAT_HOST_PRECHECK", precheck_mode, 3);
+        if (n == 1 && precheck_mode[0] == L'1') {
+            BOOL loadable = FALSE;
+            BOOL started = FALSE;
+            DWORD flags = 0;
+            hr = ICLRRuntimeInfo_IsLoadable(info, &loadable);
+            if (FAILED(hr)) RESULT("PRECHECK_LOADABLE_FAILED");
+            hr = ICLRRuntimeInfo_IsStarted(info, &started, &flags);
+            if (FAILED(hr)) RESULT("PRECHECK_STARTED_FAILED");
+            if (loadable && started) RESULT("PRECHECK_LOADABLE_ALREADY_STARTED");
+            if (loadable) RESULT("PRECHECK_LOADABLE_NOT_STARTED");
+            if (started) RESULT("PRECHECK_UNLOADABLE_ALREADY_STARTED");
+            RESULT("PRECHECK_UNLOADABLE_NOT_STARTED");
+        }
+    }
+
     hr = ICLRRuntimeInfo_GetInterface(info, &CLSID_CLRRuntimeHost,
                                      &IID_ICLRRuntimeHost, (void **)&host);
     if (FAILED(hr) || host == NULL) RESULT("HOST_INTERFACE_FAILED");

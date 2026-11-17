@@ -30,6 +30,11 @@ class Original48StartTraceTests(unittest.TestCase):
         self.assertTrue(report["export_missing"])
         self.assertTrue(report["seh_exception"])
         self.assertTrue(report["unimplemented_api"])
+        self.assertTrue(report["error_channels"]["module"])
+        self.assertTrue(report["error_channels"]["seh"])
+        self.assertTrue(report["error_channels"]["other"])
+        self.assertEqual(report["error_count"], "FEW")
+        self.assertEqual(report["fixme_count"], "NONE")
         report.update(host="HOST_START_E_FAIL", process="EXIT_ZERO")
         self.assertTrue(t.valid(report))
         text = json.dumps(report)
@@ -37,6 +42,25 @@ class Original48StartTraceTests(unittest.TestCase):
         self.assertNotIn("clr.dll", text)
         self.assertNotIn("C:", text)
         self.assertNotIn("0x", text)
+
+    def test_error_channel_delta_is_bounded_and_private(self):
+        baseline = t.classify_trace(
+            b"001a:fixme:ole:unsupported C:\\private\\registry\\secret\n"
+            b"001a:err:reg:query failed for C:\\secret\n")
+        failing = t.classify_trace(
+            b"001a:fixme:ole:unsupported C:\\private\\registry\\secret\n"
+            b"001a:err:reg:query failed for C:\\secret\n"
+            b"001a:err:mscoree:runtime initialization failed\n")
+        self.assertEqual(baseline["error_count"], "ONE")
+        self.assertEqual(failing["error_count"], "FEW")
+        self.assertTrue(failing["error_channels"]["mscoree"])
+        self.assertFalse(baseline["error_channels"]["mscoree"])
+        self.assertTrue(failing["fixme_channels"]["ole"])
+        self.assertEqual(failing["fixme_count"], "ONE")
+        self.assertNotIn("secret", json.dumps(failing))
+        self.assertFalse(t.valid(dict(failing, host="HOST_START_E_FAIL",
+                                      process="EXIT_ZERO",
+                                      error_channels={"mscoree": True})))
 
     def test_rejects_arbitrary_schema_and_truncated_logs(self):
         self.assertTrue(t.valid(t.blank()))

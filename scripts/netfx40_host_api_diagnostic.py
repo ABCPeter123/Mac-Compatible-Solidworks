@@ -25,6 +25,9 @@ STATUS = {
     "NO_MSCOREE", "NO_HOST_EXPORT", "META_HOST_FAILED",
     "RUNTIME_DISCOVERY_FAILED", "RUNTIME_DIRECTORY_FAILED",
     "OTHER_RUNTIME_SELECTED", "HOST_INTERFACE_FAILED",
+    "PRECHECK_LOADABLE_FAILED", "PRECHECK_STARTED_FAILED",
+    "PRECHECK_LOADABLE_ALREADY_STARTED", "PRECHECK_LOADABLE_NOT_STARTED",
+    "PRECHECK_UNLOADABLE_ALREADY_STARTED", "PRECHECK_UNLOADABLE_NOT_STARTED",
     "HOST_START_E_FAIL", "HOST_START_NOT_IMPLEMENTED",
                "HOST_START_UNEXPECTED", "HOST_START_ACCESS_DENIED",
                "HOST_START_OUT_OF_MEMORY", "HOST_START_INVALID_ARGUMENT",
@@ -78,12 +81,15 @@ def classify(raw: bytes, code: int) -> str:
 
 
 def execute(wine: Path, prefix: Path, fixture: Path, managed: Path,
-            mode: str) -> str:
+            mode: str, *, precheck: bool = False) -> str:
     if mode not in ("n", "b"):
         raise ValueError("Unsupported CLR hosting override")
     env = os.environ.copy()
     env.pop("SWCOMPAT_ORIGINAL_SHIM_PATH", None)
     env.pop("SWCOMPAT_SHIM_ONLY", None)
+    env.pop("SWCOMPAT_HOST_PRECHECK", None)
+    if precheck:
+        env["SWCOMPAT_HOST_PRECHECK"] = "1"
     env["WINEPREFIX"] = str(prefix)
     env["WINEARCH"] = "win64"
     env["WINEDEBUG"] = "-all"

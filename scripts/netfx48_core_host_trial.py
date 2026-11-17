@@ -38,7 +38,8 @@ ERROR_PHASES = {"NOT_RUN", "INPUT", "ELIGIBILITY", "AUTHENTICATION",
                 "NATIVE40_BASELINE", "EXTRACTION", "IMPORTS",
                 "DEPENDENCIES", "MSCORLIB", "CORE", "REPLACEMENT",
                 "RESTORATION", "NATIVE40_RECHECK", "VALIDATION",
-                "EXTRA_NATIVE", "TRACE"}
+                "EXTRA_NATIVE", "TRACE", "PRECHECK_BASELINE",
+                "TRACE_BASELINE", "PRECHECK_48", "PRECHECK_RESTORED"}
 SOURCE = {"NOT_RUN", "PE_AMD64", "NO_MZZ", "NO_CLR", "MZZ_ERROR",
           "EXTRACT_FAILED", "INVALID_CLR_PE"}
 MAX_STAGE = 16
@@ -56,6 +57,10 @@ def blank() -> dict:
     return {
         "schema": 1, "status": "NOT_RUN", "error_phase": "NOT_RUN",
         "native40_before": "NOT_RUN", "native40_after": "NOT_RUN",
+        "native40_precheck_before": "NOT_RUN",
+        "native40_precheck_after": "NOT_RUN",
+        "original48_precheck": "NOT_RUN",
+        "native40_start_trace": trace_blank(),
         "original48_sha256_verified": False,
         "original48_clr": "NOT_RUN",
         "original48_mscorlib_staged": False,
@@ -85,7 +90,9 @@ def valid(value: object) -> bool:
             or value["original48_clr"] not in SOURCE
             or any(value[k] not in HOST_STATUSES for k in (
                 "native40_before", "native40_after", "clr_only",
-                "clr_and_mscorlib", "additional_core", "extra_native"))
+                "clr_and_mscorlib", "additional_core", "extra_native",
+                "native40_precheck_before", "native40_precheck_after",
+                "original48_precheck"))
             or any(type(value[k]) is not bool for k in (
                 "original48_sha256_verified", "original48_mscorlib_staged",
                 "original40_restored"))
@@ -96,6 +103,7 @@ def valid(value: object) -> bool:
             or type(value["original48_extra_staged"]) is not int
             or not 0 <= value["original48_extra_staged"] <= len(EXTRA_NATIVE)
             or not trace_valid(value["wine_start_trace"])
+            or not trace_valid(value["native40_start_trace"])
             or value["framework48_installed"] is not False
             or value["framework481_installed"] is not False
             or value["solidworks_compatibility"] != "NOT_DEMONSTRATED"):
@@ -248,6 +256,12 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
         result["status"] = "BASELINE_FAILED"
         assert valid(result)
         return result
+    mark("PRECHECK_BASELINE")
+    result["native40_precheck_before"] = host_execute(
+        wine, prefix, fixture, managed, "n", precheck=True)
+    mark("TRACE_BASELINE")
+    result["native40_start_trace"] = trace_probe(
+        wine, prefix, fixture, managed)
     root = prefix / FRAMEWORK
     with tempfile.TemporaryDirectory(prefix="swcompat-authentic48-core-") as td:
         private = Path(td).resolve()
@@ -321,6 +335,9 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
                                 replacement.replace(path, name)
                         result["extra_native"] = host_execute(
                             wine, prefix, fixture, managed, "n")
+                    mark("PRECHECK_48")
+                    result["original48_precheck"] = host_execute(
+                        wine, prefix, fixture, managed, "n", precheck=True)
                     mark("TRACE")
                     result["wine_start_trace"] = trace_probe(
                         wine, prefix, fixture, managed)
@@ -330,6 +347,9 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
         mark("NATIVE40_RECHECK")
         result["native40_after"] = host_execute(
             wine, prefix, fixture, managed, "n")
+        mark("PRECHECK_RESTORED")
+        result["native40_precheck_after"] = host_execute(
+            wine, prefix, fixture, managed, "n", precheck=True)
         result["original40_restored"] = (
             result["native40_after"] == "MANAGED_ORIGINAL_PASS")
         result["status"] = ("MEASURED" if result["original40_restored"]
