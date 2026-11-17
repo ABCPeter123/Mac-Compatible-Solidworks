@@ -48,7 +48,7 @@ def valid(report: object) -> bool:
     return True
 
 
-def matching(root: Path, private: Path, sevenzip: Path) -> list[str] | None:
+def matching(root: Path, private: Path, sevenzip: Path) -> dict[str, str] | None:
     """Identify only pre-existing Framework64 DLLs with signed-MZZ x64 names.
 
     Return None if the inventory is ambiguous or incomplete, never silently
@@ -67,7 +67,7 @@ def matching(root: Path, private: Path, sevenzip: Path) -> list[str] | None:
         return None
     mzz_files = [p for p in files if p.suffix.casefold() == ".mzz"]
     if not mzz_files:
-        return []
+        return {}
     for archive in mzz_files:
         with tempfile.TemporaryFile() as stdout:
             try:
@@ -89,52 +89,55 @@ def matching(root: Path, private: Path, sevenzip: Path) -> list[str] | None:
     installed = sorted(root.iterdir())
     if len(installed) > MAX_ROOT_ENTRIES:
         return None
-    eligible: list[str] = []
+    eligible: dict[str, str] = {}
     for entry in installed:
-        if not DLL.fullmatch(entry.name):
+        canonical = entry.name.casefold()
+        if not DLL.fullmatch(canonical):
             continue
         if entry.is_symlink() or not entry.is_file():
             return None
-        if any(alias in members for alias in candidates(entry.name)):
-            eligible.append(entry.name)
+        if any(alias in members for alias in candidates(canonical)):
+            if canonical in eligible:
+                return None
+            eligible[canonical] = entry.name
             if len(eligible) > MAX_FRAMEWORK_DLLS:
                 return None
     return eligible
 
 
-def stage_matching(root: Path, private: Path, sevenzip: Path) -> dict:
+def stage_matching(root: Path, private: Path, sevenzip: Path) -> tuple[dict, dict[str, str]]:
     """Stage x64 matches, but do not replace runtime files or touch registry."""
     names = matching(root, private, sevenzip)
     result = blank()
     if names is None:
         result["status"] = "BOUNDED"
-        return result
+        return result, {}
     result["candidates"] = len(names)
     if not names:
         result["status"] = "NO_MATCH"
-        return result
+        return result, {}
     # Existing files may have been staged by the earlier core + direct import
     # arms. Reuse those exact authenticated MZZ files rather than extracting
     # them twice; replacement still uses ReversibleFramework hash validation.
     missing: list[str] = []
-    for name in names:
+    for name in names.keys():
         prior = private / name
         if prior.is_symlink():
             result["status"] = "ERROR"
-            return result
+            return result, {}
         if not prior.exists():
             missing.append(name)
         elif not prior.is_file():
             result["status"] = "ERROR"
-            return result
+            return result, {}
     result["additional"] = len(missing)
     for start in range(0, len(missing), MAX_IMPORTS):
         batch = stage(private, sevenzip, missing[start:start + MAX_IMPORTS])
         if not valid_batch(batch):
             result["status"] = "ERROR"
-            return result
+            return result, {}
         result["staged"] += batch["staged"]
     result["status"] = ("STAGED" if result["additional"] == result["staged"]
                         else "INCOMPLETE")
     assert valid(result)
-    return result
+    return result, names
