@@ -24,7 +24,9 @@ from scripts.netfx40_msxml3_restart import validate as valid_restart
 from scripts.netfx48_isolated_loader_trial import (
     extract_clr, verify_original,
 )
-from scripts.netfx48_signed_mzz_dependency_staging import stage, valid as valid_stage
+from scripts.netfx48_signed_mzz_dependency_staging import (
+    stage, blank as signed_stage_blank, valid as valid_stage,
+)
 from scripts.netfx4x_mzz_import_evidence import parse_pe, family
 from scripts.netfx481_trial import validate_prefix
 from scripts.netfx48_start_trace import (
@@ -57,6 +59,7 @@ ERROR_PHASES = {"NOT_RUN", "INPUT", "ELIGIBILITY", "AUTHENTICATION",
                 "COHERENCE_CASE_AMBIGUITY", "COHERENCE_BACKUP_COLLISION",
                 "COHERENCE_TEMP_COLLISION", "COHERENCE_FILESYSTEM_FAILURE",
                 "COHERENCE_UNCLASSIFIED_FAILURE", *SOURCE_PROBLEMS,
+                "CRT_DEPENDENCIES", "CRT_REPLACEMENT", "CRT_HOST",
                 "TRACE", "PRECHECK_BASELINE",
                 "TRACE_BASELINE", "PRECHECK_48", "PRECHECK_RESTORED",
                 "ZAP_BASELINE", "ZAP_48", "ZAP_RESTORED",
@@ -67,6 +70,10 @@ MAX_STAGE = 16
 NAME = re.compile(r"[a-zA-Z0-9_.-]{1,90}\.[dD][lL][lL]\Z")
 FRAMEWORK = Path("drive_c/windows/Microsoft.NET/Framework64/v4.0.30319")
 CORE = ("mscoreei.dll", "clrjit.dll", "mscorrc.dll", "fusion.dll")
+# Reported as missing from Framework64 in real-world native .NET 4.8 Wine
+# deployments. Only actual x64 PE members from the authenticated Microsoft
+# installer may be used; this is an A/B diagnostic, not a runtime install.
+CLR_CRT = ("vcruntime140_clr0400.dll", "msvcr100_clr0400.dll")
 EXTRA_NATIVE = (
     "mscoreeis.dll", "mscorlib.ni.dll", "system.dll", "system.core.dll",
     "system.xml.dll", "system.configuration.dll", "system.security.dll",
@@ -100,6 +107,8 @@ def blank() -> dict:
         "extra_native": "NOT_RUN",
         "coherent_staging": coherent_blank(),
         "coherent_host": "NOT_RUN",
+        "clr_crt_staging": signed_stage_blank(),
+        "clr_crt_host": "NOT_RUN",
         "wine_start_trace": trace_blank(),
         "original40_restored": False,
         "framework48_installed": False,
@@ -120,7 +129,8 @@ def valid(value: object) -> bool:
             or any(value[k] not in HOST_STATUSES for k in (
                 "native40_before", "native40_after", "clr_only",
                 "clr_and_mscorlib", "additional_core", "extra_native",
-                "coherent_host", "native40_precheck_before", "native40_precheck_after",
+                "coherent_host", "clr_crt_host",
+                "native40_precheck_before", "native40_precheck_after",
                 "original48_precheck", "native40_zap_disabled_before",
                 "native40_zap_disabled_after", "original48_zap_disabled"))
             or any(type(value[k]) is not bool for k in (
@@ -135,6 +145,11 @@ def valid(value: object) -> bool:
             or not trace_valid(value["wine_start_trace"])
             or not trace_valid(value["native40_start_trace"])
             or not coherent_valid(value["coherent_staging"])
+            or not valid_stage(value["clr_crt_staging"])
+            or (value["clr_crt_host"] != "NOT_RUN" and (
+                value["coherent_host"] != "HOST_START_E_FAIL"
+                or value["clr_crt_staging"]["staged"] == 0
+                or value["clr_crt_staging"]["staged"] != len(CLR_CRT)))
             or any(not activation_valid(value[name]) for name in (
                 "native40_activation_before", "original48_activation",
                 "native40_activation_after"))
@@ -480,6 +495,31 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
                         mark("COHERENCE_HOST")
                         result["coherent_host"] = host_execute(
                             wine, prefix, fixture, managed, "n")
+                        if result["coherent_host"] == "HOST_START_E_FAIL":
+                            # A bounded differential on two CLR-specific native
+                            # CRT libraries which may be absent from a prefix
+                            # originally installed with .NET 4.0. Never copy
+                            # from an unverified system directory or spoof the
+                            # framework version; re-use the original signed MZZ.
+                            mark("CRT_DEPENDENCIES")
+                            active = {name.casefold() for name in replacement.saved}
+                            missing_crt = [name for name in CLR_CRT
+                                           if name.casefold() not in active]
+                            if missing_crt:
+                                crt = stage(private, sevenzip, missing_crt)
+                                assert valid_stage(crt)
+                                result["clr_crt_staging"] = crt
+                                if (crt["staged"] == len(missing_crt)
+                                        and crt["missing_requested"] == len(missing_crt)):
+                                    mark("CRT_REPLACEMENT")
+                                    for name in missing_crt:
+                                        source = private / name
+                                        if source_problem(source, name, root) is not None:
+                                            raise ValueError("Untrusted signed CRT member")
+                                        replacement.replace(source, name)
+                                    mark("CRT_HOST")
+                                    result["clr_crt_host"] = host_execute(
+                                        wine, prefix, fixture, managed, "n")
         finally:
             # Always undo the temporary vendor-file swaps, but do not replace
             # the actual failing phase with RESTORATION when the rollback
