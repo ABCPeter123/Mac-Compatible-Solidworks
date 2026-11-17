@@ -142,6 +142,61 @@ class OriginalMzzDependencyStage(unittest.TestCase):
             self.assertNotIn(first, json.dumps(report))
             self.assertNotIn(second, json.dumps(report))
 
+    def test_duplicate_signed_basename_retries_second_archive_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            private = Path(td) / "private"
+            archives = private / "archives"
+            archives.mkdir(parents=True)
+            (archives / "original.mzz").write_bytes(b"synthetic")
+            reader = Path(td) / "7zz"
+            reader.write_bytes(b"synthetic")
+            first = r"x86\vcruntime140_dll_amd64"
+            second = r"x64\vcruntime140_dll_amd64"
+            data32 = bytearray(synthetic_amd64())
+            struct.pack_into("<H", data32, 0x84, 0x14c)
+            struct.pack_into("<H", data32, 0x98, 0x10b)
+            attempts = []
+
+            def invoke(argv, **kwargs):
+                if "l" in argv:
+                    kwargs["stdout"].write(
+                        ("----------\nPath = " + first +
+                         "\nPath = " + second + "\n").encode())
+                else:
+                    attempts.append(argv[-1])
+                    kwargs["stdout"].write(
+                        bytes(data32) if argv[-1] == first else synthetic_amd64())
+                return mock.Mock(returncode=0)
+
+            with mock.patch.object(stage.subprocess, "run", side_effect=invoke):
+                result = stage.stage(private, reader, ["vcruntime140.dll"])
+            self.assertTrue(stage.valid(result))
+            self.assertEqual(result["status"], "STAGED")
+            self.assertEqual(result["staged"], 1)
+            self.assertEqual(attempts, [first, second])
+            self.assertEqual((private / "vcruntime140.dll").read_bytes(),
+                             synthetic_amd64())
+            self.assertEqual(
+                stage.mzz_members(
+                    ("----------\nPath = " + first + "\nPath = " + second).encode()
+                )["vcruntime140_dll_amd64"], first)
+            self.assertNotIn(first, json.dumps(result))
+            self.assertNotIn(second, json.dumps(result))
+
+    def test_duplicate_signed_basename_candidates_are_strictly_bounded(self):
+        basename = "system_core_dll_amd64"
+        names = [f"folder{i}/{basename}" for i in range(7)]
+        data = ("----------\n" + "".join(
+            f"Path = {name}\n" for name in names)).encode()
+        members = stage.mzz_member_variants(data)
+        self.assertEqual(len(members[basename]), stage.MAX_DUPLICATE_MEMBERS)
+        self.assertEqual(members[basename], tuple(names[:stage.MAX_DUPLICATE_MEMBERS]))
+        self.assertEqual(stage.mzz_members(data)[basename], names[0])
+        self.assertEqual(stage.mzz_member_variants(b"\x00"), {})
+        self.assertEqual(stage.mzz_member_variants(b"x" * (stage.MAX_LIST + 1)), {})
+        # No private filenames or archive entry paths enter output schemas.
+        self.assertNotIn("folder", json.dumps(stage.blank()))
+
     def test_all_signed_variants_invalid_does_not_claim_staged(self):
         with tempfile.TemporaryDirectory() as td:
             private = Path(td) / "private"
