@@ -1014,6 +1014,8 @@ jobs:
           retention-days: 7
       - name: Validate that msxml3 cannot fabricate a CLR install
         if: always()
+        env:
+          SWCOMPAT_PROVENANCE_ONLY: ${{ inputs.host_provenance_only }}
         shell: bash
         run: |
           python3 - <<'PY'
@@ -1045,6 +1047,18 @@ jobs:
                   assert rr["restart"] == "COMPLETED"
                   assert rr["native_loader"] == "LOADED"
                   assert rr["native_only_managed"] == "PASS"
+                  from scripts.netfx40_host_api_diagnostic import valid as host_valid
+                  host_path = Path("build/netfx40-public-host-api.json")
+                  assert host_path.is_file(), "Original .NET 4.0 public host API evidence missing"
+                  host = json.loads(host_path.read_text(encoding="ascii"))
+                  assert host_valid(host) and host["status"] == "MEASURED", (
+                      "Original CLR hosting probe must be measured, not inferred")
+                  from scripts.netfx40_native_mscoree_provenance import valid as provenance_valid
+                  provenance_path = Path("build/netfx40-mscoree-provenance.json")
+                  assert provenance_path.is_file(), "Original CLR DLL provenance evidence missing"
+                  provenance = json.loads(provenance_path.read_text(encoding="ascii"))
+                  assert provenance_valid(provenance) and provenance["status"] == "MEASURED"
+                  host_only = os.environ.get("SWCOMPAT_PROVENANCE_ONLY") == "true"
                   from scripts.netfx40_to_481_upgrade import validate as upgrade_valid
                   intermediate_path = Path("build/netfx40-to-48-intermediate.json")
                   intermediate_required = os.environ.get("SWCOMPAT_TRY_48_INTERMEDIATE") == "true"
@@ -1069,9 +1083,14 @@ jobs:
                       intermediate_ready = direct["native48_candidate"]
                   upgrade_path = Path("build/netfx40-to-481-upgrade.json")
                   assert upgrade_path.is_file() == (
-                      (not intermediate_required and not direct_required)
-                      or intermediate_ready), (
-                      "4.8.1 must only run after requested verified 4.8 prerequisite passes")
+                      not host_only and (
+                          (not intermediate_required and not direct_required)
+                          or intermediate_ready)), (
+                      "4.8.1 is forbidden in host-only mode and requires verified 4.8 otherwise")
+                  if host_only:
+                      assert not intermediate_required and not direct_required
+                      assert not intermediate_path.is_file() and not direct_path.is_file()
+                      assert not upgrade_path.is_file(), "Host-only must skip 4.8.1"
                   if upgrade_path.is_file():
                       upgraded = json.loads(upgrade_path.read_text(encoding="utf-8"))
                       assert upgrade_valid(upgraded)
