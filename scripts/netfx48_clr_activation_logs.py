@@ -7,7 +7,6 @@ paths, error text, Microsoft DLLs, or environment details.
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 import re
 import tempfile
@@ -32,7 +31,7 @@ SHIM_ERROR = re.compile(
     r"cannot (?:find|load) (?:a )?(?:suitable )?runtime)\b"
 )
 ROOT_ERROR = re.compile(
-    r"(?i)\b(?:install(?:ation)? root|installcomp|component missing)\b"
+    r"(?i)\b(?:install(?:ation)? root|installroot|installcomp|component missing)\b"
 )
 
 
