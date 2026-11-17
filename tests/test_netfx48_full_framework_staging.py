@@ -56,7 +56,8 @@ class CoherentRuntimeTests(unittest.TestCase):
             matches = {"system" + str(i) + ".dll": "System" + str(i) + ".dll"
                        for i in range(19)}
             requested = []
-            def staged(private_dir, sevenzip, names):
+            def staged(private_dir, sevenzip, names, *, allow_managed_anycpu=False):
+                self.assertTrue(allow_managed_anycpu)
                 requested.extend(names)
                 for name in names:
                     (private_dir / name).write_bytes(b"synthetic source")
