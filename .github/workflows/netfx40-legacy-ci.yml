@@ -804,6 +804,7 @@ jobs:
               for key in ("status", "native40_before", "original48_clr",
                           "clr_only", "clr_and_mscorlib", "additional_core",
                           "original48_extra_staged", "extra_native",
+                          "coherent_staging", "coherent_host",
                           "native40_after", "original40_restored",
                           "native40_precheck_before", "original48_precheck",
                           "native40_precheck_after",
@@ -811,6 +812,11 @@ jobs:
                           "original48_zap_disabled",
                           "native40_zap_disabled_after"):
                   out.write(key + ": **" + str(r[key]) + "**\n\n")
+              coherence = r["coherent_staging"]
+              out.write("### Signed-MZZ complete Framework64 consistency arm\n\n")
+              for key in ("status", "candidates", "additional", "staged"):
+                  out.write(key + ": **" + str(coherence[key]) + "**\n\n")
+              out.write("coherent_host: **" + r["coherent_host"] + "**\n\n")
               out.write("### Original Microsoft CLR activation log differential\n\n")
               for variant in ("native40_activation_before",
                               "original48_activation",
