@@ -44,7 +44,11 @@ ERROR_PHASES = {"NOT_RUN", "INPUT", "ELIGIBILITY", "AUTHENTICATION",
                 "NATIVE40_BASELINE", "EXTRACTION", "IMPORTS",
                 "DEPENDENCIES", "MSCORLIB", "CORE", "REPLACEMENT",
                 "RESTORATION", "NATIVE40_RECHECK", "VALIDATION",
-                "EXTRA_NATIVE", "COHERENCE", "COHERENCE_REPLACEMENT", "COHERENCE_HOST", "TRACE", "PRECHECK_BASELINE",
+                "EXTRA_NATIVE", "COHERENCE", "COHERENCE_REPLACEMENT", "COHERENCE_HOST",
+                "COHERENCE_INVALID_SOURCE", "COHERENCE_INVALID_PE",
+                "COHERENCE_CASE_AMBIGUITY", "COHERENCE_BACKUP_COLLISION",
+                "COHERENCE_TEMP_COLLISION", "COHERENCE_FILESYSTEM_FAILURE",
+                "COHERENCE_UNCLASSIFIED_FAILURE", "TRACE", "PRECHECK_BASELINE",
                 "TRACE_BASELINE", "PRECHECK_48", "PRECHECK_RESTORED",
                 "ZAP_BASELINE", "ZAP_48", "ZAP_RESTORED",
                 "ACTIVATION_BASELINE", "ACTIVATION_48", "ACTIVATION_RESTORED"}
@@ -404,8 +408,31 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
                         for canonical, original_name in sorted(original_names.items()):
                             source = private / canonical
                             if source.is_file():
-                                replacement.replace(source, original_name,
-                                                    allow_managed_anycpu=True)
+                                try:
+                                    replacement.replace(
+                                        source, original_name,
+                                        allow_managed_anycpu=True)
+                                except ValueError as exc:
+                                    # All known messages originate in our own
+                                    # vetted replace(), not in Microsoft files.
+                                    # Never emit the raw message or any paths.
+                                    category = {
+                                        "Untrusted original runtime payload":
+                                            "COHERENCE_INVALID_SOURCE",
+                                        "Original signed payload is not x64-compatible":
+                                            "COHERENCE_INVALID_PE",
+                                        "Ambiguous original runtime target casing":
+                                            "COHERENCE_CASE_AMBIGUITY",
+                                        "Backup collision":
+                                            "COHERENCE_BACKUP_COLLISION",
+                                        "Untrusted temporary runtime target":
+                                            "COHERENCE_TEMP_COLLISION",
+                                    }.get(str(exc), "COHERENCE_UNCLASSIFIED_FAILURE")
+                                    mark(category)
+                                    raise
+                                except OSError:
+                                    mark("COHERENCE_FILESYSTEM_FAILURE")
+                                    raise
                         mark("COHERENCE_HOST")
                         result["coherent_host"] = host_execute(
                             wine, prefix, fixture, managed, "n")
