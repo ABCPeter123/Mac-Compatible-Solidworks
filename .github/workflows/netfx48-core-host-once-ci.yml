@@ -1,10 +1,10 @@
 name: One-shot authenticated .NET 4.8 CLR payload hosting trial
 
 # A main-branch change to this workflow triggers the experiment once.
-# Next run tests the merged signed-MZZ staging repairs and the bounded
-# same-basename x86-to-x64 extraction fallback from PR #177. We must first
-# establish genuine Microsoft .NET 4.0 managed execution in the Wine prefix.
-# No signed Microsoft 4.8 original becomes a runtime install or artifact.
+# Next run tests PR #179's private signed native CLR CRT dependencies
+# only after a complete 62+ genuine original .NET 4.8 Framework64 A/B trial
+# returns HOST_START_E_FAIL. Do not infer success without managed execution.
+# The verified Microsoft 4.0 host remains mandatory and must be restored.
 # All original Microsoft 4.0 files must still be restored after the trial.
 # Genuine original 4.0 must first pass native CLR hosting. The 4.8 media
 # is Authenticode-bound and staged only inside a disposable Wine prefix.
