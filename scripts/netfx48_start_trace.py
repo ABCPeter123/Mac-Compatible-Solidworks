@@ -136,6 +136,7 @@ def probe(wine: Path, prefix: Path, fixture: Path, managed: Path) -> dict:
     env = os.environ.copy()
     env.pop("SWCOMPAT_ORIGINAL_SHIM_PATH", None)
     env.pop("SWCOMPAT_SHIM_ONLY", None)
+    env.pop("SWCOMPAT_HOST_PRECHECK", None)
     env.update({
         "WINEPREFIX": str(prefix), "WINEARCH": "win64",
         "WINEDLLOVERRIDES": "mscoree=n;clr=n",
