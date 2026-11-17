@@ -132,7 +132,8 @@ def stage_matching(root: Path, private: Path, sevenzip: Path) -> tuple[dict, dic
             return result, {}
     result["additional"] = len(missing)
     for start in range(0, len(missing), MAX_IMPORTS):
-        batch = stage(private, sevenzip, missing[start:start + MAX_IMPORTS])
+        batch = stage(private, sevenzip, missing[start:start + MAX_IMPORTS],
+                      allow_managed_anycpu=True)
         if not valid_batch(batch):
             result["status"] = "ERROR"
             return result, {}
