@@ -362,6 +362,19 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
                                 replacement.replace(path, name)
                         result["extra_native"] = host_execute(
                             wine, prefix, fixture, managed, "n")
+                    mark("ZAP_48")
+                    result["original48_zap_disabled"] = host_execute(
+                        wine, prefix, fixture, managed, "n",
+                        disable_native_images=True)
+                    mark("PRECHECK_48")
+                    result["original48_precheck"] = host_execute(
+                        wine, prefix, fixture, managed, "n", precheck=True)
+                    mark("ACTIVATION_48")
+                    result["original48_activation"] = activation_probe(
+                        wine, prefix, fixture, managed, phase="staged")
+                    mark("TRACE")
+                    result["wine_start_trace"] = trace_probe(
+                        wine, prefix, fixture, managed)
                     # The preceding tests changed only a handful of native
                     # components. Test a coherent set of all signed x64 .NET
                     # 4.8 DLLs matching the existing native 4.0 Framework64
@@ -379,19 +392,6 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
                         mark("COHERENCE_HOST")
                         result["coherent_host"] = host_execute(
                             wine, prefix, fixture, managed, "n")
-                    mark("ZAP_48")
-                    result["original48_zap_disabled"] = host_execute(
-                        wine, prefix, fixture, managed, "n",
-                        disable_native_images=True)
-                    mark("PRECHECK_48")
-                    result["original48_precheck"] = host_execute(
-                        wine, prefix, fixture, managed, "n", precheck=True)
-                    mark("ACTIVATION_48")
-                    result["original48_activation"] = activation_probe(
-                        wine, prefix, fixture, managed, phase="staged")
-                    mark("TRACE")
-                    result["wine_start_trace"] = trace_probe(
-                        wine, prefix, fixture, managed)
         finally:
             mark("RESTORATION")
             replacement.restore()
