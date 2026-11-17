@@ -53,6 +53,9 @@ class DirectNative48Tests(unittest.TestCase):
             mock.patch.object(p, "validate_prefix"),
             mock.patch.object(p, "verify_original_media"),
             mock.patch.object(p, "validate_native40", return_value=True),
+            mock.patch.object(p, "inventory_services", return_value={
+                "TrustedInstaller": "ABSENT", "msiserver": "PRESENT",
+                "wuauserv": "PRESENT", "BITS": "UNKNOWN"}),
             mock.patch.object(p, "snapshot", return_value={"CLR64": ("PE_AMD64", "fake")}),
             mock.patch.object(p, "compare", return_value=diff),
             mock.patch.object(p, "load_clr", return_value="LOADED"),
@@ -82,6 +85,8 @@ class DirectNative48Tests(unittest.TestCase):
         self.assertEqual(result["primary_prerequisite"]["blockers"], ["MISSING_UPDATE_BLOCK"])
         self.assertTrue(result["primary_prerequisite"]["5100_in_log"])
         self.assertTrue(evidence.validate_secondary_report(result["secondary_evidence"]))
+        self.assertEqual(result["service_prerequisites"]["TrustedInstaller"], "ABSENT")
+        self.assertTrue(p.valid_services(result["service_prerequisites"]))
         self.assertTrue(started.call_args.kwargs["fusion_builtin"])
         self.assertNotIn(str(root), str(result))
         return result
@@ -141,6 +146,70 @@ class DirectNative48Tests(unittest.TestCase):
             corrupt["primary_prerequisite"] = dict(
                 result["primary_prerequisite"], blockers=["COPY_OF_RAW_LINE"])
             self.assertFalse(p.validate(corrupt))
+
+    def test_sc_query_bounded_read_only_service_inventory(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            prefix = root / "prefix"
+            prefix.mkdir()
+            wine = root / "wine"
+            wine.write_bytes(b"synthetic")
+            called = []
+
+            def fake_run(argv, **kwargs):
+                name = argv[-1]
+                called.append(name)
+                self.assertEqual(argv, [str(wine), "sc", "query", name])
+                self.assertEqual(kwargs["env"]["WINEPREFIX"], str(prefix))
+                self.assertEqual(kwargs["env"]["WINEDEBUG"], "-all")
+                self.assertNotIn("WINEDLLOVERRIDES", kwargs["env"])
+                self.assertEqual(kwargs["timeout"], 15)
+                if name == "TrustedInstaller":
+                    kwargs["stdout"].write(
+                        b"[SC] OpenService FAILED 1060: "
+                        b"The specified service does not exist\n"
+                        b"Private path: C:\\Users\\secret\\installer.exe\n")
+                    return mock.Mock(returncode=1)
+                if name == "msiserver":
+                    kwargs["stdout"].write(b"SERVICE_NAME: msiserver\n")
+                    return mock.Mock(returncode=0)
+                if name == "wuauserv":
+                    kwargs["stdout"].write(b"SERVICE_NAME: wuauserv\n")
+                    return mock.Mock(returncode=0)
+                kwargs["stdout"].write(b"Failed without a known error\n")
+                return mock.Mock(returncode=1)
+
+            with mock.patch.object(p, "validate_prefix"), \
+                 mock.patch.object(p.subprocess, "run", side_effect=fake_run), \
+                 mock.patch.dict(p.os.environ, {
+                     "WINEDLLOVERRIDES": "mscoree=b",
+                 }):
+                result = p.inventory_services(wine, prefix)
+            self.assertEqual(called, list(p.SERVICE_NAMES))
+            self.assertEqual(result, {
+                "TrustedInstaller": "ABSENT", "msiserver": "PRESENT",
+                "wuauserv": "PRESENT", "BITS": "UNKNOWN",
+            })
+            self.assertTrue(p.valid_services(result))
+            self.assertNotIn("secret", str(result))
+            self.assertFalse(p.valid_services(
+                dict(result, private_path="C:\\Users\\secret")))
+            self.assertFalse(p.valid_services(
+                dict(result, TrustedInstaller="error 1060 C:\\secret")))
+
+    def test_sc_query_timeout_does_not_invent_service_absence(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            wine = root / "wine"
+            wine.write_bytes(b"fixture")
+            prefix = root / "prefix"
+            prefix.mkdir()
+            with mock.patch.object(p, "validate_prefix"), \
+                 mock.patch.object(p.subprocess, "run",
+                                   side_effect=p.subprocess.TimeoutExpired("sc", 15)):
+                result = p.inventory_services(wine, prefix)
+            self.assertTrue(all(value == "UNKNOWN" for value in result.values()))
+            self.assertTrue(p.valid_services(result))
 
     def test_requires_exact_sha_and_original_media_name(self):
         with TemporaryDirectory() as td:
