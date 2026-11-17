@@ -35,6 +35,16 @@ class OriginalMzzDependencyStage(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     stage.candidates(unsafe)
 
+    def test_dotted_framework_assembly_resolves_real_mzz_amd64_names(self):
+        variants = stage.candidates("system.core.dll")
+        self.assertIn("system_core_amd64.dll", variants)
+        self.assertIn("system_core_dll_amd64", variants)
+        self.assertLess(variants.index("system_core_amd64.dll"),
+                        variants.index("system.core.dll"))
+        self.assertEqual(len(variants), len(set(variants)))
+        self.assertIn("system_xaml_amd64.dll",
+                      stage.candidates("system.xaml.dll"))
+
     def test_private_7zip_listing_never_leaks_member_names(self):
         raw = (b"Path = C:\\private\\sensitive-file.mzz\n"
                b"Type = 7z\n----------\n"
