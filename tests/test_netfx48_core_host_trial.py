@@ -165,7 +165,7 @@ class CoreHostTrialTests(unittest.TestCase):
                 seen.append(sevenzip)
                 self.assertTrue(sevenzip.is_absolute())
                 self.assertFalse(sevenzip.is_symlink())
-                self.assertEqual(sevenzip, reader)
+                self.assertEqual(sevenzip, reader.resolve())
                 return "NO_MZZ", None
             progress = ["INPUT"]
             with mock.patch.object(t, "validate_prefix"), \
