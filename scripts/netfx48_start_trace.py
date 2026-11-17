@@ -20,7 +20,7 @@ from scripts.netfx40_native_mscoree_provenance import LOADED
 MAX_TRACE = 16 * 1024 * 1024
 CHANNELS = ("module", "mscoree", "ole", "reg", "seh", "other")
 COUNTS = {"NONE", "ONE", "FEW", "MANY"}
-WINE_MESSAGE = re.compile(r"\\b(err|fixme):([a-z0-9_]+):", re.IGNORECASE)
+WINE_MESSAGE = re.compile(r"\b(err|fixme):([a-z0-9_]+):", re.IGNORECASE)
 MAX_STDOUT = 256 * 1024
 STATES = {"NOT_RUN", "MEASURED", "PARTIAL"}
 PROCESSES = {"NOT_RUN", "EXIT_ZERO", "EXIT_NONZERO", "TIMEOUT", "SPAWN_ERROR"}
