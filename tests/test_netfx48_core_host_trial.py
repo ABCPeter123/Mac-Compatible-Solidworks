@@ -177,7 +177,7 @@ class CoreHostTrialTests(unittest.TestCase):
                 report = t.trial(**args, progress=progress)
             self.assertEqual(report["status"], "EXTRACTION_FAILED")
             self.assertEqual(progress, ["EXTRACTION"])
-            self.assertEqual(seen, [reader])
+            self.assertEqual(seen, [reader.resolve()])
             self.assertTrue(t.valid(report))
 
     def test_three_staged_variants_and_restored_native40(self):
