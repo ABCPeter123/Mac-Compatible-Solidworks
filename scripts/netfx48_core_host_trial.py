@@ -31,6 +31,10 @@ from scripts.netfx481_trial import validate_prefix
 
 STATES = {"NOT_RUN", "BASELINE_FAILED", "EXTRACTION_FAILED",
           "PARTIAL", "MEASURED", "INTERNAL_ERROR"}
+ERROR_PHASES = {"NOT_RUN", "INPUT", "ELIGIBILITY", "AUTHENTICATION",
+                "NATIVE40_BASELINE", "EXTRACTION", "IMPORTS",
+                "DEPENDENCIES", "MSCORLIB", "CORE", "REPLACEMENT",
+                "RESTORATION", "NATIVE40_RECHECK", "VALIDATION"}
 SOURCE = {"NOT_RUN", "PE_AMD64", "NO_MZZ", "NO_CLR", "MZZ_ERROR",
           "EXTRACT_FAILED", "INVALID_CLR_PE"}
 MAX_STAGE = 16
@@ -41,7 +45,7 @@ CORE = ("mscoreei.dll", "clrjit.dll", "mscorrc.dll", "fusion.dll")
 
 def blank() -> dict:
     return {
-        "schema": 1, "status": "NOT_RUN",
+        "schema": 1, "status": "NOT_RUN", "error_phase": "NOT_RUN",
         "native40_before": "NOT_RUN", "native40_after": "NOT_RUN",
         "original48_sha256_verified": False,
         "original48_clr": "NOT_RUN",
@@ -63,6 +67,9 @@ def valid(value: object) -> bool:
         return False
     if (type(value["schema"]) is not int or value["schema"] != 1
             or value["status"] not in STATES
+            or value["error_phase"] not in ERROR_PHASES
+            or (value["status"] == "INTERNAL_ERROR") != (
+                value["error_phase"] != "NOT_RUN")
             or value["original48_clr"] not in SOURCE
             or any(value[k] not in HOST_STATUSES for k in (
                 "native40_before", "native40_after", "clr_only",
@@ -195,7 +202,16 @@ def _eligible(wine: Path, prefix: Path, sevenzip: Path, fixture: Path,
 
 def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
           sevenzip: Path, fixture: Path, managed: Path,
-          restart: dict, host: dict) -> dict:
+          restart: dict, host: dict, progress: list[str] | None = None) -> dict:
+    def mark(phase: str) -> None:
+        if progress is not None:
+            progress[0] = phase
+
+    mark("ELIGIBILITY")
+    # Homebrew publishes executable symlinks in its bin directory. Resolve
+    # these trusted tools BEFORE rejecting symlinked vendor media and fixtures.
+    wine = wine.resolve(strict=True)
+    sevenzip = sevenzip.resolve(strict=True)
     _eligible(wine, prefix, sevenzip, fixture, managed, installer, restart, host)
     # CLI callers supply build-relative fixtures and media. The Wine child
     # runs with cwd=build, while 7-Zip runs in a private temporary directory.
@@ -207,9 +223,11 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
     fixture = fixture.resolve(strict=True)
     managed = managed.resolve(strict=True)
     installer = installer.resolve(strict=True)
+    mark("AUTHENTICATION")
     verify_original(installer, signed_sha)
     result = blank()
     result["original48_sha256_verified"] = True
+    mark("NATIVE40_BASELINE")
     result["native40_before"] = host_execute(wine, prefix, fixture, managed, "n")
     if result["native40_before"] != "MANAGED_ORIGINAL_PASS":
         result["status"] = "BASELINE_FAILED"
@@ -220,6 +238,7 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
         private = Path(td).resolve()
         if private.is_relative_to(prefix.resolve()):
             raise ValueError("Original Microsoft payload staging inside Wine prefix")
+        mark("EXTRACTION")
         extraction, clr = extract_clr(installer, sevenzip, private)
         result["original48_clr"] = extraction
         if extraction != "PE_AMD64" or clr is None:
@@ -228,6 +247,7 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
             return result
 
         # Inspect original CLR imports locally. Never serialize vendor DLL names.
+        mark("IMPORTS")
         names: list[str] = []
         imported = parse_pe(clr.read_bytes(), _private_direct_names=names)
         if imported["pe"] != "PE_AMD64" or imported["import_table"] != "READABLE":
@@ -242,16 +262,20 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
             assert valid(result)
             return result
         if optional:
+            mark("DEPENDENCIES")
             deps = stage(private, sevenzip, optional)
             assert valid_stage(deps)
             result["original48_imports_staged"] = deps["staged"]
+        mark("MSCORLIB")
         mscorlib = stage(private, sevenzip, ["mscorlib.dll"])
         assert valid_stage(mscorlib)
         result["original48_mscorlib_staged"] = mscorlib["staged"] == 1
+        mark("CORE")
         core = stage(private, sevenzip, list(CORE))
         assert valid_stage(core)
         result["original48_core_staged"] = core["staged"]
 
+        mark("REPLACEMENT")
         replacement = ReversibleFramework(root, private)
         try:
             for name in optional:
@@ -272,7 +296,9 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
                     result["additional_core"] = host_execute(
                         wine, prefix, fixture, managed, "n")
         finally:
+            mark("RESTORATION")
             replacement.restore()
+        mark("NATIVE40_RECHECK")
         result["native40_after"] = host_execute(
             wine, prefix, fixture, managed, "n")
         result["original40_restored"] = (
@@ -280,6 +306,7 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
         result["status"] = ("MEASURED" if result["original40_restored"]
                             and result["original48_mscorlib_staged"]
                             else "PARTIAL")
+    mark("VALIDATION")
     assert valid(result)
     return result
 
@@ -295,20 +322,24 @@ def main(argv: list[str] | None = None) -> int:
     if (a.output.is_symlink()
             or a.output.resolve().is_relative_to(a.prefix.resolve())):
         ap.error("Original runtime reports must stay outside disposable prefix")
+    progress = ["INPUT"]
     try:
         result = trial(
             a.installer, a.signed_sha256, a.wine, a.prefix,
             a.sevenzip, a.fixture, a.managed,
             json.loads(a.restart.read_text(encoding="utf-8")),
-            json.loads(a.host.read_text(encoding="utf-8")))
+            json.loads(a.host.read_text(encoding="utf-8")),
+            progress=progress)
         assert valid(result)
     except Exception:
-        # No private Microsoft filenames, original paths or Wine output in CI.
+        # Only a fixed stage enum is exposed. Never print exception messages,
+        # vendor filenames, original paths or private Wine output.
         result = blank()
         result["status"] = "INTERNAL_ERROR"
+        result["error_phase"] = progress[0] if progress[0] in ERROR_PHASES else "INPUT"
         a.output.parent.mkdir(parents=True, exist_ok=True)
         a.output.write_text(json.dumps(result, sort_keys=True), encoding="ascii")
-        print("AUTHENTIC_NETFX48_CORE_HOST INTERNAL_ERROR")
+        print("AUTHENTIC_NETFX48_CORE_HOST INTERNAL_ERROR", result["error_phase"])
         return 1
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_text(json.dumps(result, sort_keys=True), encoding="ascii")
