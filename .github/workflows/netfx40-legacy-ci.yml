@@ -77,6 +77,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx40_native_mscoree_provenance.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_host_api_diagnostic.py' -v
           python -m unittest discover -s tests -p 'test_netfx48_core_host_trial.py' -v
+          python -m unittest discover -s tests -p 'test_netfx48_start_trace.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_to_481_upgrade.py' -v
           python -m unittest discover -s tests -p 'test_netfx481_prereq_diagnostic.py' -v
           python -m unittest discover -s tests -p 'test_netfx4x_authenticated_media_fetch.py' -v
@@ -782,8 +783,15 @@ jobs:
               out.write("## Authenticated 4.8 CLR payload on genuine 4.0 Wine host (not installed)\n\n")
               for key in ("status", "native40_before", "original48_clr",
                           "clr_only", "clr_and_mscorlib", "additional_core",
+                          "original48_extra_staged", "extra_native",
                           "native40_after", "original40_restored"):
                   out.write(key + ": **" + str(r[key]) + "**\n\n")
+              out.write("### Sanitized original CLR startup trace\n\n")
+              for key in ("status", "host", "process", "trace",
+                          "module_missing", "export_missing", "seh_exception",
+                          "unimplemented_api", "native_clr_seen",
+                          "native_mscoree_seen", "native_mscoreei_seen"):
+                  out.write(key + ": **" + str(r["wine_start_trace"][key]) + "**\n\n")
           PY
       - name: Reject combining host-provenance-only with any 4.8 installer experiment
         if: inputs.host_provenance_only && (inputs.try_48_intermediate || inputs.try_48_direct)

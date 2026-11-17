@@ -28,19 +28,28 @@ from scripts.netfx48_signed_mzz_dependency_staging import stage, valid as valid_
 from scripts.netfx4x_mzz_import_evidence import parse_pe, family
 from scripts.netfx481_payload_audit import pe_type
 from scripts.netfx481_trial import validate_prefix
+from scripts.netfx48_start_trace import (
+    blank as trace_blank, valid as trace_valid, probe as trace_probe,
+)
 
 STATES = {"NOT_RUN", "BASELINE_FAILED", "EXTRACTION_FAILED",
           "PARTIAL", "MEASURED", "INTERNAL_ERROR"}
 ERROR_PHASES = {"NOT_RUN", "INPUT", "ELIGIBILITY", "AUTHENTICATION",
                 "NATIVE40_BASELINE", "EXTRACTION", "IMPORTS",
                 "DEPENDENCIES", "MSCORLIB", "CORE", "REPLACEMENT",
-                "RESTORATION", "NATIVE40_RECHECK", "VALIDATION"}
+                "RESTORATION", "NATIVE40_RECHECK", "VALIDATION",
+                "EXTRA_NATIVE", "TRACE"}
 SOURCE = {"NOT_RUN", "PE_AMD64", "NO_MZZ", "NO_CLR", "MZZ_ERROR",
           "EXTRACT_FAILED", "INVALID_CLR_PE"}
 MAX_STAGE = 16
 NAME = re.compile(r"[a-z0-9_.-]{1,90}\.dll\Z")
 FRAMEWORK = Path("drive_c/windows/Microsoft.NET/Framework64/v4.0.30319")
 CORE = ("mscoreei.dll", "clrjit.dll", "mscorrc.dll", "fusion.dll")
+EXTRA_NATIVE = (
+    "mscoreeis.dll", "mscorlib.ni.dll", "system.dll", "system.core.dll",
+    "system.xml.dll", "system.configuration.dll", "system.security.dll",
+    "system.runtime.remoting.dll",
+)
 
 
 def blank() -> dict:
@@ -52,9 +61,12 @@ def blank() -> dict:
         "original48_mscorlib_staged": False,
         "original48_core_staged": 0,
         "original48_imports_staged": 0,
+        "original48_extra_staged": 0,
         "clr_only": "NOT_RUN",
         "clr_and_mscorlib": "NOT_RUN",
         "additional_core": "NOT_RUN",
+        "extra_native": "NOT_RUN",
+        "wine_start_trace": trace_blank(),
         "original40_restored": False,
         "framework48_installed": False,
         "framework481_installed": False,
@@ -73,7 +85,7 @@ def valid(value: object) -> bool:
             or value["original48_clr"] not in SOURCE
             or any(value[k] not in HOST_STATUSES for k in (
                 "native40_before", "native40_after", "clr_only",
-                "clr_and_mscorlib", "additional_core"))
+                "clr_and_mscorlib", "additional_core", "extra_native"))
             or any(type(value[k]) is not bool for k in (
                 "original48_sha256_verified", "original48_mscorlib_staged",
                 "original40_restored"))
@@ -81,6 +93,9 @@ def valid(value: object) -> bool:
             or not 0 <= value["original48_core_staged"] <= len(CORE)
             or type(value["original48_imports_staged"]) is not int
             or not 0 <= value["original48_imports_staged"] <= MAX_STAGE
+            or type(value["original48_extra_staged"]) is not int
+            or not 0 <= value["original48_extra_staged"] <= len(EXTRA_NATIVE)
+            or not trace_valid(value["wine_start_trace"])
             or value["framework48_installed"] is not False
             or value["framework481_installed"] is not False
             or value["solidworks_compatibility"] != "NOT_DEMONSTRATED"):
@@ -274,6 +289,10 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
         core = stage(private, sevenzip, list(CORE))
         assert valid_stage(core)
         result["original48_core_staged"] = core["staged"]
+        mark("EXTRA_NATIVE")
+        extra = stage(private, sevenzip, list(EXTRA_NATIVE))
+        assert valid_stage(extra)
+        result["original48_extra_staged"] = extra["staged"]
 
         mark("REPLACEMENT")
         replacement = ReversibleFramework(root, private)
@@ -295,6 +314,16 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
                             replacement.replace(path, name)
                     result["additional_core"] = host_execute(
                         wine, prefix, fixture, managed, "n")
+                    if result["original48_extra_staged"]:
+                        for name in EXTRA_NATIVE:
+                            path = private / name
+                            if path.is_file():
+                                replacement.replace(path, name)
+                        result["extra_native"] = host_execute(
+                            wine, prefix, fixture, managed, "n")
+                    mark("TRACE")
+                    result["wine_start_trace"] = trace_probe(
+                        wine, prefix, fixture, managed)
         finally:
             mark("RESTORATION")
             replacement.restore()
