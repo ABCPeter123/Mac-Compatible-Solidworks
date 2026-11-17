@@ -890,8 +890,8 @@ jobs:
             --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
             --installer build/NDP48-x86-x64-AllOS-ENU.exe \
             --sha256-file build/netfx48.sha256 \
-            --launcher build/netfx48_win32_launch.exe
-            --service-fixture build/netfx48_scm_service_probe.exe \ \
+            --launcher build/netfx48_win32_launch.exe \
+            --service-fixture build/netfx48_scm_service_probe.exe \
             --loader build/netfx481_clr_load.exe \
             --managed build/netfx481_runtime_probe.exe \
             --native40-report build/netfx40-msxml3-restart.json \
