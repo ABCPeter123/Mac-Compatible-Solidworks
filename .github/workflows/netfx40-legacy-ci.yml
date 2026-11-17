@@ -805,6 +805,7 @@ jobs:
                           "clr_only", "clr_and_mscorlib", "additional_core",
                           "original48_extra_staged", "extra_native",
                           "coherent_staging", "coherent_host",
+                          "clr_crt_staging", "clr_crt_host",
                           "native40_after", "original40_restored",
                           "native40_precheck_before", "original48_precheck",
                           "native40_precheck_after",
