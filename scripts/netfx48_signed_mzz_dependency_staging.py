@@ -12,7 +12,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from scripts.netfx481_payload_audit import pe_type
+from scripts.netfx48_x64_compatible_pe import compatible_x64
 from scripts.netfx4x_mzz_import_evidence import FAMILIES, family
 
 MAX_IMPORTS = 16
@@ -120,7 +120,7 @@ def mzz_members(raw: bytes) -> dict[str, str]:
 
 
 def stage(original_private_dir: Path, sevenzip: Path,
-          missing: list[str]) -> dict:
+          missing: list[str], *, allow_managed_anycpu: bool = False) -> dict:
     if (original_private_dir.is_symlink() or not original_private_dir.is_dir()
             or not sevenzip.is_file() or not 1 <= len(missing) <= MAX_IMPORTS
             or len(set(missing)) != len(missing)):
@@ -181,8 +181,9 @@ def stage(original_private_dir: Path, sevenzip: Path,
                 target.unlink(missing_ok=True)
                 continue
             with target.open("rb") as stream:
-                architecture = pe_type(stream.read(8192))
-            if architecture != "PE_AMD64":
+                compatible = compatible_x64(stream.read(65536),
+                                            allow_anycpu=allow_managed_anycpu)
+            if not compatible:
                 target.unlink(missing_ok=True)
                 continue
         except (OSError, subprocess.TimeoutExpired):
