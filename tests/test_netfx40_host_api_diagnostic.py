@@ -18,6 +18,10 @@ class NativeHostAPITests(unittest.TestCase):
                          "MANAGED_ORIGINAL_PASS")
         self.assertEqual(t.classify(output("OTHER_RUNTIME_SELECTED"), 0),
                          "OTHER_RUNTIME_SELECTED")
+        self.assertEqual(t.classify(output("HOST_START_CLR_FACILITY"), 0),
+                         "HOST_START_CLR_FACILITY")
+        self.assertEqual(t.classify(output("HOST_START_WIN32_NOT_IMPLEMENTED"), 0),
+                         "HOST_START_WIN32_NOT_IMPLEMENTED")
         for raw, code in [
             (output("MANAGED_ORIGINAL_PASS"), 1),
             (output("UNKNOWN_STATUS"), 0),
