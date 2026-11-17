@@ -16,6 +16,10 @@ import tempfile
 from pathlib import Path
 
 from scripts.netfx40_msxml3_restart import validate as validate_native40
+from scripts.netfx48_registry_preflight import (
+    blank as blank_registrations, valid as valid_registrations,
+    inspect as inspect_registrations,
+)
 from scripts.netfx48_scm_service_probe import (
     blank as blank_scm, valid as valid_scm, measure as measure_scm,
 )
@@ -105,6 +109,7 @@ def blank() -> dict:
         "status": "NOT_ELIGIBLE", "native40_persistent": False,
         "service_prerequisites": blank_services(),
         "service_api": blank_scm(),
+        "registry_preflight": blank_registrations(),
         "win7": "NOT_RUN", "win10": "NOT_RUN",
         "setup": blank_launch(), "setup_evidence": dict(SETUP_EVIDENCE),
         "secondary_evidence": None,
@@ -144,6 +149,7 @@ def validate(report: object) -> bool:
             or not validate_prerequisite(report["primary_prerequisite"])
             or not valid_services(report["service_prerequisites"])
             or not valid_scm(report["service_api"])
+            or not valid_registrations(report["registry_preflight"])
             or (report["status"] == "MEASURED"
                 and not validate_secondary_report(report["secondary_evidence"]))
             or (report["status"] == "NOT_ELIGIBLE"
@@ -223,6 +229,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
             or initial["managed"] != "PASS"):
         return blank()
 
+    registrations = inspect_registrations(wine, prefix)
     services = inventory_services(wine, prefix)
     service_api = (measure_scm(wine, prefix, service_fixture)
                    if service_fixture is not None else blank_scm())
@@ -273,6 +280,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
         "status": "MEASURED", "native40_persistent": True,
         "service_prerequisites": services,
         "service_api": service_api,
+        "registry_preflight": registrations,
         "win7": win7, "win10": win10, "setup": setup,
         "setup_evidence": evidence, "secondary_evidence": secondary,
         "primary_prerequisite": primary, "restart": restart,
