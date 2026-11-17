@@ -68,8 +68,8 @@ class Original48StartTraceTests(unittest.TestCase):
                 self.assertEqual(env["WINEDLLOVERRIDES"], "mscoree=n;clr=n")
                 self.assertIn("+loaddll", env["WINEDEBUG"])
                 self.assertIn("+seh", env["WINEDEBUG"])
-                self.assertEqual(kwargs["cwd"], fixture.parent)
-                self.assertEqual(Path(argv[1]), fixture)
+                self.assertEqual(kwargs["cwd"].resolve(), fixture.parent.resolve())
+                self.assertEqual(Path(argv[1]).resolve(), fixture.resolve())
                 kwargs["stdout"].write(
                     b"SWCOMPAT_NETFX48_HOST_SCHEMA=1\n"
                     b"SWCOMPAT_NETFX48_HOST_STATUS=HOST_START_E_FAIL\n")
