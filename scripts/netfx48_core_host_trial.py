@@ -31,6 +31,9 @@ from scripts.netfx481_trial import validate_prefix
 from scripts.netfx48_start_trace import (
     blank as trace_blank, valid as trace_valid, probe as trace_probe,
 )
+from scripts.netfx48_clr_activation_logs import (
+    blank as activation_blank, valid as activation_valid, probe as activation_probe,
+)
 
 STATES = {"NOT_RUN", "BASELINE_FAILED", "EXTRACTION_FAILED",
           "PARTIAL", "MEASURED", "INTERNAL_ERROR"}
@@ -40,7 +43,8 @@ ERROR_PHASES = {"NOT_RUN", "INPUT", "ELIGIBILITY", "AUTHENTICATION",
                 "RESTORATION", "NATIVE40_RECHECK", "VALIDATION",
                 "EXTRA_NATIVE", "TRACE", "PRECHECK_BASELINE",
                 "TRACE_BASELINE", "PRECHECK_48", "PRECHECK_RESTORED",
-                "ZAP_BASELINE", "ZAP_48", "ZAP_RESTORED"}
+                "ZAP_BASELINE", "ZAP_48", "ZAP_RESTORED",
+                "ACTIVATION_BASELINE", "ACTIVATION_48", "ACTIVATION_RESTORED"}
 SOURCE = {"NOT_RUN", "PE_AMD64", "NO_MZZ", "NO_CLR", "MZZ_ERROR",
           "EXTRACT_FAILED", "INVALID_CLR_PE"}
 MAX_STAGE = 16
@@ -65,6 +69,9 @@ def blank() -> dict:
         "original48_precheck": "NOT_RUN",
         "original48_zap_disabled": "NOT_RUN",
         "native40_start_trace": trace_blank(),
+        "native40_activation_before": activation_blank(),
+        "original48_activation": activation_blank(),
+        "native40_activation_after": activation_blank(),
         "original48_sha256_verified": False,
         "original48_clr": "NOT_RUN",
         "original48_mscorlib_staged": False,
@@ -109,6 +116,9 @@ def valid(value: object) -> bool:
             or not 0 <= value["original48_extra_staged"] <= len(EXTRA_NATIVE)
             or not trace_valid(value["wine_start_trace"])
             or not trace_valid(value["native40_start_trace"])
+            or any(not activation_valid(value[name]) for name in (
+                "native40_activation_before", "original48_activation",
+                "native40_activation_after"))
             or value["framework48_installed"] is not False
             or value["framework481_installed"] is not False
             or value["solidworks_compatibility"] != "NOT_DEMONSTRATED"):
@@ -267,6 +277,9 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
     mark("ZAP_BASELINE")
     result["native40_zap_disabled_before"] = host_execute(
         wine, prefix, fixture, managed, "n", disable_native_images=True)
+    mark("ACTIVATION_BASELINE")
+    result["native40_activation_before"] = activation_probe(
+        wine, prefix, fixture, managed, phase="before")
     mark("TRACE_BASELINE")
     result["native40_start_trace"] = trace_probe(
         wine, prefix, fixture, managed)
@@ -350,6 +363,9 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
                     mark("PRECHECK_48")
                     result["original48_precheck"] = host_execute(
                         wine, prefix, fixture, managed, "n", precheck=True)
+                    mark("ACTIVATION_48")
+                    result["original48_activation"] = activation_probe(
+                        wine, prefix, fixture, managed, phase="staged")
                     mark("TRACE")
                     result["wine_start_trace"] = trace_probe(
                         wine, prefix, fixture, managed)
@@ -362,6 +378,9 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
         mark("PRECHECK_RESTORED")
         result["native40_precheck_after"] = host_execute(
             wine, prefix, fixture, managed, "n", precheck=True)
+        mark("ACTIVATION_RESTORED")
+        result["native40_activation_after"] = activation_probe(
+            wine, prefix, fixture, managed, phase="after")
         mark("ZAP_RESTORED")
         result["native40_zap_disabled_after"] = host_execute(
             wine, prefix, fixture, managed, "n", disable_native_images=True)
