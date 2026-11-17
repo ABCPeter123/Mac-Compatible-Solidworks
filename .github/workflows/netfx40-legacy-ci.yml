@@ -1,9 +1,28 @@
 name: Original Microsoft .NET 4.0 CLR on Wine Staging A/B
 
 # Original Microsoft installer experiments require explicit workflow_dispatch.
+# A separately gated, main-only one-shot reusable caller may select the
+# host-provenance-only mode. It cannot request any .NET 4.8 installation.
 # All pull requests use compatibility-ci.yml for non-proprietary regressions.
 # Use exactly one optional 4.8 intermediate; do not rerun both paths.
 on:
+  workflow_call:
+    inputs:
+      try_48_intermediate:
+        description: 'Optional .NET 4.8 intermediate; disabled in one-shot caller'
+        type: boolean
+        required: false
+        default: false
+      try_48_direct:
+        description: 'Optional original .NET 4.8 direct; disabled in one-shot caller'
+        type: boolean
+        required: false
+        default: false
+      host_provenance_only:
+        description: 'Authenticate and test genuine .NET 4.0 hosting, without .NET 4.8'
+        type: boolean
+        required: false
+        default: false
   workflow_dispatch:
     inputs:
       try_48_intermediate:
