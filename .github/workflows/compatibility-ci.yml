@@ -84,6 +84,14 @@ jobs:
           sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
       - name: Build WGL executable
         run: sh scripts/build-wgl-probe.sh
+      - name: Build self-authored original .NET 4.8 read-only SCM fixture
+        run: |
+          x86_64-w64-mingw32-gcc -Wall -Wextra -Werror -O2 \
+            -o build/netfx48_scm_service_probe.exe \
+            probes/netfx48_scm_service_probe.c -ladvapi32
+          file build/netfx48_scm_service_probe.exe
+          x86_64-w64-mingw32-objdump -p build/netfx48_scm_service_probe.exe |
+            grep -qi 'DLL Name: ADVAPI32.dll'
       - name: Verify Windows binary and imports
         run: |
           for executable in build/wgl_probe.exe build/wgl_bitmap_probe.exe; do
