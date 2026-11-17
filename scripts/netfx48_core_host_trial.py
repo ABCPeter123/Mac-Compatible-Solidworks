@@ -443,7 +443,7 @@ def trial(installer: Path, signed_sha: str, wine: Path, prefix: Path,
                                 }.get(str(exc), "COHERENCE_UNCLASSIFIED_FAILURE")
                                 mark(category)
                                 raise
-                                except OSError:
+                            except OSError:
                                 mark("COHERENCE_FILESYSTEM_FAILURE")
                                 raise
                         mark("COHERENCE_HOST")
