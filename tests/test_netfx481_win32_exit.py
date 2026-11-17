@@ -44,6 +44,15 @@ class FullExitTests(TestCase):
         self.assertEqual(msi["category"], "MSI_FATAL_ERROR")
         self.assertEqual(win32.parse(sample(code="00000000"), 0)["category"], "SUCCESS")
 
+    def test_true_5100_is_a_setup_prerequisite_block_not_msi_1603(self):
+        outcome = win32.parse(sample(code="000013EC", child="OBSERVED",
+                                     lifecycle="ALL_EXITED", child_exit="NONZERO"), 0)
+        self.assertTrue(win32.validate(outcome))
+        self.assertEqual(outcome["category"], "PREREQUISITE_BLOCK_5100")
+        self.assertEqual(win32.termination(outcome), ("EXIT_NONZERO", 5100))
+        self.assertNotEqual(outcome["category"], "MSI_FATAL_ERROR")
+        self.assertNotEqual(outcome["category"], "SUCCESS")
+
     def test_corrupt_duplicate_missing_and_overlong_output_cannot_become_success(self):
         cases = [
             sample() + sample(),
