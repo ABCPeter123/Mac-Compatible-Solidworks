@@ -784,8 +784,23 @@ jobs:
               for key in ("status", "native40_before", "original48_clr",
                           "clr_only", "clr_and_mscorlib", "additional_core",
                           "original48_extra_staged", "extra_native",
-                          "native40_after", "original40_restored"):
+                          "native40_after", "original40_restored",
+                          "native40_precheck_before", "original48_precheck",
+                          "native40_precheck_after"):
                   out.write(key + ": **" + str(r[key]) + "**\n\n")
+              out.write("### Original 4.0 versus 4.8 CLR startup traces\n\n")
+              for variant in ("native40_start_trace", "wine_start_trace"):
+                  out.write("**" + variant + "**\n\n")
+                  for key in ("status", "host", "process", "trace",
+                              "module_missing", "export_missing", "seh_exception",
+                              "unimplemented_api", "error_count", "fixme_count",
+                              "native_clr_seen", "native_mscoree_seen",
+                              "native_mscoreei_seen"):
+                      out.write(key + ": **" + str(r[variant][key]) + "**\n\n")
+                  for category in ("error_channels", "fixme_channels"):
+                      out.write(category + ": **" +
+                                ",".join(k for k, v in r[variant][category].items() if v) +
+                                "**\n\n")
               out.write("### Sanitized original CLR startup trace\n\n")
               for key in ("status", "host", "process", "trace",
                           "module_missing", "export_missing", "seh_exception",
