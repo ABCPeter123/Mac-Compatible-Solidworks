@@ -45,7 +45,8 @@ class DirectNative48Tests(unittest.TestCase):
             path.write_text("synthetic")
         return (paths[0], prefix, *paths[1:])
 
-    def run_case(self, root, *, setup=None, changed=True, registry="NETFX48_RANGE"):
+    def run_case(self, root, *, setup=None, changed=True, registry="NETFX48_RANGE",
+                 profile="win7"):
         args = self.fixture(root)
         fake_setup = setup or self.setup()
         diff = {"changes": {"CLR64": "CHANGED" if changed else "UNCHANGED"}}
@@ -65,7 +66,7 @@ class DirectNative48Tests(unittest.TestCase):
             mock.patch.object(p, "load_clr", return_value="LOADED"),
             mock.patch.object(p, "probe", return_value={
                 "clr_family": "MICROSOFT_CLR_CANDIDATE", "managed": "PASS"}),
-            mock.patch.object(p, "_set_winver", return_value="APPLIED"),
+            mock.patch.object(p, "_set_winver", return_value="APPLIED") as profile_switch,
             mock.patch.object(p, "_release", return_value=registry),
             mock.patch.object(p, "private_setup_log", return_value=root / "private"),
             mock.patch.object(p, "classify_log", return_value={
@@ -80,8 +81,14 @@ class DirectNative48Tests(unittest.TestCase):
             mock.patch.object(p, "wineboot_restart", return_value="COMPLETED"),
             mock.patch.object(p, "launch", return_value=fake_setup) as started,
         ):
-            result = p.inspect(*args, {"persistent_native_managed": True})
+            result = p.inspect(*args, {"persistent_native_managed": True},
+                               setup_profile=profile)
         self.assertTrue(p.validate(result))
+        self.assertEqual([c.args[-1] for c in profile_switch.call_args_list],
+                         [profile, "win10"])
+        self.assertEqual(result["setup_profile"], profile.upper())
+        self.assertEqual(result["setup_profile_applied"], "APPLIED")
+        self.assertEqual(result["win7"], "APPLIED" if profile == "win7" else "NOT_RUN")
         self.assertEqual(started.call_args.kwargs["setup_family"], "NETFX48")
         self.assertEqual(secondary_scan.call_args.kwargs["family"], "NETFX48")
         self.assertEqual(primary_scan.call_count, 1)
@@ -109,6 +116,22 @@ class DirectNative48Tests(unittest.TestCase):
             self.assertFalse(p.validate(dict(result, wine_mono_registration="PRIVATE")))
             self.assertTrue(p.validate(dict(result, wine_mono_registration="PRESENT")))
             self.assertTrue(p.validate(dict(result, wine_mono_registration="UNKNOWN")))
+
+    @unittest.skipIf(os.name == "nt", "POSIX Wine experiment")
+    def test_win10_original_installer_path_can_reach_verified_native48(self):
+        with TemporaryDirectory() as td:
+            result = self.run_case(Path(td), profile="win10")
+            self.assertTrue(result["native48_candidate"])
+            self.assertEqual(result["win7"], "NOT_RUN")
+            self.assertEqual(result["win10"], "APPLIED")
+            self.assertFalse(p.validate(dict(result, setup_profile="WIN7")))
+            self.assertFalse(p.validate(dict(result, setup_profile_applied="FAILED")))
+            self.assertFalse(p.validate(dict(result, win7="APPLIED")))
+            # A signed original setup 5100 remains a prerequisite block on Win10.
+        with TemporaryDirectory() as td:
+            result = self.run_case(Path(td), profile="win10", setup=self.setup(
+                "000013EC", "PREREQUISITE_BLOCK_5100"))
+            self.assertFalse(result["native48_candidate"])
 
     @unittest.skipIf(os.name == "nt", "POSIX Wine experiment")
     def test_failure_timeout_registry_and_unchanged_clr_not_ready(self):

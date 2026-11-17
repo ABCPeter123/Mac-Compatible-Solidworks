@@ -20,7 +20,8 @@ class OriginalNetfx48ShellTests(unittest.TestCase):
         )[0]
         expected = (
             "--wine", "--prefix", "--installer", "--sha256-file",
-            "--launcher", "--service-fixture", "--loader", "--managed",
+            "--launcher", "--service-fixture", "--setup-profile",
+            "--loader", "--managed",
             "--native40-report", "--output", "--agree-disposable-prefix",
         )
         lines = [line.strip() for line in command.splitlines() if line.strip()]
