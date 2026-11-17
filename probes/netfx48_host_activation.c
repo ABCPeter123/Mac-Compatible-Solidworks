@@ -146,7 +146,32 @@ void WINAPI host_entry(void) {
     if (FAILED(hr) || host == NULL) RESULT("HOST_INTERFACE_FAILED");
 
     hr = ICLRRuntimeHost_Start(host);
-    if (FAILED(hr)) RESULT("HOST_START_FAILED");
+    if (FAILED(hr)) {
+        /* Classify the public HRESULT in finite buckets. Do not print raw
+           codes, vendor file paths, registry content, or Wine debug output.
+           Check exact Win32/COM cases before broader HRESULT facilities. */
+        if (hr == E_FAIL) RESULT("HOST_START_E_FAIL");
+        if (hr == E_NOTIMPL) RESULT("HOST_START_NOT_IMPLEMENTED");
+        if (hr == E_UNEXPECTED) RESULT("HOST_START_UNEXPECTED");
+        if (hr == E_ACCESSDENIED) RESULT("HOST_START_ACCESS_DENIED");
+        if (hr == E_OUTOFMEMORY) RESULT("HOST_START_OUT_OF_MEMORY");
+        if (hr == E_INVALIDARG) RESULT("HOST_START_INVALID_ARGUMENT");
+        if (hr == HRESULT_FROM_WIN32(ERROR_MOD_NOT_FOUND))
+            RESULT("HOST_START_MISSING_MODULE");
+        if (hr == HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND))
+            RESULT("HOST_START_MISSING_EXPORT");
+        if (hr == HRESULT_FROM_WIN32(ERROR_BAD_EXE_FORMAT))
+            RESULT("HOST_START_BAD_IMAGE");
+        if (hr == HRESULT_FROM_WIN32(ERROR_CALL_NOT_IMPLEMENTED))
+            RESULT("HOST_START_WIN32_NOT_IMPLEMENTED");
+        if (hr == HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED))
+            RESULT("HOST_START_WIN32_NOT_SUPPORTED");
+        if (((DWORD)hr & 0xFFFF0000UL) == 0x80130000UL)
+            RESULT("HOST_START_CLR_FACILITY");
+        if (((DWORD)hr & 0xFFFF0000UL) == 0x80070000UL)
+            RESULT("HOST_START_WIN32_FACILITY");
+        RESULT("HOST_START_OTHER");
+    }
 
     n = GetEnvironmentVariableW(L"SWCOMPAT_MANAGED_DLL", managed_path, 4096);
     if (n == 0 || n >= 4096 ||
