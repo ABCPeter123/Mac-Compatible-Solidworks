@@ -1087,7 +1087,8 @@ jobs:
                   from scripts.netfx40_to_48_direct import validate as valid_direct
                   measured = json.loads(direct_path.read_text(encoding="ascii"))
                   assert valid_direct(measured)
-                  for key in ("status", "win7", "win10", "restart", "clr64_changed",
+                  for key in ("status", "setup_profile", "setup_profile_applied",
+                              "win7", "win10", "restart", "clr64_changed",
                               "release", "loader", "runtime_family",
                               "native_only_managed", "native48_candidate",
                               "framework481_confirmed"):
