@@ -34,17 +34,20 @@ class NativeSCMProbeTests(unittest.TestCase):
 
     def test_exact_schema_and_private_text_fail_closed(self):
         variants = (
-            packet() + b"PRIVATE=C:\\Users\\secret\n",
-            packet() + packet(),
-            packet().replace(b"SCHEMA=1", b"SCHEMA=2"),
-            packet().replace(b"TRUSTEDINSTALLER=", b"TRUSTEDINSTALLER=PRIVATE"),
-            packet().replace(b"MSISERVER=", b"OTHERSERVICE="),
-            packet() + b"\x00",
-            b"\xff" + packet(),
+            (packet() + b"PRIVATE=C:\\Users\\secret\\n", "UNEXPECTED_TEXT"),
+            (packet() + packet(), "INVALID_FIELD"),
+            (packet().replace(b"SCHEMA=1", b"SCHEMA=2"), "MALFORMED"),
+            (packet().replace(b"TRUSTEDINSTALLER=", b"TRUSTEDINSTALLER=PRIVATE"),
+             "MALFORMED"),
+            (packet().replace(b"MSISERVER=", b"OTHERSERVICE="), "INVALID_FIELD"),
+            (packet().replace(b"SWCOMPAT_SCM_API_BITS=PRESENT\\n", b""),
+             "INCOMPLETE_FIELDS"),
+            (packet() + b"\\x00", "MALFORMED"),
+            (b"\\xff" + packet(), "NONASCII_OUTPUT"),
         )
-        for value in variants:
-            with self.subTest(value=value[:50]):
-                self.assertEqual(scm.parse(value, 0), scm.blank("MALFORMED"))
+        for value, expected in variants:
+            with self.subTest(category=expected, value=value[:50]):
+                self.assertEqual(scm.parse(value, 0), scm.blank(expected))
         self.assertEqual(scm.parse(packet(), 5), scm.blank("NONZERO_EXIT"))
         self.assertEqual(scm.parse(b"", 0), scm.blank("EMPTY_OUTPUT"))
         self.assertEqual(scm.parse(packet() + b"x" * 513, 0),
@@ -55,7 +58,8 @@ class NativeSCMProbeTests(unittest.TestCase):
 
     def test_finite_failure_categories_never_invent_service_presence(self):
         for status in ("NONZERO_EXIT", "EMPTY_OUTPUT", "OVERSIZED_OUTPUT",
-                       "MALFORMED", "TIMEOUT", "PROCESS_FAILED"):
+                       "MALFORMED", "TIMEOUT", "PROCESS_FAILED", "NONASCII_OUTPUT",
+                       "UNEXPECTED_TEXT", "INVALID_FIELD", "INCOMPLETE_FIELDS"):
             with self.subTest(status=status):
                 outcome = scm.blank(status)
                 self.assertTrue(scm.valid(outcome))
