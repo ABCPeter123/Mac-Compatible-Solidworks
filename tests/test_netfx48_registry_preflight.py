@@ -95,6 +95,33 @@ class RegistryPreflightTests(unittest.TestCase):
             self.assertTrue(r.valid(result))
             self.assertNotIn(str(root), str(result))
 
+    def test_missing_value_written_to_stderr_is_not_unknown(self):
+        # Windows reg.exe often prints missing-value errors to stderr.
+        # The diagnostic must capture that stream privately and classify it.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            wine = root / "wine"
+            wine.write_text("fixture")
+            wine.chmod(0o700)
+            prefix = root / "prefix"
+            prefix.mkdir()
+
+            def fake_subprocess(argv, **kwargs):
+                self.assertIs(kwargs["stderr"], kwargs["stdout"])
+                self.assertEqual(argv[2], "query")
+                self.assertEqual(argv[4], "/v")
+                self.assertIn(argv[5], {"Release", "Version"})
+                kwargs["stderr"].write(
+                    b"ERROR: The system was unable to find the specified "
+                    b"registry key or value.\n")
+                return mock.Mock(returncode=1)
+
+            with mock.patch.object(r, "validate_prefix"), \
+                 mock.patch.object(r.subprocess, "run", side_effect=fake_subprocess):
+                result = r.inspect(wine, prefix)
+            self.assertEqual(result, {key: "ABSENT" for key in r.FIELDS})
+            self.assertTrue(r.valid(result))
+
     def test_failure_is_not_absence_and_no_mutations(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
