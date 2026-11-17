@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 import re
 from scripts.netfx481_setup_evidence import _decode
+from scripts.netfx48_bootstrap_blockif import extract as evaluated_blockif
 
 MAX_BYTES = 8 * 1024 * 1024
 OS_CLASSES = {"BELOW_WINDOWS_10", "WINDOWS_10_TOO_OLD", "WINDOWS_10_SUPPORTED",
@@ -21,7 +22,8 @@ CAUSES = {
     "MISSING_UPDATE_BLOCK", "PENDING_REBOOT_BLOCK", "ADMIN_RIGHTS_BLOCK",
     "PROCESSOR_BLOCK", "EXISTING_FRAMEWORK_BLOCK",
     "DISK_SPACE_BLOCK", "COMPATIBILITY_MODE_BLOCK", "WINDOWS_UPDATE_BLOCK",
-    "UNKNOWN_PREREQUISITE",
+    "UNKNOWN_PREREQUISITE", "SAFE_MODE_BLOCK",
+    "WINDOWS_INSTALLER_BLOCK", "IMAGING_COMPONENT_BLOCK",
 }
 STATES = {"NOT_REQUESTED", "NOT_FOUND", "READ_FAILED", "TOO_LARGE",
           "INVALID_ENCODING", "CLASSIFIED"}
@@ -41,6 +43,13 @@ DISK_ESTIMATE = re.compile(
     r"Bytes\s+Available:\s*\[(\d{1,18})\]?"
 )
 CAUSE_REGEX = (
+    ("SAFE_MODE_BLOCK", re.compile(r"(?i)\bsafe mode\b")),
+    ("WINDOWS_INSTALLER_BLOCK", re.compile(
+        r"(?i)\b(?:windows installer service|msiserver)\b.{0,120}"
+        r"(?:not available|missing|disabled|not running|cannot start)")),
+    ("IMAGING_COMPONENT_BLOCK", re.compile(
+        r"(?i)\bwindows imaging component\b.{0,120}"
+        r"(?:must be installed|before|missing|required)")),
     ("DISK_SPACE_BLOCK", re.compile(
         r"(?i)(?:not enough|insufficient)\s+(?:free\s+)?disk\s+space"
         r"|(?:unable to|cannot)\s+(?:download|install).{0,70}disk\s+space")),
@@ -67,7 +76,7 @@ CAUSE_REGEX = (
     ("ADMIN_RIGHTS_BLOCK", re.compile(
         r"(?i)\b(?:administrator privileges|elevat(?:ed|ion)|access denied|"
         r"insufficient privileges|not have sufficient privileges)\b")),
-    ("PROCESSOR_BLOCK", re.compile(r"(?i)\b(?:processor architecture|unsupported processor|unsupported cpu)\b")),
+    ("PROCESSOR_BLOCK", re.compile(r"(?i)\b(?:processor architecture|unsupported processor|unsupported cpu|\bIA64\b|cannot be installed on (?:x64|x86))\b")),
     ("EXISTING_FRAMEWORK_BLOCK", re.compile(r"(?i)\b(?:already installed|higher version|later version|existing framework)\b")),
 )
 
@@ -131,7 +140,25 @@ def classify_text(raw: bytes, *, family: str = "NETFX481") -> dict:
     blockers: set[str] = set()
     return_code = False
     unclassified_stopblock = False
-    for line in content.splitlines()[:30000]:
+    lines = content.splitlines()[:30000]
+    evaluated, true_descriptions, unrelated_lines = evaluated_blockif(lines)
+
+    def classify_cause(line: str) -> bool:
+        matched = False
+        for category, regex in CAUSE_REGEX:
+            if regex.search(line):
+                blockers.add(category)
+                matched = True
+        return matched
+
+    # Microsoft emits each BlockIf's description BEFORE evaluating it.
+    # Treat it as a real prerequisite only when its explicit verdict is
+    # TRUE. A false condition is merely documentation, not a failing gate.
+    for description in true_descriptions:
+        if not classify_cause(description):
+            blockers.add("UNKNOWN_PREREQUISITE")
+
+    for line in lines:
         if len(line) > 8192:
             continue
         match = OS_LINE.search(line)
@@ -140,15 +167,23 @@ def classify_text(raw: bytes, *, family: str = "NETFX481") -> dict:
             sp_major = int(service_pack.group(1)) if service_pack else None
             versions.add(_os_class(*[int(n) for n in match.groups()],
                                    family=family, sp_major=sp_major))
-        if not FAIL_LINE.search(line):
-            continue
         if re.search(r"(?i)(?<!\d)5100(?!\d)|0x000013ec\b", line):
-            return_code = True
-        specific = False
-        for category, regex in CAUSE_REGEX:
-            if regex.search(line):
-                blockers.add(category)
-                specific = True
+            if FAIL_LINE.search(line):
+                return_code = True
+
+    # A log without evaluated BlockIf results retains the historical
+    # message-based fallback. For structured native setup logs, exclude
+    # all descriptions and expression lines of both TRUE and FALSE blocks.
+    # Inspect only unrelated failure lines, e.g. a separate disk deficit
+    # or the terminal 5100 result.
+    candidates = unrelated_lines if evaluated else lines
+    for line in candidates:
+        if len(line) > 8192 or not FAIL_LINE.search(line):
+            continue
+        if evaluated and re.search(r"(?i)\bno blocking conditions found\b", line):
+            continue
+        # The generic terminal error is not itself a specific cause.
+        specific = classify_cause(line)
         estimate = DISK_ESTIMATE.search(line)
         if estimate and int(estimate.group(1)) > int(estimate.group(2)):
             blockers.add("DISK_SPACE_BLOCK")

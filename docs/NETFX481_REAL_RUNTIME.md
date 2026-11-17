@@ -372,3 +372,32 @@ The [corrected Apple Silicon test run 43634064248](https://github.com/ABCPeter12
 The initial trial's marker comparison reported **CHANGED** despite an MSI exit code of zero. That result was not accepted as success. The source file was initially subject to Windows checkout newline conversion (LF versus CRLF). The fixed workflow enforces LF with a source-specific `.gitattributes` rule, tests exact source bytes on every CI OS, and verifies native Windows-installed bytes without whitespace normalization. The subsequent Wine trial positively verified exact installed contents. This regression demonstrates why exit codes alone are insufficient.
 
 **Implication:** basic x64 MSI file installation is functional in this Wine environment. We should not continue treating missing `msiserver` registration, missing core MSI exports, or a globally broken simple MSI transaction as the explanation for authentic .NET Framework 4.0's Windows error 1603. Further failure isolation must target the .NET-specific nested setup, prerequisites, custom actions, MSI rollback, and service interactions. Ordinary MSI success still does not establish the authentic Microsoft native CLR, 4.8.1 readiness, or SOLIDWORKS execution.
+
+## November 17: classify evaluated Microsoft bootstrapper BlockIf conditions
+
+The original Microsoft setup logging format is important to interpreting
+error **5100**. It prints each `BlockIf: <description>` before it
+evaluates the prerequisite condition and subsequently prints
+`BlockIf evaluated to true` or `BlockIf evaluated to false`. False
+descriptions are routine prerequisite checks, not active failures.
+Treating any line that mentions unsupported OS, privileges, reboot or
+Windows Installer as a blocker creates false-positive causal claims.
+
+Sources: [Microsoft .NET deployment exit codes](https://learn.microsoft.com/dotnet/framework/deployment/deployment-guide-for-developers),
+[published Microsoft setup log example](https://learn.microsoft.com/en-us/answers/questions/2559354/not-able-to-install-net-4-0-framework-on-64-bit-ma).
+
+The private classifier now correlates each bounded `BlockIf` description
+with its explicit result and categorizes **only true** prerequisite
+conditions. It can distinguish Windows Installer service absence, safe
+mode and missing Windows Imaging Component. Unrelated final 5100 codes
+are still recorded, but a log with only false BlockIf results and
+an unexplained 5100 is classified `UNKNOWN_PREREQUISITE`, never assigned
+an unsupported-OS cause. Unstructured and older logs retain the
+existing conservative fallback classification. The report emits only
+fixed enums and boolean status; vendor descriptions and full logs remain
+private to the disposable runner.
+
+This is an analysis reliability fix, **not** a successful framework
+installation and not a proof that OS/version/service failures caused the
+historical 5100. The next genuine signed setup trial must report an
+evaluated true blocking condition or keep the root cause unknown.
