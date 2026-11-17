@@ -16,6 +16,9 @@ import tempfile
 from pathlib import Path
 
 from scripts.netfx40_msxml3_restart import validate as validate_native40
+from scripts.netfx48_scm_service_probe import (
+    blank as blank_scm, valid as valid_scm, measure as measure_scm,
+)
 from scripts.netfx40_to_48_intermediate import _env, _release, _set_winver, RELEASE
 from scripts.netfx481_clr_load import run as load_clr, STATUSES as LOAD_STATES
 from scripts.netfx481_payload_audit import snapshot, compare
@@ -101,6 +104,7 @@ def blank() -> dict:
     return {
         "status": "NOT_ELIGIBLE", "native40_persistent": False,
         "service_prerequisites": blank_services(),
+        "service_api": blank_scm(),
         "win7": "NOT_RUN", "win10": "NOT_RUN",
         "setup": blank_launch(), "setup_evidence": dict(SETUP_EVIDENCE),
         "secondary_evidence": None,
@@ -139,6 +143,7 @@ def validate(report: object) -> bool:
             or report["solidworks_compatibility"] != "NOT_DEMONSTRATED"
             or not validate_prerequisite(report["primary_prerequisite"])
             or not valid_services(report["service_prerequisites"])
+            or not valid_scm(report["service_api"])
             or (report["status"] == "MEASURED"
                 and not validate_secondary_report(report["secondary_evidence"]))
             or (report["status"] == "NOT_ELIGIBLE"
@@ -194,7 +199,8 @@ def private_setup_log(prefix: Path) -> Path:
 
 
 def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
-            launcher: Path, loader: Path, managed: Path, native40: dict) -> dict:
+            launcher: Path, loader: Path, managed: Path, native40: dict,
+            service_fixture: Path | None = None) -> dict:
     if os.name == "nt" or any(p.is_symlink() for p in (
             wine, prefix, installer, digest_file, launcher, loader, managed)):
         raise ValueError("Only explicit disposable Wine experiments allowed")
@@ -218,6 +224,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
         return blank()
 
     services = inventory_services(wine, prefix)
+    service_api = (measure_scm(wine, prefix, service_fixture)
+                   if service_fixture is not None else blank_scm())
     env = _env(wine, prefix)
     win7 = _set_winver(wine, prefix, env, "win7")
     setup = blank_launch()
@@ -264,6 +272,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
     result = {
         "status": "MEASURED", "native40_persistent": True,
         "service_prerequisites": services,
+        "service_api": service_api,
         "win7": win7, "win10": win10, "setup": setup,
         "setup_evidence": evidence, "secondary_evidence": secondary,
         "primary_prerequisite": primary, "restart": restart,
@@ -297,11 +306,13 @@ def main(argv: list[str] | None = None) -> int:
     for key in ("wine", "prefix", "installer", "sha256-file", "launcher", "loader",
                 "managed", "native40-report", "output"):
         ap.add_argument("--" + key, type=Path, required=True)
+    ap.add_argument("--service-fixture", type=Path, required=True)
     ap.add_argument("--agree-disposable-prefix", action="store_true", required=True)
     args = ap.parse_args(argv)
     prior = json.loads(args.native40_report.read_text(encoding="ascii"))
     result = inspect(args.wine, args.prefix, args.installer, args.sha256_file,
-                     args.launcher, args.loader, args.managed, prior)
+                     args.launcher, args.loader, args.managed, prior,
+                     args.service_fixture)
     if not validate(result) or args.output.is_symlink():
         raise ValueError("Unverified original Microsoft .NET 4.8 outcome")
     args.output.parent.mkdir(parents=True, exist_ok=True)

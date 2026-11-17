@@ -362,6 +362,20 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $selftest -notcontains 'SWCOMPAT_WIN32_SETUP_EXIT_HEX=00000BC2') {
             throw "Original .NET 4.8 launcher 3010 selftest failed"
           }
+          # Native OpenSCManagerW/OpenServiceW avoids ambiguous sc.exe strings.
+          # Read-only: never create, start, stop or configure a service.
+          $lines = @('@echo off', ('call "' + $vcvars + '"'),
+            'cl /nologo /W4 /O2 /Fe:build\netfx48_scm_service_probe.exe probes\netfx48_scm_service_probe.c advapi32.lib',
+            'exit /b %errorlevel%')
+          [System.IO.File]::WriteAllLines((Join-Path (Get-Location) 'build\compile-original-scm.cmd'), $lines, [System.Text.Encoding]::ASCII)
+          & cmd.exe /d /c build\compile-original-scm.cmd
+          if ($LASTEXITCODE -ne 0) { throw "Native SCM API probe compilation failed" }
+          $serviceControl = & build\netfx48_scm_service_probe.exe
+          if ($LASTEXITCODE -ne 0 -or
+              $serviceControl -notcontains 'SWCOMPAT_SCM_API_STATUS=COMPLETE' -or
+              $serviceControl -notcontains 'SWCOMPAT_SCM_API_TRUSTEDINSTALLER=PRESENT') {
+            throw "Native Windows TrustedInstaller positive control failed"
+          }
       - name: Check authenticated Microsoft /x extraction on native Windows without installing
         shell: pwsh
         run: |
@@ -381,6 +395,7 @@ jobs:
             build/netfx481.sha256
             build/netfx48.sha256
             build/netfx48_win32_launch.exe
+            build/netfx48_scm_service_probe.exe
             build/netfx481_runtime_probe.exe
             build/netfx481_clr_load.exe
             build/netfx40_win32_launch.exe
@@ -875,7 +890,8 @@ jobs:
             --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
             --installer build/NDP48-x86-x64-AllOS-ENU.exe \
             --sha256-file build/netfx48.sha256 \
-            --launcher build/netfx48_win32_launch.exe \
+            --launcher build/netfx48_win32_launch.exe
+            --service-fixture build/netfx48_scm_service_probe.exe \ \
             --loader build/netfx481_clr_load.exe \
             --managed build/netfx481_runtime_probe.exe \
             --native40-report build/netfx40-msxml3-restart.json \
@@ -1070,6 +1086,12 @@ jobs:
                   from scripts.netfx40_to_48_direct import SERVICE_NAMES
                   for service in SERVICE_NAMES:
                       out.write(f"original_direct_48_service_{service}: **{measured['service_prerequisites'][service]}**\n\n")
+                  from scripts.netfx48_scm_service_probe import FIELDS
+                  assert measured["service_api"]["status"] in {
+                      "COMPLETE", "UNAVAILABLE", "TIMEOUT", "PROCESS_FAILED", "MALFORMED"}
+                  out.write(f"original_direct_48_scm_api_status: **{measured['service_api']['status']}**\n\n")
+                  for service in FIELDS:
+                      out.write(f"original_direct_48_scm_api_{service}: **{measured['service_api']['services'][service]}**\n\n")
                   prereq = measured["primary_prerequisite"]
                   for key in ("status", "5100_in_log"):
                       out.write(f"original_direct_48_prerequisite_{key}: **{prereq[key]}**\n\n")

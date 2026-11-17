@@ -1,0 +1,116 @@
+"""Synthetic finite-only Windows Service Control Manager API probe tests."""
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+from unittest import mock
+
+from scripts import netfx48_scm_service_probe as scm
+
+
+def packet(*, status="COMPLETE", trusted="ABSENT", msi="PRESENT",
+           update="PRESENT", bits="PRESENT") -> bytes:
+    return ("\n".join([
+        "SWCOMPAT_SCM_API_SCHEMA=1",
+        "SWCOMPAT_SCM_API_STATUS=" + status,
+        "SWCOMPAT_SCM_API_TRUSTEDINSTALLER=" + trusted,
+        "SWCOMPAT_SCM_API_MSISERVER=" + msi,
+        "SWCOMPAT_SCM_API_WUAUSERV=" + update,
+        "SWCOMPAT_SCM_API_BITS=" + bits,
+    ]) + "\n").encode("ascii")
+
+
+class NativeSCMProbeTests(unittest.TestCase):
+    def test_native_win32_missing_trustedinstaller_distinguished_from_msi(self):
+        r = scm.parse(packet(), 0)
+        self.assertTrue(scm.valid(r))
+        self.assertEqual(r["status"], "COMPLETE")
+        self.assertEqual(r["services"]["TRUSTEDINSTALLER"], "ABSENT")
+        self.assertEqual(r["services"]["MSISERVER"], "PRESENT")
+        self.assertNotIn("service path", str(r))
+        denied = scm.parse(packet(trusted="ACCESS_DENIED"), 0)
+        self.assertEqual(denied["services"]["TRUSTEDINSTALLER"], "ACCESS_DENIED")
+        self.assertNotEqual(denied, r)
+
+    def test_exact_schema_and_private_text_fail_closed(self):
+        variants = (
+            packet() + b"PRIVATE=C:\\Users\\secret\n",
+            packet() + packet(),
+            packet().replace(b"SCHEMA=1", b"SCHEMA=2"),
+            packet().replace(b"TRUSTEDINSTALLER=", b"TRUSTEDINSTALLER=PRIVATE"),
+            packet().replace(b"MSISERVER=", b"OTHERSERVICE="),
+            packet() + b"\x00",
+            packet() + b"x" * 513,
+            b"\xff" + packet(),
+        )
+        for value in variants:
+            with self.subTest(value=value[:50]):
+                self.assertEqual(scm.parse(value, 0), scm.blank("MALFORMED"))
+        self.assertEqual(scm.parse(packet(), 5), scm.blank("MALFORMED"))
+        self.assertFalse(scm.valid(dict(scm.blank(), original_log="secret")))
+        self.assertFalse(scm.valid(dict(scm.blank(), services={
+            **scm.blank()["services"], "TRUSTEDINSTALLER": "private path"})))
+
+    def test_unavailable_manager_never_invents_present(self):
+        unavailable = scm.parse(packet(
+            status="UNAVAILABLE", trusted="UNKNOWN", msi="UNKNOWN",
+            update="UNKNOWN", bits="UNKNOWN"), 0)
+        self.assertTrue(scm.valid(unavailable))
+        self.assertEqual(unavailable["status"], "UNAVAILABLE")
+        self.assertFalse(scm.valid(dict(
+            unavailable, services={**unavailable["services"],
+                                   "TRUSTEDINSTALLER": "PRESENT"})))
+
+    def test_private_runner_invokes_only_self_authored_probe(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            wine = root / "wine"
+            wine.write_bytes(b"wine")
+            prefix = root / "prefix"
+            prefix.mkdir()
+            fixture = root / "netfx48_scm_service_probe.exe"
+            fixture.write_bytes(b"fixture")
+
+            def execute(args, **kwargs):
+                self.assertEqual(args, [str(wine), str(fixture)])
+                self.assertEqual(kwargs["env"]["WINEPREFIX"], str(prefix))
+                self.assertEqual(kwargs["env"]["WINEDEBUG"], "-all")
+                self.assertEqual(kwargs["env"]["WINEARCH"], "win64")
+                self.assertEqual(kwargs["timeout"], 20)
+                self.assertNotIn("WINEDLLOVERRIDES", kwargs["env"])
+                self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
+                kwargs["stdout"].write(packet())
+                return mock.Mock(returncode=0)
+
+            with mock.patch.object(scm, "validate_prefix"), \
+                 mock.patch.object(scm.subprocess, "run", side_effect=execute), \
+                 mock.patch.dict(scm.os.environ, {"WINEDLLOVERRIDES": "mscoree=b"}):
+                result = scm.measure(wine, prefix, fixture)
+            self.assertEqual(result["services"]["TRUSTEDINSTALLER"], "ABSENT")
+            self.assertTrue(scm.valid(result))
+            fixture.rename(root / "user-binary.exe")
+            with mock.patch.object(scm, "validate_prefix"), \
+                 mock.patch.object(scm.subprocess, "run") as run:
+                with self.assertRaises(ValueError):
+                    scm.measure(wine, prefix, root / "user-binary.exe")
+                run.assert_not_called()
+
+    def test_timeout_returns_unknown_not_missing_service(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            wine = root / "wine"
+            wine.write_bytes(b"w")
+            prefix = root / "prefix"
+            prefix.mkdir()
+            fixture = root / "netfx48_scm_service_probe.exe"
+            fixture.write_bytes(b"e")
+            with mock.patch.object(scm, "validate_prefix"), \
+                 mock.patch.object(scm.subprocess, "run",
+                                   side_effect=subprocess.TimeoutExpired("wine", 20)):
+                r = scm.measure(wine, prefix, fixture)
+            self.assertEqual(r, scm.blank("TIMEOUT"))
+            self.assertTrue(scm.valid(r))
+
+
+if __name__ == "__main__":
+    unittest.main()
