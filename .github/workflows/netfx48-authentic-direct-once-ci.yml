@@ -1,0 +1,34 @@
+name: One-shot original Microsoft .NET 4.8 installer and gated 4.8.1 trial
+
+# Intentionally authorized main-only direct original installer experiment.
+# The previously authenticated 4.8 payload DLL-hosting test reached E_FAIL
+# even with a coherent signed Framework64 cohort plus CLR-specific CRT.
+# Installing signed 4.8 is the next distinct and necessary experiment.
+# The reusable workflow MUST prove original native Microsoft .NET 4.0 managed
+# execution before it executes the signed 4.8 installer in a disposable Wine
+# prefix. The 4.8.1 installer runs ONLY if it independently verifies genuine
+# native 4.8 managed execution and a valid release value. Never claim a
+# successful install from a green diagnostic workflow alone.
+# No proprietary Microsoft media, keys, hashes, DLLs or logs are artifacts.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netfx48-authentic-direct-once-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: netfx48-authentic-direct-once-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  signed-original-upgrade:
+    name: Test actual signed Microsoft .NET 4.8 and gated 4.8.1 on Apple Silicon Wine
+    uses: ./.github/workflows/netfx40-legacy-ci.yml
+    with:
+      host_provenance_only: false
+      try_48_payload_host: false
+      try_48_intermediate: false
+      try_48_direct: true
