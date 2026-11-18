@@ -61,7 +61,7 @@ class Native40To48IntermediateTests(unittest.TestCase):
             self.assertNotIn("WINEDLLOVERRIDES", env)
             return (winetricks, progress,
                     ["DOTNET48_RECIPE"] if progress != "NOT_RUN" else [],
-                    "DOTNET48_RECIPE" if progress != "NOT_RUN" else "NOT_RUN")
+                    "DOTNET48_RECIPE" if progress != "NOT_RUN" else "NOT_RUN", [])
         with (mock.patch.object(p, "validate_prefix"),
               mock.patch.object(p, "validate_native40", return_value=True),
               mock.patch.object(p, "snapshot", side_effect=[before, after]),
@@ -81,6 +81,7 @@ class Native40To48IntermediateTests(unittest.TestCase):
                          ["DOTNET48_RECIPE"] if progress != "NOT_RUN" else [])
         self.assertEqual(outcome["verb_last_stage"],
                          "DOTNET48_RECIPE" if progress != "NOT_RUN" else "NOT_RUN")
+        self.assertEqual(outcome["timeout_processes"], [])
         self.assertEqual(outcome["solidworks_compatibility"], "NOT_DEMONSTRATED")
         return outcome
 
@@ -156,6 +157,8 @@ class Native40To48IntermediateTests(unittest.TestCase):
                 "WINVER_COMMAND_FAILED", "WOW64_WARNING"])
         self.assertFalse(p.validate(dict(p.blank(), verb_stages=["PRIVATE"])))
         self.assertFalse(p.validate(dict(p.blank(), verb_last_stage="PRIVATE_LOG")))
+        self.assertFalse(p.validate(dict(p.blank(), timeout_processes=["PRIVATE"])))
+        self.assertFalse(p.validate(dict(p.blank(), timeout_processes=[{"pid": 45}])))
         self.assertEqual(p.classify_last_stage(b""), "NO_OUTPUT")
         self.assertEqual(p.classify_last_stage(b"no known event"), "UNKNOWN")
         self.assertEqual(p.classify_last_stage(
@@ -183,12 +186,40 @@ class Native40To48IntermediateTests(unittest.TestCase):
     def test_winetricks_timeout_terminates_entire_process_group(self):
         with TemporaryDirectory() as td:
             command = ["/bin/sh", "-c", "sleep 30"]
-            status, milestone, stages, last_stage = p._run_winetricks(
-                command, os.environ.copy(), Path(td), timeout=1)
+            with mock.patch.object(p, "snapshot_process_group",
+                                   return_value=["WINETRICKS_SHELL"]) as census:
+                status, milestone, stages, last_stage, processes = p._run_winetricks(
+                    command, os.environ.copy(), Path(td), timeout=1)
+            census.assert_called_once()
             self.assertEqual(status, "TIMED_OUT")
             self.assertEqual(milestone, "NO_OUTPUT")
             self.assertEqual(stages, [])
             self.assertEqual(last_stage, "NO_OUTPUT")
+            self.assertEqual(processes, ["WINETRICKS_SHELL"])
+
+    def test_timeout_census_contains_only_allowlisted_group_names(self):
+        raw = (b" 444 /tmp/private/winedbg.exe\n"
+               b" 444 /private/NDP48-x86-x64-AllOS-ENU.exe\n"
+               b" 444 /tmp/msiexec.exe\n"
+               b" 444 /tmp/wineserver\n"
+               b" 444 /bin/bash\n"
+               b" 555 /tmp/secret-regedit.exe\n"
+               b" 444 /tmp/private-other-command\n")
+        self.assertEqual(p.classify_process_group(raw, 444), sorted([
+            "MSI_EXEC", "NETFX48_BOOTSTRAPPER", "OTHER_PROCESS",
+            "WINE_DEBUGGER", "WINE_SERVER", "WINETRICKS_SHELL"]))
+        self.assertNotIn("private", str(p.classify_process_group(raw, 444)))
+        self.assertEqual(p.classify_process_group(b"secret", 444), [])
+        self.assertEqual(p.classify_process_group(raw, -1), [])
+        self.assertEqual(p.classify_process_group(raw + b"x" * p.PROCESS_LIMIT, 444), [])
+        with mock.patch.object(p.subprocess, "run",
+                               return_value=mock.Mock(returncode=0, stdout=raw)) as run:
+            self.assertEqual(p.snapshot_process_group(444),
+                             p.classify_process_group(raw, 444))
+            self.assertEqual(run.call_args.args[0], ["ps", "-axo", "pgid=,comm="])
+            self.assertEqual(run.call_args.kwargs["timeout"], 5)
+        with mock.patch.object(p.subprocess, "run", side_effect=OSError):
+            self.assertEqual(p.snapshot_process_group(444), [])
 
     def test_group_cleanup_terminates_even_if_parent_exits_early(self):
         proc = mock.Mock()
