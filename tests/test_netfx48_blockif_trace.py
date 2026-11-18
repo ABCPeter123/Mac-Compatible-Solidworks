@@ -101,8 +101,10 @@ class BlockIfTraceTests(unittest.TestCase):
         self.assertTrue(t.validate(t.blank("LIMIT_REACHED")))
 
     def test_no_verdict_and_limits_fail_closed(self):
-        self.assertEqual(t.classify(b"Final Result: setup failed 5100\n"),
-                         t.blank("NO_VERDICTS"))
+        unclassified = t.classify(b"Final Result: setup failed 5100\n")
+        self.assertEqual(unclassified["status"], "NO_VERDICTS")
+        self.assertEqual(unclassified["log_line_band"], "ONE_TO_100")
+        self.assertTrue(t.validate(unclassified))
         self.assertEqual(t.classify(b"x" * (t.MAX_BYTES + 1)),
                          t.blank("TOO_LARGE"))
         self.assertEqual(t.classify(b"\xff\xfe\x00"), t.blank("INVALID_ENCODING"))
