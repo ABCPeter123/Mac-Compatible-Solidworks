@@ -144,9 +144,14 @@ on:
 permissions:
   contents: read
 
+# Keep signed original-Microsoft MSI trials alive across subsequent commits.
+# In workflow_call, github.workflow resolves to the CALLER workflow name.
+# A shared caller group and cancel=true previously cancelled uncompleted
+# Apple Silicon installer experiments when a new commit queued a follow-up.
+# Fast non-MSI checks retain the existing cancel-in-progress behavior.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.try_48_msi && github.sha || 'shared' }}
+  cancel-in-progress: ${{ !inputs.try_48_msi }}
 
 jobs:
   absolute-path-regressions:
