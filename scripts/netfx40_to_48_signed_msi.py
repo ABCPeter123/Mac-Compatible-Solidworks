@@ -17,7 +17,7 @@ import tempfile
 
 from scripts.netfx40_msxml3_restart import validate as valid_native40
 from scripts.netfx40_to_48_direct import verify_original_media
-from scripts.netfx40_to_48_intermediate import _env, _release, _set_winver
+from scripts.netfx40_to_48_intermediate import _env, _release, _set_winver, _terminate_group
 from scripts.netfx481_clr_load import run as load_clr, STATUSES as LOAD_STATES
 from scripts.netfx481_payload_audit import snapshot
 from scripts.netfx481_trial import validate_prefix, probe, wineboot_restart
@@ -107,15 +107,20 @@ def private_run(args: list[str], env: dict[str, str], cwd: Path,
     """No untrusted installer bytes, paths, exit text or original stdout in CI."""
     with tempfile.TemporaryFile() as sink:
         try:
-            child = subprocess.run(
+            child = subprocess.Popen(
                 args, env=env, cwd=cwd, stdin=subprocess.DEVNULL,
-                stdout=sink, stderr=sink, timeout=timeout, check=False,
+                stdout=sink, stderr=sink, start_new_session=True,
             )
-        except subprocess.TimeoutExpired:
-            return "TIMED_OUT"
         except OSError:
             return "START_FAILED"
-    return "SUCCESS" if child.returncode == 0 else "EXIT_NONZERO"
+        try:
+            code = child.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # Original Wine installers can spawn grandchildren. Never leave
+            # a detached still-running original MSI process *group* behind.
+            _terminate_group(child)
+            return "TIMED_OUT"
+    return "SUCCESS" if code == 0 else "EXIT_NONZERO"
 
 
 def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
