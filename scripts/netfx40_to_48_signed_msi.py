@@ -172,9 +172,7 @@ def validate(result: object) -> bool:
                 and (result["scm_preflight"] != blank_scm()
                      or result["scm_postflight"] != blank_scm()))
             or (result["scm_postflight"] != blank_scm()
-                and (result["install"] == "NOT_RUN"
-                     or "TIMED_OUT_CLEANUP_DENIED" in
-                        (result["extract"], result["install"], result["patch"])))
+                and result["install"] in {"NOT_RUN", "TIMED_OUT_CLEANUP_DENIED"})
             or (result["install"] == "NOT_RUN"
                 and result["install_log"] != blank_msi_log())
             or (result["install"] != "NOT_RUN"
