@@ -41,6 +41,8 @@ from scripts.netfx48_scm_service_probe import (
 from scripts.netfx481_payload_audit import snapshot
 from scripts.netfx481_trial import validate_prefix, probe, wineboot_restart
 
+MSI_TIMEOUTS = {420, 1200}
+
 STEPS = {
     "NOT_RUN", "SUCCESS", "EXIT_NONZERO", "TIMED_OUT",
     "TIMED_OUT_CLEANUP_DENIED", "START_FAILED",
@@ -149,6 +151,7 @@ OLE_HEADER = bytes.fromhex("D0 CF 11 E0 A1 B1 1A E1")
 def blank() -> dict:
     return {
         "status": "NOT_ELIGIBLE", "native40_persistent": False,
+        "msi_timeout_seconds": 420,
         "win7": "NOT_RUN", "extract": "NOT_RUN", "media": "NOT_RUN",
         "install": "NOT_RUN", "patch": "NOT_RUN",
         "install_log": blank_msi_log(), "ngen_log": blank_ngen(),
@@ -166,7 +169,9 @@ def blank() -> dict:
 def validate(result: object) -> bool:
     if type(result) is not dict or set(result) != set(blank()):
         return False
-    if (result["status"] not in {"NOT_ELIGIBLE", "MEASURED"}
+    if (result["msi_timeout_seconds"] not in MSI_TIMEOUTS
+            or type(result["msi_timeout_seconds"]) is not int
+            or result["status"] not in {"NOT_ELIGIBLE", "MEASURED"}
             or result["win7"] not in WINVER or result["win10"] not in WINVER
             or any(result[k] not in STEPS for k in ("extract", "install", "patch"))
             or result["media"] not in MEDIA or result["restart"] not in RESTART
@@ -272,7 +277,10 @@ def private_run(args: list[str], env: dict[str, str], cwd: Path,
 def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
             loader: Path, managed: Path, native40: dict, *,
             service_fixture: Path | None = None,
-            prepare_assembly_cache: bool = False) -> dict:
+            prepare_assembly_cache: bool = False,
+            msi_timeout_seconds: int = 420) -> dict:
+    if type(msi_timeout_seconds) is not int or msi_timeout_seconds not in MSI_TIMEOUTS:
+        raise ValueError("Unsupported authenticated MSI timeout budget")
     if type(prepare_assembly_cache) is not bool:
         raise ValueError("Cache preparation must be explicitly boolean")
     if os.name == "nt" or any(p.is_symlink() for p in (
@@ -312,7 +320,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
             # target directory cannot be independently authenticated.
             result = {**blank(), "status": "MEASURED",
                       "native40_persistent": True, "win7": win7,
-                      "cache_policy": cache_policy, "cache_state": cache_state}
+                      "cache_policy": cache_policy, "cache_state": cache_state,
+                      "msi_timeout_seconds": msi_timeout_seconds}
             if not validate(result):
                 raise ValueError("Invalid fail-closed NGen cache report")
             return result
@@ -352,7 +361,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                     [str(wine), "msiexec.exe", "/i",
                      "C:\\" + TARGET + "\\" + MSI, "/qn", "/norestart",
                      "/L*v", "C:\\" + TARGET + "\\" + PRIVATE_LOG],
-                    env, prefix, 420,
+                    env, prefix, msi_timeout_seconds,
                 )
                 install_log = classify_private_msi_log(root)
                 if installed != "TIMED_OUT_CLEANUP_DENIED":
@@ -385,7 +394,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                   "scm_preflight": scm_preflight,
                   "scm_postflight": scm_postflight,
                   "scm_startup": scm_startup,
-                  "cache_policy": cache_policy, "cache_state": cache_state}
+                  "cache_policy": cache_policy, "cache_state": cache_state,
+                  "msi_timeout_seconds": msi_timeout_seconds}
         if not validate(result):
             raise ValueError("Invalid fail-closed signed MSI timeout report")
         return result
@@ -396,6 +406,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
     current = probe(wine, prefix, managed, override="native_only")
     result = {
         "status": "MEASURED", "native40_persistent": True,
+        "msi_timeout_seconds": msi_timeout_seconds,
         "win7": win7, "extract": extracted, "media": media,
         "install": installed, "patch": patched, "install_log": install_log,
         "ngen_log": ngen_log,
@@ -431,13 +442,16 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--" + key, required=True, type=Path)
     parser.add_argument("--service-fixture", type=Path)
     parser.add_argument("--prepare-assembly-cache", action="store_true")
+    parser.add_argument("--msi-timeout-seconds", type=int,
+                        choices=sorted(MSI_TIMEOUTS), default=420)
     parser.add_argument("--agree-disposable-prefix", action="store_true", required=True)
     a = parser.parse_args(argv)
     result = inspect(a.wine, a.prefix, a.installer, a.sha256_file,
                      a.loader, a.managed,
                      json.loads(a.native40_report.read_text(encoding="utf-8")),
                      service_fixture=a.service_fixture,
-                     prepare_assembly_cache=a.prepare_assembly_cache)
+                     prepare_assembly_cache=a.prepare_assembly_cache,
+                     msi_timeout_seconds=a.msi_timeout_seconds)
     if a.output.is_symlink():
         raise ValueError("Linked experiment report")
     a.output.parent.mkdir(parents=True, exist_ok=True)
