@@ -401,6 +401,24 @@ class SignedMSIGates(TestCase):
             1)[1].split("      - name: Install native msxml3", 1)[0])
         self.assertIn('EXPECTED_SHA=d0cea7ff492dd3801dfa26a2a7d5ed1331e60f65929318d17301a3ce9cbba56c', workflow)
 
+    def test_public_wiage_wineboot_control_is_no_original_microsoft_media(self):
+        control = (ROOT / ".github/workflows/wiage-wineboot-once-ci.yml").read_text(
+            encoding="utf-8")
+        for token in ("branches: [main]", "runs-on: macos-26",
+                      "cancel-in-progress: false",
+                      "d0cea7ff492dd3801dfa26a2a7d5ed1331e60f65929318d17301a3ce9cbba56c",
+                      "python3 -m scripts.wine_engine_archive",
+                      "COPYFILE_DISABLE=1 tar --exclude='._*'",
+                      "WINEMSYNC: '1'",
+                      "MAGE_BACKGROUND_EXE: 'rundll32.exe:services.exe:explorer.exe:conhost.exe'",
+                      "init --timeout 120", "probe-win32"):
+            self.assertIn(token, control)
+        for forbidden in ("netfx40-legacy-ci.yml", "dotNetFx40", "dotnet48",
+                          "try_48_msi: true", "SOLIDWORKS installer",
+                          "actions/upload-artifact", "workflow_dispatch"):
+            self.assertNotIn(forbidden, control)
+        self.assertIn("Original Microsoft software", control)
+
     def test_reusable_only_allows_msi_when_signed_media_authenticated(self):
         workflow = LEGACY.read_text(encoding="utf-8")
         self.assertEqual(workflow.count("      try_48_msi:"), 2)
