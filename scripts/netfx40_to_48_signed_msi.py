@@ -190,8 +190,8 @@ def validate(result: object) -> bool:
             or not valid_msi_log(result["install_log"])
             or not valid_ngen(result["ngen_log"])
             or not valid_progress(result["ngen_progress"])
-            or result["ngen_queue_policy"] not in {"OFF", "PAUSE"}
             or type(result["ngen_queue_policy"]) is not str
+            or result["ngen_queue_policy"] not in {"OFF", "PAUSE"}
             or not valid_queue(result["ngen_queue"])
             or (result["ngen_queue_policy"] == "OFF"
                 and result["ngen_queue"] != blank_queue())
