@@ -24,6 +24,51 @@ def sample(code="00000BC2", child="NOT_OBSERVED", status="EXIT",
 
 
 class FullExitTests(TestCase):
+    def test_winetricks_exact_flags_only_allowed_for_signed_original_48(self):
+        from scripts import netfx481_win32_exit as monitor
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            fixture = root / "netfx48_win32_launch.exe"
+            installer = root / "NDP48-x86-x64-AllOS-ENU.exe"
+            fixture.write_bytes(b"source-authored Win32 launcher")
+            installer.write_bytes(b"synthetic signed original")
+            observed = []
+
+            def execute(args, **kwargs):
+                observed.append(args)
+                kwargs["stdout"].write(sample("000013EC", child="OBSERVED",
+                                               lifecycle="ALL_EXITED",
+                                               child_exit="NONZERO"))
+                return mock.Mock(returncode=0)
+
+            with mock.patch("scripts.netfx481_trial.validate_prefix"), \
+                 mock.patch("swcompat.wine_paths.windows_media_path",
+                            return_value=r"C:\\setup\\NDP48-x86-x64-AllOS-ENU.exe"), \
+                 mock.patch.object(monitor.subprocess, "run", side_effect=execute):
+                result = monitor.launch(root / "wine", root, installer, fixture,
+                                        setup_family="NETFX48",
+                                        setup_flags="winetricks")
+                self.assertEqual(result["category"], "PREREQUISITE_BLOCK_5100")
+                self.assertEqual(observed[0][-1], "--winetricks-args")
+                self.assertEqual(len(observed[0]), 4)
+                self.assertEqual(Path(observed[0][1]), fixture.resolve())
+                monitor.launch(root / "wine", root, installer, fixture,
+                               setup_family="NETFX48", setup_flags="logged")
+                self.assertEqual(len(observed[1]), 3)
+                with self.assertRaises(ValueError):
+                    monitor.launch(root / "wine", root, installer, fixture,
+                                   setup_family="NETFX481", setup_flags="winetricks")
+                with self.assertRaises(ValueError):
+                    monitor.launch(root / "wine", root, installer, fixture,
+                                   setup_family="NETFX48", setup_flags="private")
+
+    def test_source_wineticks_flags_are_exactly_allowlisted(self):
+        source = (Path(__file__).resolve().parents[1] / "probes" /
+                  "netfx481_win32_launch.c").read_text(encoding="utf-8")
+        self.assertIn("--winetricks-args", source)
+        self.assertIn('/sfxlang:1027 /q /norestart', source)
+        self.assertIn('SWCOMPAT_NETFX48', source)
+
     def test_exact_3010_survives_wine_unix_truncation(self):
         report = win32.parse(sample(), 0)
         self.assertEqual(report, {
