@@ -10,8 +10,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import re
+import select
 import subprocess
-import tempfile
+import time
 
 from scripts.netfx40_to_48_intermediate import _terminate_group
 from scripts.netfx481_trial import parse_probe, validate_prefix
@@ -97,29 +98,48 @@ def _capture(wine: Path, prefix: Path, fixture: Path, timeout: int,
                 "WINEDEBUG": "+seh"})
     if managed:
         env["WINEDLLOVERRIDES"] = "mscoree=n;clr=n"
-    with tempfile.TemporaryFile() as output:
+    try:
+        child = subprocess.Popen(
+            [str(wine), str(fixture)], env=env, cwd=prefix,
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, start_new_session=True)
+    except OSError:
+        return "START_FAILED", "NO_EXCEPTION", b""
+    # Continuously drain the pipe so a repeating Wine exception cannot grow
+    # a private disk log or accumulate unbounded subprocess output in memory.
+    raw = bytearray()
+    truncated = False
+    deadline = time.monotonic() + timeout
+    status = "TIMED_OUT"
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired([str(wine), str(fixture)], timeout)
+            readable, _, _ = select.select(
+                [child.stdout], [], [], min(remaining, 0.25))
+            if not readable:
+                continue
+            block = os.read(child.stdout.fileno(), 16384)
+            if not block:
+                rc = child.wait(timeout=remaining)
+                status = "EXIT_ZERO" if rc == 0 else "EXIT_NONZERO"
+                break
+            remaining_capacity = max(0, MAX_CAPTURE + 1 - len(raw))
+            raw.extend(block[:remaining_capacity])
+            if len(block) > remaining_capacity or len(raw) > MAX_CAPTURE:
+                truncated = True
+    except subprocess.TimeoutExpired:
         try:
-            child = subprocess.Popen(
-                [str(wine), str(fixture)], env=env, cwd=prefix,
-                stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
-                start_new_session=True)
-        except OSError:
-            return "START_FAILED", "NO_EXCEPTION", b""
-        try:
-            code = child.wait(timeout=timeout)
-            status = "EXIT_ZERO" if code == 0 else "EXIT_NONZERO"
-        except subprocess.TimeoutExpired:
-            try:
-                _terminate_group(child)
-                status = "TIMED_OUT"
-            except (OSError, subprocess.TimeoutExpired):
-                # Escape from child group: no further Wine commands.
-                status = "TIMED_OUT_CLEANUP_DENIED"
-        output.seek(0)
-        raw = output.read(MAX_CAPTURE + 1)
-    truncated = len(raw) > MAX_CAPTURE
-    return status, classify_seh(raw[:MAX_CAPTURE], truncated), raw[:MAX_CAPTURE]
-
+            _terminate_group(child)
+            status = "TIMED_OUT"
+        except (OSError, subprocess.TimeoutExpired):
+            # Never launch further Wine processes in a dirty prefix.
+            status = "TIMED_OUT_CLEANUP_DENIED"
+    finally:
+        if child.stdout is not None:
+            child.stdout.close()
+    return status, classify_seh(bytes(raw[:MAX_CAPTURE]), truncated), bytes(raw[:MAX_CAPTURE])
 
 def inspect(wine: Path, prefix: Path, native: Path, managed: Path) -> dict:
     validate_prefix(prefix)
