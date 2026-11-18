@@ -75,7 +75,17 @@ def log_path(directory: Path, label: str) -> Path:
     return directory / f"{stamp}-{label}-{os.getpid()}.log"
 
 def capture(command: list[str], prefix: Path, logs: Path, label: str, timeout: int = 180,
-            debug: bool = False, kill_group_on_timeout: bool = False) -> tuple[int, Path]:
+            debug: bool = False, kill_group_on_timeout: bool = False,
+            skip_bootstrap_mono_gecko: bool = False) -> tuple[int, Path]:
+    if skip_bootstrap_mono_gecko and (label != "init" or not kill_group_on_timeout):
+        raise ValueError("Mono/Gecko prompts may only be disabled during isolated Wineboot")
+    env = wine_environment(prefix, debug)
+    if skip_bootstrap_mono_gecko:
+        # No registry or permanent DLL overrides. Restore native Microsoft
+        # mscoree/clr resolution for every later independent runtime stage.
+        env["WINEDLLOVERRIDES"] = "mscoree,mshtml=d"
+        env["WINE_SKIP_MONO_INSTALLATION"] = "1"
+        env["WINE_SKIP_GECKO_INSTALLATION"] = "1"
     path = log_path(logs, label)
     with path.open("w", encoding="utf-8") as output:
         output.write(f"# SWCompat {__version__} {label}; process arguments omitted\n")
@@ -85,7 +95,7 @@ def capture(command: list[str], prefix: Path, logs: Path, label: str, timeout: i
                 # For disposable Wineboot: kill its entire process group on
                 # deadline. subprocess.run(timeout=...) kills only its parent,
                 # which can leave original Wine helper processes running.
-                child = subprocess.Popen(command, env=wine_environment(prefix, debug),
+                child = subprocess.Popen(command, env=env,
                                          stdout=output, stderr=subprocess.STDOUT,
                                          stdin=subprocess.DEVNULL, start_new_session=True)
                 try:
@@ -116,7 +126,7 @@ def capture(command: list[str], prefix: Path, logs: Path, label: str, timeout: i
                     if denied:
                         output.write("SWCOMPAT_TIMED_OUT_CLEANUP_DENIED=1\n")
                     return (125 if denied else 124), path
-            run = subprocess.run(command, env=wine_environment(prefix, debug), stdout=output,
+            run = subprocess.run(command, env=env, stdout=output,
                                  stderr=subprocess.STDOUT, timeout=timeout, check=False)
             return run.returncode, path
         except subprocess.TimeoutExpired:
@@ -144,6 +154,8 @@ def parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="Print host and runtime capabilities")
     doctor.add_argument("--json", action="store_true")
     init = sub.add_parser("init", help="Create an isolated 64-bit Wine prefix")
+    init.add_argument("--skip-bootstrap-mono-gecko", action="store_true",
+                      help="Suppress unattended Wine Mono/Gecko install dialogs for Wineboot only")
     init.add_argument("--timeout", type=int, choices=[120, 240], default=240,
                       help="Bounded Wineboot startup budget in seconds")
     sub.add_parser("probe-win32", help="Run cmd.exe /c ver through Wine")
@@ -249,7 +261,8 @@ def main(argv: list[str] | None = None) -> int:
             boot = Path(fallback)
         prefix.parent.mkdir(parents=True, exist_ok=True)
         status, path = capture([str(boot), "--init"], prefix, logs, "init",
-                               timeout=args.timeout, kill_group_on_timeout=True)
+                               timeout=args.timeout, kill_group_on_timeout=True,
+                               skip_bootstrap_mono_gecko=args.skip_bootstrap_mono_gecko)
         print(f"init: {status}; log: {path}")
         if status:
             summarize(path)

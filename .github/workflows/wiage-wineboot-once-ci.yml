@@ -56,7 +56,8 @@ jobs:
           set -euo pipefail
           PREFIX="$RUNNER_TEMP/wiage-boot-control"
           python3 -m swcompat --prefix "$PREFIX" \
-            --logs-dir "$RUNNER_TEMP/wiage-boot-control-logs" init --timeout 120
+            --logs-dir "$RUNNER_TEMP/wiage-boot-control-logs" init --timeout 120 \
+            --skip-bootstrap-mono-gecko
           echo "Pinned patched Wineboot: EXIT_ZERO"
           python3 -m swcompat --prefix "$PREFIX" \
             --logs-dir "$RUNNER_TEMP/wiage-boot-control-logs" probe-win32
