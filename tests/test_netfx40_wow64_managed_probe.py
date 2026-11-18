@@ -7,18 +7,23 @@ from unittest import TestCase, mock
 from scripts import netfx40_wow64_managed_probe as x86
 
 
-def image(machine=0x14c, cli=True) -> bytes:
+def image(machine=0x14c, cli=True, require32=True) -> bytes:
     data = bytearray(8192)
     data[:2] = b"MZ"
     struct.pack_into("<I", data, 0x3c, 0x80)
     data[0x80:0x84] = b"PE\x00\x00"
     struct.pack_into("<H", data, 0x84, machine)
+    struct.pack_into("<H", data, 0x86, 1)
+    struct.pack_into("<H", data, 0x80 + 20, 0xe0)
     struct.pack_into("<H", data, 0x98, 0x10b)
     struct.pack_into("<I", data, 0x98 + 92, 16 if cli else 0)
+    section = 0x98 + 0xe0
+    struct.pack_into("<IIII", data, section + 8, 0x200, 0x2000, 0x200, 0x400)
     if cli:
         struct.pack_into("<II", data, 0x98 + 96 + 14*8, 0x2000, 0x48)
+        struct.pack_into("<I", data, 0x400, 0x48)
+        struct.pack_into("<I", data, 0x410, 0x2 if require32 else 0)
     return bytes(data)
-
 
 class NativeWow64ManagedTests(TestCase):
     def test_x86_cli_architecture_only(self):
@@ -33,6 +38,8 @@ class NativeWow64ManagedTests(TestCase):
                 with self.subTest(machine=machine, cli=cli):
                     fixture.write_bytes(image(machine, cli))
                     self.assertEqual(x86.is_original_x86_cli_image(fixture), expected)
+            fixture.write_bytes(image(require32=False))
+            self.assertFalse(x86.is_original_x86_cli_image(fixture))
             fixture.write_bytes(b"not a real PE" * 600)
             self.assertFalse(x86.is_original_x86_cli_image(fixture))
             target = Path(td) / "outside.exe"
