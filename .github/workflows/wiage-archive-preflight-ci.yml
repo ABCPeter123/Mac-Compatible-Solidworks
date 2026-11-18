@@ -1,0 +1,40 @@
+name: Verify pinned Wiage Rosetta runtime archive before macOS experiments
+
+# Public open-source Wine binary provenance only. No Microsoft installers,
+# original media, Wine prefixes or SOLIDWORKS files. Keep binary off artifacts.
+on:
+  pull_request:
+    paths:
+      - 'scripts/wine_engine_archive.py'
+      - 'tests/test_wine_engine_archive.py'
+      - '.github/workflows/wiage-archive-preflight-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/wiage-archive-preflight-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-pinned-wiage:
+    name: SHA256-check actual public Wiage archive and validate extraction metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run strict archive metadata regression tests
+        run: python3 -m unittest tests.test_wine_engine_archive -v
+      - name: Authenticate exact open-source release and inspect safe metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wiage-runtime.tar.gz"
+          trap 'rm -f "$ARCHIVE"' EXIT
+          curl --fail --location --retry 3 --max-time 300 --output "$ARCHIVE" \
+            "https://github.com/dttdrv/mage/releases/download/preview-2026-08-02/wiage-runtime.tar.gz"
+          printf '%s  %s\n' \
+            d0cea7ff492dd3801dfa26a2a7d5ed1331e60f65929318d17301a3ce9cbba56c \
+            "$ARCHIVE" | sha256sum -c -
+          python3 -m scripts.wine_engine_archive --archive "$ARCHIVE"
