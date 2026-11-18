@@ -385,7 +385,7 @@ def main(argv: list[str] | None = None) -> int:
         elif field == "blockif_trace":
             for name in ("status", "true_count", "false_count",
                          "incomplete_count", "true_cause_categories",
-                         "true_logic_signals"):
+                         "true_logic_signals", "milestones", "log_line_band"):
                 print("Original .NET 4.8 BlockIf", name, value[name])
         elif field == "secondary_evidence":
             if value is not None:

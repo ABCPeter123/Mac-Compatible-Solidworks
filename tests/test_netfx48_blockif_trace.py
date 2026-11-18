@@ -65,9 +65,46 @@ class BlockIfTraceTests(unittest.TestCase):
         self.assertEqual(result["true_logic_signals"], ["REGISTRY_CONDITION"])
         self.assertEqual(result["true_cause_categories"], ["UNKNOWN_PREREQUISITE"])
 
+    def test_original_5100_without_blockif_verdicts_reports_phase_only(self):
+        raw = (
+            b"OS Version = 10.0.19045, SP = 0.0\n"
+            b"Global Block Checks: Checking for global blockers\n"
+            b"Global Block Checks: No blocking conditions found\n"
+            b"Final Result: Installation failed with error code: "
+            b"(0x000013EC), A StopBlock was hit\n"
+            b"Private path=C:\\Users\\private\\unknown.txt\n"
+        )
+        report = t.classify(raw)
+        self.assertEqual(report["status"], "NO_VERDICTS")
+        self.assertEqual(report["log_line_band"], "ONE_TO_100")
+        self.assertEqual(report["true_count"], 0)
+        self.assertEqual(report["false_count"], 0)
+        self.assertEqual(report["milestones"], [
+            "GLOBAL_BLOCK_CHECKS", "NO_BLOCKING_CONDITIONS",
+            "OS_VERSION_REPORTED", "STOPBLOCK_TERMINAL"])
+        self.assertNotIn("private", str(report))
+        self.assertTrue(t.validate(report))
+
+    def test_report_distinguishes_unrecognized_format_from_no_blockif_tokens(self):
+        raw = (
+            b"OS Version = 10.0.19045\n"
+            b"BlockIf condition evaluated but structured result unavailable\n"
+            b"Final Result 5100 StopBlock\n"
+        )
+        report = t.classify(raw)
+        self.assertEqual(report["status"], "NO_VERDICTS")
+        self.assertIn("BLOCKIF_TEXT", report["milestones"])
+        self.assertNotIn("BLOCKIF_VERDICT", report["milestones"])
+        self.assertTrue(t.validate(report))
+        self.assertFalse(t.validate({**report, "milestones": ["PRIVATE"]}))
+        self.assertFalse(t.validate({**report, "log_line_band": "C:/Users/private"}))
+        self.assertTrue(t.validate(t.blank("LIMIT_REACHED")))
+
     def test_no_verdict_and_limits_fail_closed(self):
-        self.assertEqual(t.classify(b"Final Result: setup failed 5100\n"),
-                         t.blank("NO_VERDICTS"))
+        unclassified = t.classify(b"Final Result: setup failed 5100\n")
+        self.assertEqual(unclassified["status"], "NO_VERDICTS")
+        self.assertEqual(unclassified["log_line_band"], "ONE_TO_100")
+        self.assertTrue(t.validate(unclassified))
         self.assertEqual(t.classify(b"x" * (t.MAX_BYTES + 1)),
                          t.blank("TOO_LARGE"))
         self.assertEqual(t.classify(b"\xff\xfe\x00"), t.blank("INVALID_ENCODING"))

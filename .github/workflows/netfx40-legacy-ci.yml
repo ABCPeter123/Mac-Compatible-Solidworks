@@ -1124,6 +1124,8 @@ jobs:
                       out.write(f"original_direct_48_blockif_{field}: **{trace[field]}**\n\n")
                   for field in ("true_cause_categories", "true_logic_signals"):
                       out.write(f"original_direct_48_blockif_{field}: **{','.join(trace[field])}**\n\n")
+                  out.write(f"original_direct_48_log_line_band: **{trace['log_line_band']}**\n\n")
+                  out.write(f"original_direct_48_log_milestones: **{','.join(trace['milestones'])}**\n\n")
                   prereq = measured["primary_prerequisite"]
                   for key in ("status", "5100_in_log"):
                       out.write(f"original_direct_48_prerequisite_{key}: **{prereq[key]}**\n\n")
