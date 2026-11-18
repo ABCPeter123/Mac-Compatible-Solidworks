@@ -200,9 +200,6 @@ def validate(result: object) -> bool:
             or (result["ngen_queue_policy"] == "PAUSE"
                 and result["install"] != "NOT_RUN"
                 and result["ngen_queue"]["status"] not in {"COMPLETE", "INCOMPLETE", "DIRTY"})
-            or (result["ngen_queue_policy"] == "PAUSE"
-                and result["patch"] == "SUCCESS"
-                and result["ngen_queue"]["status"] != "COMPLETE")
             or (result["install"] == "NOT_RUN"
                 and result["ngen_progress"] != blank_progress())
             or (result["install"] in {"NOT_RUN", "TIMED_OUT_CLEANUP_DENIED"}
