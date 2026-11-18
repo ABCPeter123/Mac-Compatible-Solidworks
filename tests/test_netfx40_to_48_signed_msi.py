@@ -91,7 +91,9 @@ class OriginalSignedMSITests(TestCase):
             self.assertEqual(calls[1][0][1:3], ["msiexec.exe", "/i"])
             self.assertEqual(calls[2][0][1:3], ["msiexec.exe", "/p"])
             self.assertIn("EXTUI=1", calls[2][0])
+            self.assertIn("/L*v", calls[1][0])
             self.assertEqual(calls[1][1], 420)
+            self.assertEqual(result["install_log"]["status"], "NO_LOG")
             self.assertEqual(calls[2][1], 420)
             self.assertFalse(p.validate(dict(result, native48_candidate=False)))
             self.assertFalse(p.validate(dict(result, private_vendor_log="forbidden")))
@@ -102,6 +104,7 @@ class OriginalSignedMSITests(TestCase):
             ({"extract": "TIMED_OUT"}, "NOT_RUN", "NOT_RUN"),
             ({"valid_media": False}, "NOT_RUN", "NOT_RUN"),
             ({"install": "EXIT_NONZERO"}, "EXIT_NONZERO", "NOT_RUN"),
+            ({"install": "TIMED_OUT_CLEANUP_DENIED"}, "TIMED_OUT_CLEANUP_DENIED", "NOT_RUN"),
             ({"patch": "TIMED_OUT"}, "SUCCESS", "TIMED_OUT"),
             ({"changed": False}, "SUCCESS", "SUCCESS"),
             ({"release": "NOT_FOUND"}, "SUCCESS", "SUCCESS"),
@@ -126,6 +129,77 @@ class OriginalSignedMSITests(TestCase):
             self.assertEqual(result, p.blank())
             run.assert_not_called()
 
+    def test_private_original_msi_log_never_escapes_root(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            self.assertEqual(p.classify_private_msi_log(root)["status"], "NO_LOG")
+            log = root / p.PRIVATE_LOG
+            log.write_bytes(
+                b"Action ended 11:01:02: InstallServices. Return value 3.\\n"
+                b"Error 1722\\n"
+                b"some vendor name and private installation path\\n")
+            result = p.classify_private_msi_log(root)
+            self.assertEqual(result, {"status": "CLASSIFIED", "failure": True,
+                                      "action": "SERVICE", "errors": ["EXTERNAL_ACTION_FAILURE"]})
+            self.assertTrue(p.valid_msi_log(result))
+            self.assertFalse(log.exists())
+            self.assertNotIn("private installation path", str(result))
+            self.assertNotIn("some vendor name", str(result))
+
+            log.write_bytes(b"z" * (p.MAX_FILE_BYTES + 1))
+            self.assertEqual(p.classify_private_msi_log(root)["status"], "TOO_LARGE")
+            self.assertFalse(log.exists())
+            fake_target = root / "some-other-file"
+            fake_target.write_bytes(b"never read")
+            log.symlink_to(fake_target)
+            self.assertEqual(p.classify_private_msi_log(root)["status"], "UNSAFE")
+            self.assertEqual(fake_target.read_bytes(), b"never read")
+            self.assertFalse(p.valid_msi_log({**p.blank_msi_log(),
+                                             "status": "CLASSIFIED",
+                                             "action": "PRIVATE_SYSTEM_PATH"}))
+            self.assertFalse(p.valid_msi_log({**p.blank_msi_log(),
+                                             "status": "CLASSIFIED",
+                                             "errors": ["PRIVATE_ERROR"]}))
+
+    def test_cleanup_denied_never_runs_more_wine_commands(self):
+        with TemporaryDirectory() as td:
+            paths = self.fixture(Path(td))
+            before = {"CLR64": ("PE_AMD64", "original40")}
+            events = []
+            def installer(cmd, env, cwd, timeout):
+                events.append(cmd[1])
+                if cmd[1] != "msiexec.exe":
+                    media = paths[1] / "drive_c" / p.TARGET
+                    media.mkdir()
+                    for name in (p.MSI, p.MSP):
+                        (media / name).write_bytes(p.OLE_HEADER + b"x" * 8192)
+                    return "SUCCESS"
+                return "TIMED_OUT_CLEANUP_DENIED"
+            with (mock.patch.object(p, "validate_prefix"),
+                  mock.patch.object(p, "verify_original_media"),
+                  mock.patch.object(p, "valid_native40", return_value=True),
+                  mock.patch.object(p, "snapshot", return_value=before) as snapshots,
+                  mock.patch.object(p, "load_clr", return_value="LOADED") as loader,
+                  mock.patch.object(p, "probe", return_value={
+                      "clr_family": "MICROSOFT_CLR_CANDIDATE", "managed": "PASS"}) as managed,
+                  mock.patch.object(p, "_env", return_value={}),
+                  mock.patch.object(p, "_set_winver", return_value="APPLIED") as winver,
+                  mock.patch.object(p, "_release") as release,
+                  mock.patch.object(p, "wineboot_restart") as restart,
+                  mock.patch.object(p, "private_run", side_effect=installer)):
+                result = p.inspect(*paths, {"persistent_native_managed": True})
+            self.assertTrue(p.validate(result))
+            self.assertEqual(result["install"], "TIMED_OUT_CLEANUP_DENIED")
+            self.assertEqual(result["win10"], "NOT_RUN")
+            self.assertFalse(result["native48_candidate"])
+            self.assertEqual(events.count("msiexec.exe"), 1)
+            self.assertEqual(snapshots.call_count, 1)
+            self.assertEqual(loader.call_count, 1)
+            self.assertEqual(managed.call_count, 1)
+            self.assertEqual(winver.call_count, 1)
+            release.assert_not_called()
+            restart.assert_not_called()
+
     def test_private_run_discards_all_original_output(self):
         with TemporaryDirectory() as td:
             fake = mock.Mock()
@@ -144,3 +218,12 @@ class OriginalSignedMSITests(TestCase):
                 cleanup.assert_called_once_with(fake)
             with mock.patch.object(p.subprocess, "Popen", side_effect=OSError):
                 self.assertEqual(p.private_run(["wine"], {}, Path(td), 5), "START_FAILED")
+            fake.wait.side_effect = [
+                p.subprocess.TimeoutExpired("wine", 2), 0,
+            ]
+            with (mock.patch.object(p.subprocess, "Popen", return_value=fake),
+                  mock.patch.object(p, "_terminate_group",
+                                    side_effect=PermissionError(1, "Operation not permitted"))):
+                self.assertEqual(p.private_run(["wine"], {}, Path(td), 5),
+                                 "TIMED_OUT_CLEANUP_DENIED")
+                fake.kill.assert_called_once()
