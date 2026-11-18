@@ -995,6 +995,39 @@ jobs:
                   out.write("SWCOMPAT_NATIVE48_READY=yes\n")
           print("Original signed Microsoft native 4.8 verified:", r["native48_candidate"])
           PY
+      - name: Extract authenticated original .NET 4.8 x64 MSI and MSP after genuine CLR4.0
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && inputs.try_48_msi && !inputs.try_48_intermediate && !inputs.try_48_direct
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx40_to_48_signed_msi \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --installer build/NDP48-x86-x64-AllOS-ENU.exe \
+            --sha256-file build/netfx48.sha256 \
+            --loader build/netfx481_clr_load.exe \
+            --managed build/netfx481_runtime_probe.exe \
+            --native40-report build/netfx40-msxml3-restart.json \
+            --output build/netfx40-to-48-signed-msi.json \
+            --agree-disposable-prefix
+      - name: Gate 4.8.1 on authenticated original MSI with real x64 .NET 4.8 execution
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && inputs.try_48_msi && !inputs.try_48_intermediate && !inputs.try_48_direct
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx40_to_48_signed_msi import validate
+          path = Path("build/netfx40-to-48-signed-msi.json")
+          assert path.is_file(), "Original signed MSI experiment not measured"
+          result = json.loads(path.read_text(encoding="ascii"))
+          assert validate(result)
+          if result["native48_candidate"]:
+              with open(os.environ["GITHUB_ENV"], "a") as out:
+                  out.write("SWCOMPAT_NATIVE48_READY=yes\n")
+          print("Original signed .NET 4.8 MSI and MSP verified:", result["native48_candidate"])
+          PY
       - name: Test pinned Winetricks dotnet48 on existing verified Microsoft 4.0 prefix
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && inputs.try_48_intermediate
         shell: bash
