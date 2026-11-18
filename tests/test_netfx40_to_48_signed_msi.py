@@ -49,7 +49,7 @@ class OriginalSignedMSITests(TestCase):
                  post_scm=None, prepare_cache=False, ngen_bytes=None,
                  msi_timeout_seconds=420):
         calls = []
-        def fake_run(cmd, env, cwd, timeout):
+        def fake_run(cmd, env, cwd, timeout, *, progress=None):
             calls.append((cmd, timeout))
             if cmd[1] != "msiexec.exe":
                 if extract == "SUCCESS" and valid_media:
@@ -63,6 +63,8 @@ class OriginalSignedMSITests(TestCase):
                     ngen_log = paths[1] / "drive_c" / "windows" / "Microsoft.NET" / "Framework64" / "v4.0.30319" / "ngen.log"
                     ngen_log.parent.mkdir(parents=True, exist_ok=True)
                     ngen_log.write_bytes(ngen_bytes)
+                if progress is not None:
+                    progress()
                 return install
             return patch
 
@@ -238,6 +240,23 @@ class OriginalSignedMSITests(TestCase):
                         p.inspect(*paths, {"persistent_native_managed": True},
                                   msi_timeout_seconds=timeout)
 
+    def test_authenticated_msi_samples_only_finite_private_ngen_growth(self):
+        with TemporaryDirectory() as td:
+            result, _ = self.run_case(
+                self.fixture(Path(td)), install="TIMED_OUT",
+                ngen_bytes=b"Original private assembly name and user path",
+                msi_timeout_seconds=1200)
+            self.assertEqual(result["ngen_progress"]["status"], "OBSERVED")
+            self.assertEqual(result["ngen_progress"]["samples"], 2)
+            self.assertEqual(result["ngen_progress"]["x64_growth_windows"], 1)
+            self.assertEqual(result["ngen_progress"]["x64_last"], "UNCHANGED")
+            self.assertEqual(result["ngen_progress"]["x86_growth_windows"], 0)
+            self.assertTrue(p.validate(result))
+            self.assertFalse(result["native48_candidate"])
+            self.assertNotIn("Original private assembly", str(result))
+            self.assertFalse(p.validate(dict(result, ngen_progress={
+                **result["ngen_progress"], "x86_last": "PRIVATE"})))
+
     def test_failed_original_msi_and_patch_never_upgrade(self):
         for params, want_install, want_patch in (
             ({"extract": "EXIT_NONZERO"}, "NOT_RUN", "NOT_RUN"),
@@ -319,7 +338,7 @@ class OriginalSignedMSITests(TestCase):
             paths = self.fixture(Path(td))
             before = {"CLR64": ("PE_AMD64", "original40")}
             events = []
-            def installer(cmd, env, cwd, timeout):
+            def installer(cmd, env, cwd, timeout, *, progress=None):
                 events.append(cmd[1])
                 if cmd[1] != "msiexec.exe":
                     media = paths[1] / "drive_c" / p.TARGET
@@ -346,6 +365,7 @@ class OriginalSignedMSITests(TestCase):
             self.assertEqual(result["win10"], "NOT_RUN")
             self.assertFalse(result["native48_candidate"])
             self.assertEqual(result["ngen_log"], p.blank_ngen())
+            self.assertEqual(result["ngen_progress"], p.blank_progress())
             self.assertEqual(events.count("msiexec.exe"), 1)
             self.assertEqual(snapshots.call_count, 1)
             self.assertEqual(loader.call_count, 1)
