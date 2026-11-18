@@ -66,6 +66,24 @@ class SignedMSIGates(TestCase):
         self.assertIn("--service-fixture build/netfx48_scm_service_probe.exe", legacy)
         self.assertIn("msi['scm_preflight']['services'][service]", legacy)
 
+    def test_ngen_cache_trial_is_only_one_shot_signed_msi_and_opt_in(self):
+        source = (ROOT / ".github/workflows/netfx48-msi-ngen-cache-once-ci.yml").read_text(encoding="utf-8")
+        self.assertIn("branches: [main]", source)
+        self.assertIn("      - '.github/workflows/netfx48-msi-ngen-cache-once-ci.yml'", source)
+        for expected in ("try_48_msi: true", "prepare_48_assembly_cache: true",
+                         "try_48_direct: false", "try_48_intermediate: false",
+                         "host_provenance_only: false", "use_macos26_runner: true",
+                         "wine_baseline: '11.21'"):
+            self.assertIn(expected, source)
+        self.assertNotIn("actions/upload-artifact", source)
+        self.assertNotIn("sc.exe create", source)
+        reusable = LEGACY.read_text(encoding="utf-8")
+        self.assertIn("--prepare-assembly-cache", reusable)
+        self.assertIn("SWCOMPAT_PREPARE_ASSEMBLY_CACHE", reusable)
+        self.assertIn("signed_msi_48_{key}", reusable)
+        self.assertIn('"cache_state"', reusable)
+        self.assertIn('"${cache_flags[@]}"', reusable)
+
     def test_reusable_only_allows_msi_when_signed_media_authenticated(self):
         workflow = LEGACY.read_text(encoding="utf-8")
         self.assertEqual(workflow.count("      try_48_msi:"), 2)
