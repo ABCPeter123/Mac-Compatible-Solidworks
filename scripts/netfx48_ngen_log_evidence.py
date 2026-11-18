@@ -25,10 +25,10 @@ EXPRESSIONS = {
     "FILE_NOT_FOUND": re.compile(r"(?i)0x80070002"),
     "SERVICE_MISSING": re.compile(r"(?i)0x80070424"),
     "ACCESS_DENIED": re.compile(r"(?i)0x80070005"),
-    "NGEN_COMPILE": re.compile(r"(?i)\\bcompiling assembly\\b"),
+    "NGEN_COMPILE": re.compile(r"(?i)\bcompiling assembly\b"),
     "NGEN_FAILURE": re.compile(
-        r"(?i)(?:\\bngen failed\\b|\\berror compiling\\b|"
-        r"\\bfailed to generate native code\\b)"
+        r"(?i)(?:\bngen failed\b|\berror compiling\b|"
+        r"\bfailed to generate native code\b)"
     ),
 }
 
@@ -120,8 +120,8 @@ def inspect(prefix: Path, before: dict) -> dict:
             continue
         # NGen logs may be Unicode. An undecodable log must never be copied
         # into the public report.
-        if raw.startswith(b"\\xff\\xfe"):
-            decoded = raw.decode("utf-16-le", errors="replace")
+        if raw.startswith(b"\xff\xfe") or raw.count(b"\x00") > len(raw) // 8:
+            decoded = raw.decode("utf-16", errors="replace") if raw.startswith(b"\xff\xfe") else raw.decode("utf-16-le", errors="replace")
         else:
             decoded = raw.decode("utf-8", errors="replace")
         report[key] = "CLASSIFIED"
