@@ -153,6 +153,16 @@ class OriginalSignedMSITests(TestCase):
             self.assertFalse(result["native48_candidate"])
             self.assertFalse(p.validate(dict(result, scm_postflight=result["scm_preflight"])))
 
+    def test_patch_cleanup_denial_preserves_prior_msi_observation(self):
+        with TemporaryDirectory() as td:
+            result, _ = self.run_case(
+                self.fixture(Path(td)), scm=True,
+                patch="TIMED_OUT_CLEANUP_DENIED")
+            self.assertEqual(result["install"], "SUCCESS")
+            self.assertEqual(result["scm_postflight"]["status"], "COMPLETE")
+            self.assertFalse(result["native48_candidate"])
+            self.assertTrue(p.validate(result))
+
     def test_failed_original_msi_and_patch_never_upgrade(self):
         for params, want_install, want_patch in (
             ({"extract": "EXIT_NONZERO"}, "NOT_RUN", "NOT_RUN"),
