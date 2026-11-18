@@ -87,8 +87,8 @@ int main(int argc, char **argv) {
         SERVICE_INFO info = manager
             ? service_information(manager, targets[i].wide_name)
             : (SERVICE_INFO){"UNKNOWN", "NOT_APPLICABLE"};
-        printf("SWCOMPAT_SCM_API_%s=%s\\n", targets[i].field, info.presence);
-        printf("SWCOMPAT_SCM_STATE_%s=%s\\n", targets[i].field, info.state);
+        printf("SWCOMPAT_SCM_API_%s=%s\n", targets[i].field, info.presence);
+        printf("SWCOMPAT_SCM_STATE_%s=%s\n", targets[i].field, info.state);
     }
     if (manager)
         CloseServiceHandle(manager);
