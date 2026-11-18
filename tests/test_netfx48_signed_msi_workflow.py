@@ -154,7 +154,8 @@ class SignedMSIGates(TestCase):
         source = LEGACY.read_text(encoding="utf-8")
         self.assertIn("concurrency:", source)
         self.assertIn("inputs.try_48_msi && github.sha || 'shared'", source)
-        self.assertIn("cancel-in-progress: ${{ !inputs.try_48_msi }}", source)
+        self.assertIn("cancel-in-progress: ${{ !inputs.try_48_msi && !inputs.try_wow64_managed }}", source)
+        self.assertIn("inputs.try_wow64_managed && format('wow64-{0}-{1}-{2}-{3}', github.sha, inputs.wine_baseline, inputs.use_macos26_runner, inputs.wow64_host_stack64)", source)
         self.assertNotIn("cancel-in-progress: true", source)
         for filename in ("netfx48-msi-ngen-evidence-once-ci.yml",
                          "netfx48-msi-ngen-long-budget-once-ci.yml"):
@@ -206,6 +207,29 @@ class SignedMSIGates(TestCase):
         self.assertIn('override="native_only"', module)
         self.assertIn("flags & 0x2", module)
         self.assertNotIn("WINEDLLOVERRIDES=mscoree=b", module)
+
+    def test_genuine_x86_runtime_controls_cannot_cancel_other_active_experiments(self):
+        source = LEGACY.read_text(encoding="utf-8")
+        self.assertIn(
+            "inputs.try_wow64_managed && format('wow64-{0}-{1}-{2}-{3}', github.sha, inputs.wine_baseline, inputs.use_macos26_runner, inputs.wow64_host_stack64)",
+            source)
+        self.assertIn(
+            "cancel-in-progress: ${{ !inputs.try_48_msi && !inputs.try_wow64_managed }}",
+            source)
+        for filename in (
+            "netfx40-wow64-x86-once-ci.yml",
+            "netfx40-wow64-fault-triage-once-ci.yml",
+            "netfx40-wow64-hoststack64-once-ci.yml",
+            "netfx40-wow64-hoststack64-macos15-once-ci.yml",
+            "netfx40-wiage-rosetta-clr4-once-ci.yml",
+        ):
+            caller = (ROOT / ".github/workflows" / filename).read_text(
+                encoding="utf-8")
+            self.assertIn("try_wow64_managed: true", caller)
+            self.assertIn("cancel-in-progress: false", caller)
+            self.assertIn("host_provenance_only: true", caller)
+            self.assertIn("try_48_msi: false", caller)
+        self.assertNotIn("cancel-in-progress: true", source)
 
     def test_native_microsoft_ngen_queue_control_one_shot_is_narrow_and_authenticated(self):
         path = ROOT / ".github/workflows/netfx48-ngen-queue-pause-once-ci.yml"

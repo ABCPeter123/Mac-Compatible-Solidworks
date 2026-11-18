@@ -3,6 +3,7 @@ name: One-shot macOS 15 original Microsoft CLR4 x86 WoW64 with 64 MiB host stack
 # Exact x86 genuine Microsoft CLR4 and bounded native Wine tests as separate
 # macOS 15 control for the pinned Wine 11.21 macOS 26 experiment.
 # Never trigger original 4.8 MSI, MSP, 4.8.1 or SOLIDWORKS installation.
+# Re-trigger with isolated runtime concurrency after previous host job was cancelled.
 on:
   push:
     branches: [main]
