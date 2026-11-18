@@ -54,8 +54,14 @@ def valid(result: object) -> bool:
     if result["managed_run"] == "NOT_RUN":
         return (result["managed_seh"] == "NOT_RUN"
                 and result["managed_family"] == "NOT_RUN"
-                and result["managed_execution"] == "NOT_RUN")
-    if result["native_run"] == "NOT_RUN" or result["native_seh"] == "NOT_RUN":
+                and result["managed_execution"] == "NOT_RUN"
+                and (result == blank()
+                     or (result["native_run"] == "TIMED_OUT_CLEANUP_DENIED"
+                         and result["native_seh"] != "NOT_RUN"
+                         and not result["native_control"])))
+    if (result["native_run"] == "NOT_RUN"
+            or result["native_seh"] == "NOT_RUN"
+            or result["managed_seh"] == "NOT_RUN"):
         return False
     if result["managed_family"] == "NOT_RUN" or result["managed_execution"] == "NOT_RUN":
         return False
