@@ -11,7 +11,7 @@ from scripts import netfx48_scm_service_probe as scm
 
 def packet(*, status="COMPLETE", trusted="ABSENT", msi="PRESENT",
            update="PRESENT", bits="PRESENT",
-           opt64="ABSENT", opt32="ABSENT") -> bytes:
+           opt64="ABSENT", opt32="ABSENT", msdtc="ABSENT") -> bytes:
     return ("\n".join([
         "SWCOMPAT_SCM_API_SCHEMA=1",
         "SWCOMPAT_SCM_API_STATUS=" + status,
@@ -21,6 +21,7 @@ def packet(*, status="COMPLETE", trusted="ABSENT", msi="PRESENT",
         "SWCOMPAT_SCM_API_BITS=" + bits,
         "SWCOMPAT_SCM_API_CLR_OPTIMIZATION_64=" + opt64,
         "SWCOMPAT_SCM_API_CLR_OPTIMIZATION_32=" + opt32,
+        "SWCOMPAT_SCM_API_MSDTC=" + msdtc,
     ]) + "\n").encode("ascii")
 
 
@@ -33,6 +34,7 @@ class NativeSCMProbeTests(unittest.TestCase):
         self.assertEqual(r["services"]["MSISERVER"], "PRESENT")
         self.assertEqual(r["services"]["CLR_OPTIMIZATION_64"], "ABSENT")
         self.assertEqual(r["services"]["CLR_OPTIMIZATION_32"], "ABSENT")
+        self.assertEqual(r["services"]["MSDTC"], "ABSENT")
         self.assertNotIn("service path", str(r))
         denied = scm.parse(packet(trusted="ACCESS_DENIED"), 0)
         self.assertEqual(denied["services"]["TRUSTEDINSTALLER"], "ACCESS_DENIED")
@@ -49,6 +51,8 @@ class NativeSCMProbeTests(unittest.TestCase):
             (packet().replace(b"SWCOMPAT_SCM_API_BITS=PRESENT\n", b""),
              "INCOMPLETE_FIELDS"),
             (packet().replace(b"SWCOMPAT_SCM_API_CLR_OPTIMIZATION_64=ABSENT\n", b""),
+             "INCOMPLETE_FIELDS"),
+            (packet().replace(b"SWCOMPAT_SCM_API_MSDTC=ABSENT\n", b""),
              "INCOMPLETE_FIELDS"),
             (packet() + b"\x00", "MALFORMED"),
             (b"\xff" + packet(), "NONASCII_OUTPUT"),
@@ -85,7 +89,7 @@ class NativeSCMProbeTests(unittest.TestCase):
         unavailable = scm.parse(packet(
             status="UNAVAILABLE", trusted="UNKNOWN", msi="UNKNOWN",
             update="UNKNOWN", bits="UNKNOWN",
-            opt64="UNKNOWN", opt32="UNKNOWN"), 0)
+            opt64="UNKNOWN", opt32="UNKNOWN", msdtc="UNKNOWN"), 0)
         self.assertTrue(scm.valid(unavailable))
         self.assertEqual(unavailable["status"], "UNAVAILABLE")
         self.assertFalse(scm.valid(dict(
