@@ -815,12 +815,21 @@ jobs:
           SWCOMPAT_WINE_BASELINE: ${{ inputs.wine_baseline }}
           SWCOMPAT_HOST_ONLY: ${{ inputs.host_provenance_only }}
           SWCOMPAT_MACOS26: ${{ inputs.use_macos26_runner }}
+          SWCOMPAT_WIAGE_TRY_MSI: ${{ inputs.try_48_msi }}
+          SWCOMPAT_WIAGE_TRY_DIRECT: ${{ inputs.try_48_direct }}
+          SWCOMPAT_WIAGE_TRY_INTERMEDIATE: ${{ inputs.try_48_intermediate }}
+          SWCOMPAT_WIAGE_TRY_PAYLOAD: ${{ inputs.try_48_payload_host }}
         run: |
           set -euo pipefail
           if [[ "$SWCOMPAT_WINE_BASELINE" == "wiage-11.13" ]]; then
             # Wiage's open-source Rosetta WoW64 fixes must only be trialled
             # in the separate macOS26 authenticated CLR4, no-MSI one-shot.
-            if [[ "$SWCOMPAT_HOST_ONLY" != "true" || "$SWCOMPAT_MACOS26" != "true" ]]; then
+            if [[ "$SWCOMPAT_HOST_ONLY" != "true" ||
+                  "$SWCOMPAT_MACOS26" != "true" ||
+                  "$SWCOMPAT_WIAGE_TRY_MSI" != "false" ||
+                  "$SWCOMPAT_WIAGE_TRY_DIRECT" != "false" ||
+                  "$SWCOMPAT_WIAGE_TRY_INTERMEDIATE" != "false" ||
+                  "$SWCOMPAT_WIAGE_TRY_PAYLOAD" != "false" ]]; then
               echo "Pinned Wiage experiment requires macOS26 and host-only native CLR4 trial" >&2
               exit 1
             fi
