@@ -1,0 +1,32 @@
+name: One-shot native Microsoft CLR4 x86 managed WoW64 verification
+
+# Genuine self-authored x86 CLI fixture compiled on Windows against original
+# Microsoft CLR, then executed under Wine with ONLY native CLR DLL loading.
+# This is deliberately isolated from .NET4.8 or 4.8.1 installation to test
+# a necessary 32-bit runtime prerequisite without another long MSI job.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netfx40-wow64-x86-once-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: genuine-clr4-native-wow64-x86-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  authentic-x86-managed:
+    name: Check real original 32-bit CLR4 managed execution on Apple Silicon
+    uses: ./.github/workflows/netfx40-legacy-ci.yml
+    with:
+      wine_baseline: '11.21'
+      use_macos26_runner: true
+      host_provenance_only: true
+      try_wow64_managed: true
+      try_48_payload_host: false
+      try_48_direct: false
+      try_48_msi: false
+      try_48_intermediate: false
