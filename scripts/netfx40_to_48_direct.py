@@ -16,6 +16,10 @@ import tempfile
 from pathlib import Path
 
 from scripts.netfx40_msxml3_restart import validate as validate_native40
+from scripts.netfx48_blockif_trace import (
+    blank as blank_blockif, validate as valid_blockif,
+    classify_file as classify_blockif,
+)
 from scripts.wine_mono_removal import inventory as mono_inventory
 from scripts.netfx48_registry_preflight import (
     blank as blank_registrations, valid as valid_registrations,
@@ -118,6 +122,7 @@ def blank() -> dict:
         "setup": blank_launch(), "setup_evidence": dict(SETUP_EVIDENCE),
         "secondary_evidence": None,
         "primary_prerequisite": empty_prerequisite(),
+        "blockif_trace": blank_blockif(),
         "restart": "NOT_RUN", "clr64_changed": False,
         "release": "UNAVAILABLE", "loader": "NOT_VERIFIED",
         "runtime_family": "NOT_VERIFIED", "native_only_managed": "NOT_VERIFIED",
@@ -153,6 +158,7 @@ def validate(report: object) -> bool:
             or report["framework481_confirmed"] is not False
             or report["solidworks_compatibility"] != "NOT_DEMONSTRATED"
             or not validate_prerequisite(report["primary_prerequisite"])
+            or not valid_blockif(report["blockif_trace"])
             or not valid_services(report["service_prerequisites"])
             or not valid_scm(report["service_api"])
             or not valid_registrations(report["registry_preflight"])
@@ -261,6 +267,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
     evidence = dict(SETUP_EVIDENCE)
     secondary = None
     primary = empty_prerequisite()
+    blockif_trace = blank_blockif()
     restart = "NOT_RUN"
     try:
         if profile_applied == "APPLIED":
@@ -277,6 +284,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
                 # the marked Wine prefix. Never print or retain raw text.
                 evidence = classify_log(log)
                 primary = classify_primary_prerequisite(log, family="NETFX48")
+                blockif_trace = classify_blockif(log)
                 discard_log(log)
                 secondary = scan_secondary_logs(
                     prefix, baseline=secondary_before, family="NETFX48")
@@ -308,7 +316,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
         "setup_profile_applied": profile_applied,
         "win7": win7, "win10": win10, "setup": setup,
         "setup_evidence": evidence, "secondary_evidence": secondary,
-        "primary_prerequisite": primary, "restart": restart,
+        "primary_prerequisite": primary, "blockif_trace": blockif_trace,
+        "restart": restart,
         "clr64_changed": delta["changes"]["CLR64"] == "CHANGED",
         "release": _release(wine, prefix, env),
         "loader": load_clr(wine, prefix, loader),
@@ -364,6 +373,11 @@ def main(argv: list[str] | None = None) -> int:
         elif field == "primary_prerequisite":
             for name in ("status", "os_versions", "blockers", "5100_in_log"):
                 print("Original .NET 4.8 primary_prerequisite", name, value[name])
+        elif field == "blockif_trace":
+            for name in ("status", "true_count", "false_count",
+                         "incomplete_count", "true_cause_categories",
+                         "true_logic_signals"):
+                print("Original .NET 4.8 BlockIf", name, value[name])
         elif field == "secondary_evidence":
             if value is not None:
                 print("Original .NET 4.8 secondary status", value["status"])
