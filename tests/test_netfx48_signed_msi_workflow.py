@@ -364,6 +364,21 @@ class SignedMSIGates(TestCase):
         self.assertIn("940bdd1a177872020be01c5c33917cb8eecc1cc3193ad554914fb6efd90d7889",
                       reusable)
 
+    def test_unclean_wow64_process_group_prints_only_finite_status_then_stops(self):
+        source = LEGACY.read_text(encoding="utf-8")
+        step = source.split("      - name: Diagnose new WoW64 x86 process startup", 1)[1].split(
+            "      - name: Verify native Microsoft CLR4 x86 managed execution", 1)[0]
+        a = step.index("assert valid(outcome)")
+        b = step.index('print("Native original CLR4 WoW64 x86 diagnostic", key, value)')
+        c = step.index("TIMED_OUT_CLEANUP_DENIED", b)
+        d = step.index('raise RuntimeError("Unsafe WoW64 process group cleanup;', c)
+        self.assertLess(a, b)
+        self.assertLess(b, c)
+        self.assertLess(c, d)
+        self.assertNotIn("print(raw)", step)
+        self.assertNotIn("print(m_raw)", step)
+        self.assertNotIn("wine ", step)
+
     def test_reusable_only_allows_msi_when_signed_media_authenticated(self):
         workflow = LEGACY.read_text(encoding="utf-8")
         self.assertEqual(workflow.count("      try_48_msi:"), 2)
