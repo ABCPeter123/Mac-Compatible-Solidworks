@@ -1,0 +1,33 @@
+name: One-shot Wiage Rosetta-patched Wine original Microsoft x86 CLR4
+
+# Independent Wine 11.13 Rosetta WoW64 engine A/B, pinned to the exact
+# SHA256 GitHub release runtime. Native Microsoft CLR4 only, never 4.8 MSI.
+# Requires macOS 26. Do not upload originals or private exception traces.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netfx40-wiage-rosetta-clr4-once-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: original-clr4-wiage-rosetta-1113-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  original-clr4-wiage-wow64:
+    name: Verify native Microsoft x86 CLR4 with Wiage Rosetta-patched Wine
+    uses: ./.github/workflows/netfx40-legacy-ci.yml
+    with:
+      wine_baseline: 'wiage-11.13'
+      use_macos26_runner: true
+      host_provenance_only: true
+      try_wow64_managed: true
+      try_wow64_faults: true
+      wow64_host_stack64: false
+      try_48_msi: false
+      try_48_direct: false
+      try_48_intermediate: false
+      try_48_payload_host: false
