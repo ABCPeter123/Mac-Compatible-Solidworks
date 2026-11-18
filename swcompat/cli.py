@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import platform
 import shutil
+import signal
 import subprocess
 import sys
 
@@ -73,20 +74,56 @@ def log_path(directory: Path, label: str) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     return directory / f"{stamp}-{label}-{os.getpid()}.log"
 
-def capture(command: list[str], prefix: Path, logs: Path, label: str, timeout: int = 180, debug: bool = False) -> tuple[int, Path]:
+def capture(command: list[str], prefix: Path, logs: Path, label: str, timeout: int = 180,
+            debug: bool = False, kill_group_on_timeout: bool = False) -> tuple[int, Path]:
     path = log_path(logs, label)
     with path.open("w", encoding="utf-8") as output:
         output.write(f"# SWCompat {__version__} {label}; process arguments omitted\n")
         output.flush()
         try:
+            if kill_group_on_timeout:
+                # For disposable Wineboot: kill its entire process group on
+                # deadline. subprocess.run(timeout=...) kills only its parent,
+                # which can leave original Wine helper processes running.
+                child = subprocess.Popen(command, env=wine_environment(prefix, debug),
+                                         stdout=output, stderr=subprocess.STDOUT,
+                                         stdin=subprocess.DEVNULL, start_new_session=True)
+                try:
+                    return child.wait(timeout=timeout), path
+                except subprocess.TimeoutExpired:
+                    output.write("\nSWCOMPAT_TIMED_OUT=1\n")
+                    denied = False
+                    try:
+                        os.killpg(child.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                    except PermissionError:
+                        denied = True
+                    try:
+                        child.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    try:
+                        os.killpg(child.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    except PermissionError:
+                        denied = True
+                    try:
+                        child.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        denied = True
+                    if denied:
+                        output.write("SWCOMPAT_TIMED_OUT_CLEANUP_DENIED=1\n")
+                    return (125 if denied else 124), path
             run = subprocess.run(command, env=wine_environment(prefix, debug), stdout=output,
                                  stderr=subprocess.STDOUT, timeout=timeout, check=False)
             return run.returncode, path
         except subprocess.TimeoutExpired:
             output.write("\nSWCOMPAT_TIMED_OUT=1\n")
             return 124, path
-        except OSError as exc:
-            output.write(f"SWCOMPAT_PROCESS_ERROR={exc}\n")
+        except OSError:
+            output.write("SWCOMPAT_PROCESS_START_FAILED=1\n")
             return 127, path
 
 def summarize(path: Path) -> None:
@@ -106,7 +143,9 @@ def parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
     doctor = sub.add_parser("doctor", help="Print host and runtime capabilities")
     doctor.add_argument("--json", action="store_true")
-    sub.add_parser("init", help="Create an isolated 64-bit Wine prefix")
+    init = sub.add_parser("init", help="Create an isolated 64-bit Wine prefix")
+    init.add_argument("--timeout", type=int, choices=[120, 240], default=240,
+                      help="Bounded Wineboot startup budget in seconds")
     sub.add_parser("probe-win32", help="Run cmd.exe /c ver through Wine")
     wgl = sub.add_parser("probe-wgl", help="Run the Windows x64 OpenGL/WGL probe")
     wgl.add_argument("--exe", type=Path, default=ROOT / "build/wgl_probe.exe")
@@ -209,7 +248,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             boot = Path(fallback)
         prefix.parent.mkdir(parents=True, exist_ok=True)
-        status, path = capture([str(boot), "--init"], prefix, logs, "init", timeout=240)
+        status, path = capture([str(boot), "--init"], prefix, logs, "init",
+                               timeout=args.timeout, kill_group_on_timeout=True)
         print(f"init: {status}; log: {path}")
         if status:
             summarize(path)
