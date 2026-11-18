@@ -25,6 +25,39 @@ VERB = {"SUCCESS", "EXIT_NONZERO", "TIMED_OUT", "START_FAILED", "NOT_RUN"}
 PROGRESS = {"NOT_RUN", "NO_OUTPUT", "WINETRICKS_ACTIVE", "DOTNET48_VERB_SEEN",
             "DOTNET48_PACKAGE_MENTIONED", "OUTPUT_TOO_LARGE"}
 MAX_PRIVATE_OUTPUT = 1024 * 1024
+# All events are fixed enum values. Never export Winetricks text, paths, or
+# original Microsoft installer output outside the disposable run.
+WINETRICKS_STAGES = {
+    "DOTNET48_RECIPE", "DOTNET40_RECIPE", "DOTNET48_MEDIA",
+    "DOTNET40_MEDIA", "WINVER_COMMAND", "WINVER_COMMAND_FAILED",
+    "REGEDIT_COMMAND", "REGEDIT_COMMAND_FAILED",
+    "DOTNET48_ALREADY_INSTALLED", "BOOTSTRAPPER_5100",
+    "WINETRICKS_ABORTED", "CHECKSUM_FAILURE", "WOW64_WARNING",
+    "SFXLANG_1027",
+}
+STAGE_RULES = (
+    ("DOTNET48_RECIPE", re.compile(rb"(?i)\\b(?:Executing\\s+load_dotnet48|w_do_call\\s+dotnet48)\\b")),
+    ("DOTNET40_RECIPE", re.compile(rb"(?i)\\b(?:Executing\\s+load_dotnet40|w_do_call\\s+dotnet40)\\b")),
+    ("DOTNET48_MEDIA", re.compile(rb"(?i)\\b(?:NDP48[-_][a-z0-9_-]+\\.exe|dotnetfx48[-_][a-z0-9_-]+)\\b")),
+    ("DOTNET40_MEDIA", re.compile(rb"(?i)\\b(?:dotNetFx40[-_][a-z0-9_-]+\\.exe|dotnetfx40_full)\\b")),
+    ("WINVER_COMMAND", re.compile(rb"(?i)\\bwinecfg(?:\\.exe)?\\s+-v\\s+\\w+\\b")),
+    ("WINVER_COMMAND_FAILED", re.compile(rb"(?i)\\bwinecfg(?:\\.exe)?\\b[^\\r\\n]{0,200}\\breturned\\s+status\\s+[1-9]\\d*\\b")),
+    ("REGEDIT_COMMAND", re.compile(rb"(?i)\\bregedit\\.exe\\b")),
+    ("REGEDIT_COMMAND_FAILED", re.compile(rb"(?i)\\bregedit\\.exe\\b[^\\r\\n]{0,200}\\breturned\\s+status\\s+[1-9]\\d*\\b")),
+    ("DOTNET48_ALREADY_INSTALLED", re.compile(rb"(?i)\\bdotnet48\\s+is\\s+already\\s+installed\\b")),
+    ("BOOTSTRAPPER_5100", re.compile(rb"(?i)\\b(?:returned\\s+status|error\\s+code|exit\\s+code)[^\\r\\n]{0,60}\\b5100\\b")),
+    ("WINETRICKS_ABORTED", re.compile(rb"(?i)\\bAborting\\.?(?:\\r?\\n|$)")),
+    ("CHECKSUM_FAILURE", re.compile(rb"(?i)\\b(?:sha256sum|checksum|hash)\\b[^\\r\\n]{0,120}\\b(?:failed|mismatch|invalid)\\b")),
+    ("WOW64_WARNING", re.compile(rb"(?i)\\bnew\\s+wow64\\s+mode\\b")),
+    ("SFXLANG_1027", re.compile(rb"(?i)/sfxlang:1027\\b")),
+)
+
+
+def classify_stages(raw: bytes) -> list[str]:
+    if not isinstance(raw, bytes) or len(raw) > MAX_PRIVATE_OUTPUT:
+        return []
+    return sorted(tag for tag, pattern in STAGE_RULES if pattern.search(raw))
+
 BOOT = {"COMPLETED", "TIMED_OUT", "START_FAILED", "EXIT_NONZERO", "NOT_RUN"}
 WINVER = {"APPLIED", "FAILED", "NOT_RUN"}
 RELEASE = {"NOT_FOUND", "BELOW_48", "NETFX48_RANGE", "AT_LEAST_481", "UNAVAILABLE"}
@@ -34,6 +67,7 @@ RELEASE_PATTERN = re.compile(rb"(?i)\bRelease\s+REG_DWORD\s+0x([0-9a-f]{1,8})\b"
 def blank() -> dict:
     return {"status": "NOT_ELIGIBLE", "native40_persistent": False,
             "verb": "NOT_RUN", "verb_progress": "NOT_RUN",
+            "verb_stages": [],
             "win7": "NOT_RUN", "win10": "NOT_RUN",
             "restart": "NOT_RUN", "clr64_changed": False,
             "release": "UNAVAILABLE", "loader": "NOT_VERIFIED",
@@ -47,6 +81,10 @@ def validate(result: object) -> bool:
         return False
     if (result["status"] not in STATES
             or result["verb"] not in VERB or result["verb_progress"] not in PROGRESS
+            or type(result["verb_stages"]) is not list
+            or result["verb_stages"] != sorted(set(result["verb_stages"]))
+            or any(type(v) is not str or v not in WINETRICKS_STAGES
+                   for v in result["verb_stages"])
             or result["restart"] not in BOOT
             or result["win7"] not in WINVER or result["win10"] not in WINVER
             or result["release"] not in RELEASE
@@ -156,7 +194,7 @@ def _terminate_group(child: subprocess.Popen) -> None:
 
 
 def _run_winetricks(command: list[str], env: dict[str, str],
-                    cwd: Path, timeout: int) -> tuple[str, str]:
+                    cwd: Path, timeout: int) -> tuple[str, str, list[str]]:
     """Bound the verb and keep its entire diagnostic stream private."""
     with tempfile.TemporaryFile() as output:
         try:
@@ -166,7 +204,7 @@ def _run_winetricks(command: list[str], env: dict[str, str],
                 start_new_session=True,
             )
         except OSError:
-            return "START_FAILED", "NOT_RUN"
+            return "START_FAILED", "NOT_RUN", []
         try:
             rc = child.wait(timeout=timeout)
             status = "SUCCESS" if rc == 0 else "EXIT_NONZERO"
@@ -174,8 +212,10 @@ def _run_winetricks(command: list[str], env: dict[str, str],
             _terminate_group(child)
             status = "TIMED_OUT"
         output.seek(0)
-        progress = classify_progress(output.read(MAX_PRIVATE_OUTPUT + 1))
-    return status, progress
+        private_bytes = output.read(MAX_PRIVATE_OUTPUT + 1)
+        progress = classify_progress(private_bytes)
+        stages = classify_stages(private_bytes)
+    return status, progress, stages
 
 
 def _set_winver(wine: Path, prefix: Path, env: dict[str, str],
@@ -227,9 +267,10 @@ def inspect(wine: Path, prefix: Path, winetricks: Path, loader: Path,
     win7 = _set_winver(wine, prefix, env, "win7")
     verb = "NOT_RUN"
     verb_progress = "NOT_RUN"
+    verb_stages: list[str] = []
     try:
         if win7 == "APPLIED":
-            verb, verb_progress = _run_winetricks(
+            verb, verb_progress, verb_stages = _run_winetricks(
                 ["bash", str(winetricks), "-q", "dotnet48"], env, prefix, timeout)
     finally:
         win10 = _set_winver(wine, prefix, env, "win10")
@@ -238,6 +279,7 @@ def inspect(wine: Path, prefix: Path, winetricks: Path, loader: Path,
     same = before["CLR64"][1] == after["CLR64"][1]
     output = {"status": "MEASURED", "native40_persistent": True,
               "verb": verb, "verb_progress": verb_progress,
+              "verb_stages": verb_stages,
               "win7": win7, "win10": win10,
               "restart": restart,
               "clr64_changed": (not same and after["CLR64"][0] == "PE_AMD64"),
