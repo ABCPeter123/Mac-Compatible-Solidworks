@@ -1,0 +1,32 @@
+name: One-shot complete pinned Winetricks dotnet48 on genuine Microsoft 4.0
+
+# Compare an upstream Winetricks 20260125 dotnet48 verb against the
+# source-authored direct original installer attempt. The Winetricks recipe
+# can apply its intended setup/registry/dll prerequisites in sequence.
+# Only use a disposable, verified native Microsoft .NET 4.0 prefix.
+# The actual installed x64 CLR, native Release value, independent CLR loader,
+# and native-only managed execution are required before 4.8/4.8.1 success.
+# Do not upload proprietary media, original installer logs or Wine transcripts.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netfx48-complete-winetricks-verb-once-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: original-netfx48-complete-winetricks-verb-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  pinned-winetricks-verbatim:
+    name: Evaluate complete upstream dotnet48 recipe on native Microsoft 4.0 host
+    uses: ./.github/workflows/netfx40-legacy-ci.yml
+    with:
+      host_provenance_only: false
+      try_48_payload_host: false
+      try_48_intermediate: true
+      try_48_direct: false
+      use_macos26_runner: true
