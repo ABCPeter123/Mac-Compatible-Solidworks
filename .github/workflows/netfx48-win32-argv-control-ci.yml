@@ -1,0 +1,60 @@
+name: Original .NET Win32 launcher build and argument safety
+
+on:
+  pull_request:
+    paths:
+      - 'probes/netfx481_win32_launch.c'
+      - 'scripts/netfx481_win32_exit.py'
+      - 'scripts/netfx40_to_48_direct.py'
+      - '.github/workflows/netfx48-win32-argv-control-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'probes/netfx481_win32_launch.c'
+      - 'scripts/netfx481_win32_exit.py'
+      - 'scripts/netfx40_to_48_direct.py'
+      - '.github/workflows/netfx48-win32-argv-control-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  native-windows-launcher:
+    name: Compile native 4.0, 4.8 and 4.8.1 monitors, run selftests
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile three source-authored monitors with MSVC
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw 'MSVC toolchain is required for Win32 launcher regression' }
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $builds = @(
+            @{ name='netfx40_win32_launch'; define='SWCOMPAT_NETFX40' },
+            @{ name='netfx48_win32_launch'; define='SWCOMPAT_NETFX48' },
+            @{ name='netfx481_win32_launch'; define='SWCOMPAT_NETFX481' }
+          )
+          foreach ($build in $builds) {
+            $script = @(
+              '@echo off',
+              ('call "' + $vcvars + '"'),
+              ('cl /nologo /W4 /O2 /DUNICODE /D_UNICODE /D' + $build.define + ' /Fe:build\' + $build.name + '.exe probes\netfx481_win32_launch.c'),
+              'exit /b %errorlevel%'
+            )
+            [System.IO.File]::WriteAllLines(
+              (Join-Path (Get-Location) 'build\compile-launcher.cmd'),
+              $script, [System.Text.Encoding]::ASCII)
+            & cmd.exe /d /c build\compile-launcher.cmd
+            if ($LASTEXITCODE -ne 0) { throw ('MSVC compilation failed: ' + $build.name) }
+            $result = & (Join-Path (Get-Location) ('build\' + $build.name + '.exe')) --selftest-3010
+            if ($LASTEXITCODE -ne 0 -or
+                $result -notcontains 'SWCOMPAT_WIN32_SETUP_EXIT_HEX=00000BC2' -or
+                $result -notcontains 'SWCOMPAT_WIN32_SETUP_STATUS=EXIT') {
+              throw ('Windows native DWORD 3010 selftest failed: ' + $build.name)
+            }
+          }
