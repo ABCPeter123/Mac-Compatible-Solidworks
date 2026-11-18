@@ -84,6 +84,8 @@ def baseline(prefix: Path) -> dict:
 def inspect(prefix: Path, before: dict) -> dict:
     if type(before) is not dict or set(before) != set(PATHS):
         raise ValueError("Unrecognized private NGen baseline")
+    if prefix.is_symlink() or not prefix.is_dir():
+        return {"x64": "UNSAFE", "x86": "UNSAFE", "signals": []}
     report = blank()
     all_signals: set[str] = set()
     for arch, key in (("X64", "x64"), ("X86", "x86")):
