@@ -25,7 +25,7 @@ class Original48CoreWorkflowTests(unittest.TestCase):
         self.assertIn("  workflow_dispatch:", source)
         self.assertEqual(source.count("      try_48_payload_host:"), 2)
         self.assertIn(
-            "if: (inputs.try_48_direct && !inputs.host_provenance_only) || inputs.try_48_payload_host",
+            "if: ((inputs.try_48_direct || inputs.try_48_msi) && !inputs.host_provenance_only) || inputs.try_48_payload_host",
             source)
         self.assertIn('if [ "$SWCOMPAT_DIRECT_48" = "true" ] || [ "$SWCOMPAT_PAYLOAD_48" = "true" ]; then',
                       source)
@@ -38,7 +38,7 @@ class Original48CoreWorkflowTests(unittest.TestCase):
         self.assertIn('assert r["framework481_installed"] is False', source)
         self.assertIn("if: '!inputs.host_provenance_only'", source)
         self.assertIn(
-            "if: inputs.try_48_payload_host && (!inputs.host_provenance_only || inputs.try_48_direct || inputs.try_48_intermediate)",
+            "if: inputs.try_48_payload_host && (!inputs.host_provenance_only || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_msi)",
             source)
         self.assertIn('not host_only and (', source)
 
