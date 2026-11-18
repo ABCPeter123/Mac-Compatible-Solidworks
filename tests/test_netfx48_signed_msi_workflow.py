@@ -183,6 +183,30 @@ class SignedMSIGates(TestCase):
         self.assertIn("ngen_progress = progress.snapshot()", runner)
         self.assertIn("native48_candidate", runner)
 
+    def test_original_x86_wow64_trial_cannot_run_another_signed_msi(self):
+        caller = (ROOT / ".github/workflows/netfx40-wow64-x86-once-ci.yml").read_text(
+            encoding="utf-8")
+        self.assertIn("branches: [main]", caller)
+        self.assertIn("      - '.github/workflows/netfx40-wow64-x86-once-ci.yml'", caller)
+        self.assertIn("try_wow64_managed: true", caller)
+        self.assertIn("host_provenance_only: true", caller)
+        for name in ("try_48_msi: false", "try_48_direct: false",
+                     "try_48_intermediate: false", "try_48_payload_host: false",
+                     "use_macos26_runner: true", "wine_baseline: '11.21'"):
+            self.assertIn(name, caller)
+        self.assertNotIn("actions/upload-artifact", caller)
+        reusable = LEGACY.read_text(encoding="utf-8")
+        self.assertIn("try_wow64_managed:", reusable)
+        self.assertIn("/platform:x86", reusable)
+        self.assertIn("build/netfx40_wow64_managed_probe.exe", reusable)
+        self.assertIn("scripts.netfx40_wow64_managed_probe", reusable)
+        self.assertIn("native_microsoft_wow64_x86_{key}", reusable)
+        module = (ROOT / "scripts/netfx40_wow64_managed_probe.py").read_text(
+            encoding="utf-8")
+        self.assertIn('override="native_only"', module)
+        self.assertIn("flags & 0x2", module)
+        self.assertNotIn("WINEDLLOVERRIDES=mscoree=b", module)
+
     def test_reusable_only_allows_msi_when_signed_media_authenticated(self):
         workflow = LEGACY.read_text(encoding="utf-8")
         self.assertEqual(workflow.count("      try_48_msi:"), 2)
