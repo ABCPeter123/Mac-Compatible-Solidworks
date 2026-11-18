@@ -141,7 +141,7 @@ class OriginalSignedMSITests(TestCase):
             self.assertEqual(result["scm_postflight"]["services"]["CLR_OPTIMIZATION_64"], "PRESENT")
             self.assertFalse(result["native48_candidate"])
             self.assertTrue(p.validate(result))
-            self.assertFalse(p.validate(dict(result, scm_postflight=p.blank_scm("MALFORMED"))))
+            self.assertFalse(p.validate(dict(result, scm_postflight={"status": "COMPLETE", "services": {"PRIVATE": "PRESENT"}})))
 
     def test_denied_installer_cleanup_forbids_postflight_wine_probe(self):
         with TemporaryDirectory() as td:
