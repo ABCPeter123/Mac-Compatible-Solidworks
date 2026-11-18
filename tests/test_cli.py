@@ -132,7 +132,9 @@ class CLITests(unittest.TestCase):
         self.assertEqual(boot_env["WINE_SKIP_GECKO_INSTALLATION"], "1")
         self.assertEqual(boot_env["WINEARCH"], "win64")
         self.assertEqual(boot_env["WINEPREFIX"], str(self.prefix))
-        with mock.patch("swcompat.cli.subprocess.run") as ordinary:
+        with (mock.patch("swcompat.cli.subprocess.run") as ordinary,
+              mock.patch.dict("swcompat.cli.os.environ",
+                              {"WINEDLLOVERRIDES": "mscoree=n;clr=n"})):
             ordinary.return_value.returncode = 0
             status, _ = capture([str(self.wine), "cmd.exe"], self.prefix,
                                 self.logs, "win32", timeout=20)
