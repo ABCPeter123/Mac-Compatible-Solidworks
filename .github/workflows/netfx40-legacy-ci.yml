@@ -1115,13 +1115,9 @@ jobs:
                       out.write(f"original_direct_48_scm_api_{service}: **{measured['service_api']['services'][service]}**\n\n")
                   trace = measured["blockif_trace"]
                   for field in ("status", "true_count", "false_count", "incomplete_count"):
-                      out.write(f"original_direct_48_blockif_{field}: **{trace[field]}**
-
-")
+                      out.write(f"original_direct_48_blockif_{field}: **{trace[field]}**\n\n")
                   for field in ("true_cause_categories", "true_logic_signals"):
-                      out.write(f"original_direct_48_blockif_{field}: **{','.join(trace[field])}**
-
-")
+                      out.write(f"original_direct_48_blockif_{field}: **{','.join(trace[field])}**\n\n")
                   prereq = measured["primary_prerequisite"]
                   for key in ("status", "5100_in_log"):
                       out.write(f"original_direct_48_prerequisite_{key}: **{prereq[key]}**\n\n")
