@@ -29,6 +29,10 @@ from scripts.netfx48_msi_service_evidence import (
     valid as valid_service_evidence,
 )
 from scripts.netfx48_assembly_cache import inspect_assembly_cache, STATES as CACHE_STATES
+from scripts.netfx48_ngen_log_evidence import (
+    baseline as ngen_baseline, inspect as inspect_ngen,
+    blank as blank_ngen, valid as valid_ngen,
+)
 from scripts.netfx481_clr_load import run as load_clr, STATUSES as LOAD_STATES
 from scripts.netfx48_scm_service_probe import (
     measure as measure_scm, selftest as selftest_scm,
@@ -147,7 +151,7 @@ def blank() -> dict:
         "status": "NOT_ELIGIBLE", "native40_persistent": False,
         "win7": "NOT_RUN", "extract": "NOT_RUN", "media": "NOT_RUN",
         "install": "NOT_RUN", "patch": "NOT_RUN",
-        "install_log": blank_msi_log(),
+        "install_log": blank_msi_log(), "ngen_log": blank_ngen(),
         "scm_preflight": blank_scm(), "scm_postflight": blank_scm(),
         "scm_startup": "NOT_RUN",
         "cache_policy": "OBSERVE", "cache_state": "NOT_RUN",
@@ -167,6 +171,9 @@ def validate(result: object) -> bool:
             or any(result[k] not in STEPS for k in ("extract", "install", "patch"))
             or result["media"] not in MEDIA or result["restart"] not in RESTART
             or not valid_msi_log(result["install_log"])
+            or not valid_ngen(result["ngen_log"])
+            or (result["install"] in {"NOT_RUN", "TIMED_OUT_CLEANUP_DENIED"}
+                and result["ngen_log"] != blank_ngen())
             or not valid_scm(result["scm_preflight"])
             or not valid_scm(result["scm_postflight"])
             or result["scm_startup"] not in SELFTEST_STATUSES
@@ -325,6 +332,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
     extracted, media, installed, patched = ("NOT_RUN", "NOT_RUN", "NOT_RUN", "NOT_RUN")
     restart = "NOT_RUN"
     install_log = blank_msi_log()
+    ngen_log = blank_ngen()
     scm_postflight = blank_scm()
     try:
         if win7 == "APPLIED":
@@ -337,6 +345,9 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
             if extracted == "SUCCESS":
                 media = verify_extracted_media(root)
             if media == "VERIFIED":
+                # Only new NGen log bytes after original MSI startup can
+                # contribute bounded signals. Pre-existing CLR4 logs cannot.
+                ngen_start = ngen_baseline(prefix)
                 installed = private_run(
                     [str(wine), "msiexec.exe", "/i",
                      "C:\\" + TARGET + "\\" + MSI, "/qn", "/norestart",
@@ -344,6 +355,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                     env, prefix, 420,
                 )
                 install_log = classify_private_msi_log(root)
+                if installed != "TIMED_OUT_CLEANUP_DENIED":
+                    ngen_log = inspect_ngen(prefix, ngen_start)
                 # Compare actual Win32 SCM state immediately after the genuine
                 # MSI attempt, before any optional MSP servicing. No query
                 # follows a denied installer process-group cleanup.
@@ -368,6 +381,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                   "native40_persistent": True, "win7": win7,
                   "extract": extracted, "media": media, "install": installed,
                   "patch": patched, "install_log": install_log,
+                  "ngen_log": ngen_log,
                   "scm_preflight": scm_preflight,
                   "scm_postflight": scm_postflight,
                   "scm_startup": scm_startup,
@@ -384,6 +398,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
         "status": "MEASURED", "native40_persistent": True,
         "win7": win7, "extract": extracted, "media": media,
         "install": installed, "patch": patched, "install_log": install_log,
+        "ngen_log": ngen_log,
         "scm_preflight": scm_preflight, "scm_postflight": scm_postflight,
         "scm_startup": scm_startup,
         "cache_policy": cache_policy, "cache_state": cache_state,
