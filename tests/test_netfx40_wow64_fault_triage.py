@@ -80,6 +80,7 @@ class Wow64FaultTriageTests(TestCase):
             child = mock.Mock()
             child.wait.side_effect = subprocess.TimeoutExpired("wine", 25)
             with (mock.patch.object(d.subprocess, "Popen", return_value=child),
+                  mock.patch.object(d.time, "monotonic", side_effect=[0, 26]),
                   mock.patch.object(d, "_terminate_group") as terminate):
                 run, status, raw = d._capture(Path("wine"), Path(td), Path("x86.exe"),
                                               25, managed=True)
