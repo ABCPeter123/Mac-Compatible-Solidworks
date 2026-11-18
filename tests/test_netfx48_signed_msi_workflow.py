@@ -377,7 +377,9 @@ class SignedMSIGates(TestCase):
         self.assertLess(c, d)
         self.assertNotIn("print(raw)", step)
         self.assertNotIn("print(m_raw)", step)
-        self.assertNotIn("wine ", step)
+        self.assertNotIn("subprocess.run(", step)
+        self.assertNotIn("subprocess.Popen(", step)
+        self.assertNotIn("os.system(", step)
 
     def test_reusable_only_allows_msi_when_signed_media_authenticated(self):
         workflow = LEGACY.read_text(encoding="utf-8")
