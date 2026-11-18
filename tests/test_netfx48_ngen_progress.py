@@ -71,5 +71,7 @@ class OriginalNgenHeartbeatTests(TestCase):
             self.assertFalse(p.valid({**result, "x86_growth_windows": True}))
             self.assertFalse(p.valid({**result, "samples": 100}))
             self.assertFalse(p.valid({**result, "x86_last": "COMPILATION_OK"}))
+            self.assertFalse(p.valid({**result, "status": []}))
+            self.assertFalse(p.valid({**result, "x86_last": []}))
             self.assertTrue(p.valid(p.blank()))
             self.assertFalse(p.valid({**p.blank(), "samples": 1}))
