@@ -28,7 +28,7 @@ def blank() -> dict:
 def valid(report: object) -> bool:
     if type(report) is not dict or set(report) != set(blank()):
         return False
-    if report["status"] not in STATUSES:
+    if type(report["status"]) is not str or report["status"] not in STATUSES:
         return False
     for name in ("samples", "x86_growth_windows", "x64_growth_windows"):
         if type(report[name]) is not int or not 0 <= report[name] <= MAX_SAMPLES:
@@ -36,7 +36,8 @@ def valid(report: object) -> bool:
     if (report["x86_growth_windows"] > report["samples"]
             or report["x64_growth_windows"] > report["samples"]):
         return False
-    if (report["x86_last"] not in CHANNEL
+    if (any(type(report[key]) is not str for key in ("x86_last", "x64_last"))
+            or report["x86_last"] not in CHANNEL
             or report["x64_last"] not in CHANNEL):
         return False
     if report["status"] == "NOT_RUN":
