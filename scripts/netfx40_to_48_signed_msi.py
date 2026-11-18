@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -18,11 +19,101 @@ import tempfile
 from scripts.netfx40_msxml3_restart import validate as valid_native40
 from scripts.netfx40_to_48_direct import verify_original_media
 from scripts.netfx40_to_48_intermediate import _env, _release, _set_winver, _terminate_group
+from scripts.netfx40_msi_evidence import (
+    classify_msi_log, classify_action, _decode,
+    ACTION_CLASSES, ERROR_CLASSES, MAX_FILE_BYTES,
+)
 from scripts.netfx481_clr_load import run as load_clr, STATUSES as LOAD_STATES
 from scripts.netfx481_payload_audit import snapshot
 from scripts.netfx481_trial import validate_prefix, probe, wineboot_restart
 
-STEPS = {"NOT_RUN", "SUCCESS", "EXIT_NONZERO", "TIMED_OUT", "START_FAILED"}
+STEPS = {
+    "NOT_RUN", "SUCCESS", "EXIT_NONZERO", "TIMED_OUT",
+    "TIMED_OUT_CLEANUP_DENIED", "START_FAILED",
+}
+LOG_STATES = {"NOT_RUN", "NO_LOG", "CLASSIFIED", "TOO_LARGE", "UNSAFE", "UNREADABLE"}
+PRIVATE_LOG = "netfx48-msi-install-private.log"
+# An MSI hang may have no Return value 3. Retain the last *action class*,
+# never its raw name, timestamp, command, vendor log line, or package path.
+ACTION_STARTED = re.compile(
+    r"(?i)\b(?:Action start\s+\d{1,2}:\d{2}:\d{2}:\s*|"
+    r"Doing action:\s*)([a-z][a-z0-9_. -]{0,90})\.?"
+)
+
+
+def last_started_action(raw: bytes) -> str:
+    if type(raw) is not bytes or len(raw) > MAX_FILE_BYTES:
+        return "UNKNOWN"
+    decoded = _decode(raw)
+    if decoded is None:
+        return "UNKNOWN"
+    last = "UNKNOWN"
+    for line in decoded.splitlines():
+        if len(line) > 8192:
+            continue
+        match = ACTION_STARTED.search(line)
+        if match:
+            last = classify_action(match.group(1).strip().rstrip("."))
+    return last
+
+
+def blank_msi_log() -> dict:
+    return {"status": "NOT_RUN", "failure": False, "action": "UNKNOWN",
+            "last_started_action": "UNKNOWN", "errors": []}
+
+
+def classify_private_msi_log(root: Path) -> dict:
+    """Publish only existing coarse classifier enums, never vendor log content."""
+    log = root / PRIVATE_LOG
+    if root.is_symlink() or log.is_symlink():
+        return {**blank_msi_log(), "status": "UNSAFE"}
+    try:
+        if not log.is_file():
+            return {**blank_msi_log(), "status": "NO_LOG"}
+        size = log.stat().st_size
+        if size > MAX_FILE_BYTES:
+            return {**blank_msi_log(), "status": "TOO_LARGE"}
+        with log.open("rb") as src:
+            raw = src.read(MAX_FILE_BYTES + 1)
+        if len(raw) > MAX_FILE_BYTES:
+            return {**blank_msi_log(), "status": "TOO_LARGE"}
+        scan = classify_msi_log(raw)
+        if not scan["readable"]:
+            return {**blank_msi_log(), "status": "UNREADABLE"}
+        return {"status": "CLASSIFIED", "failure": scan["failure"],
+                "action": scan["action"],
+                "last_started_action": last_started_action(raw),
+                "errors": scan["errors"]}
+    except OSError:
+        return {**blank_msi_log(), "status": "UNREADABLE"}
+    finally:
+        try:
+            if log.is_file() and not log.is_symlink():
+                log.unlink()
+        except OSError:
+            pass
+
+
+def valid_msi_log(report: object) -> bool:
+    if type(report) is not dict or set(report) != set(blank_msi_log()):
+        return False
+    if (any(type(report[k]) is not str for k in
+            ("status", "action", "last_started_action"))
+            or report["status"] not in LOG_STATES
+            or type(report["failure"]) is not bool
+            or report["action"] not in ACTION_CLASSES
+            or report["last_started_action"] not in ACTION_CLASSES
+            or type(report["errors"]) is not list
+            or any(type(x) is not str or x not in ERROR_CLASSES
+                   for x in report["errors"])
+            or report["errors"] != sorted(set(report["errors"]))):
+        return False
+    if report["status"] != "CLASSIFIED":
+        return report == {**blank_msi_log(), "status": report["status"]}
+    if report["failure"] is False and report["action"] != "UNKNOWN":
+        return False
+    return True
+
 MEDIA = {"NOT_RUN", "VERIFIED", "FILES_MISSING", "UNSAFE", "INVALID_PACKAGE"}
 WINVER = {"NOT_RUN", "APPLIED", "FAILED"}
 RESTART = {"NOT_RUN", "COMPLETED", "EXIT_NONZERO", "START_FAILED", "TIMED_OUT"}
@@ -42,6 +133,7 @@ def blank() -> dict:
         "status": "NOT_ELIGIBLE", "native40_persistent": False,
         "win7": "NOT_RUN", "extract": "NOT_RUN", "media": "NOT_RUN",
         "install": "NOT_RUN", "patch": "NOT_RUN",
+        "install_log": blank_msi_log(),
         "win10": "NOT_RUN", "restart": "NOT_RUN",
         "clr64_changed": False, "release": "UNAVAILABLE",
         "loader": "NOT_VERIFIED", "native_only_managed": "NOT_VERIFIED",
@@ -57,6 +149,11 @@ def validate(result: object) -> bool:
             or result["win7"] not in WINVER or result["win10"] not in WINVER
             or any(result[k] not in STEPS for k in ("extract", "install", "patch"))
             or result["media"] not in MEDIA or result["restart"] not in RESTART
+            or not valid_msi_log(result["install_log"])
+            or (result["install"] == "NOT_RUN"
+                and result["install_log"] != blank_msi_log())
+            or (result["install"] != "NOT_RUN"
+                and result["install_log"]["status"] == "NOT_RUN")
             or result["release"] not in RELEASE
             or not isinstance(result["loader"], str)
             or result["loader"] not in LOADER
@@ -118,7 +215,18 @@ def private_run(args: list[str], env: dict[str, str], cwd: Path,
         except subprocess.TimeoutExpired:
             # Original Wine installers can spawn grandchildren. Never leave
             # a detached still-running original MSI process *group* behind.
-            _terminate_group(child)
+            try:
+                _terminate_group(child)
+            except PermissionError:
+                # macOS can deny SIGKILL to a Wine process group even after
+                # the group accepted SIGTERM. Do not conceal the real MSI
+                # timeout behind that host cleanup error.
+                try:
+                    child.kill()
+                    child.wait(timeout=5)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+                return "TIMED_OUT_CLEANUP_DENIED"
             return "TIMED_OUT"
     return "SUCCESS" if code == 0 else "EXIT_NONZERO"
 
@@ -155,6 +263,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
     win7 = _set_winver(wine, prefix, env, "win7")
     extracted, media, installed, patched = ("NOT_RUN", "NOT_RUN", "NOT_RUN", "NOT_RUN")
     restart = "NOT_RUN"
+    install_log = blank_msi_log()
     try:
         if win7 == "APPLIED":
             # /x extracts the *unmodified* official Microsoft's original MSI
@@ -168,9 +277,11 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
             if media == "VERIFIED":
                 installed = private_run(
                     [str(wine), "msiexec.exe", "/i",
-                     "C:\\" + TARGET + "\\" + MSI, "/qn", "/norestart"],
+                     "C:\\" + TARGET + "\\" + MSI, "/qn", "/norestart",
+                     "/L*v", "C:\\" + TARGET + "\\" + PRIVATE_LOG],
                     env, prefix, 420,
                 )
+                install_log = classify_private_msi_log(root)
                 if installed == "SUCCESS":
                     patched = private_run(
                         [str(wine), "msiexec.exe", "/p",
@@ -179,7 +290,19 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                         env, prefix, 420,
                     )
     finally:
-        win10 = _set_winver(wine, prefix, env, "win10")
+        # A denied process-group cleanup can leave active Windows Installer
+        # descendants. Do not issue *any* further Wine commands in that prefix.
+        denied = "TIMED_OUT_CLEANUP_DENIED" in (extracted, installed, patched)
+        win10 = ("NOT_RUN" if denied
+                 else _set_winver(wine, prefix, env, "win10"))
+    if denied:
+        result = {**blank(), "status": "MEASURED",
+                  "native40_persistent": True, "win7": win7,
+                  "extract": extracted, "media": media, "install": installed,
+                  "patch": patched, "install_log": install_log}
+        if not validate(result):
+            raise ValueError("Invalid fail-closed signed MSI timeout report")
+        return result
     if installed == "SUCCESS" and patched == "SUCCESS" and win10 == "APPLIED":
         restart = wineboot_restart(wine, prefix, timeout=90)
 
@@ -188,7 +311,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
     result = {
         "status": "MEASURED", "native40_persistent": True,
         "win7": win7, "extract": extracted, "media": media,
-        "install": installed, "patch": patched,
+        "install": installed, "patch": patched, "install_log": install_log,
         "win10": win10, "restart": restart,
         "clr64_changed": (before["CLR64"][1] != after["CLR64"][1]
                           and after["CLR64"][0] == "PE_AMD64"),

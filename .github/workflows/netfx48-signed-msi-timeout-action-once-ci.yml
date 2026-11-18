@@ -1,0 +1,33 @@
+name: One-shot genuine .NET4.8 x64 MSI stalled-action evidence
+
+# Authenticated original Microsoft x64 .NET 4.0 installed and managed PASS.
+# Previous original Microsoft 4.8 x64 MSI actually launched under Wine but
+# timed out at 420 seconds; macOS EPERM during cleanup lost the safe report.
+# This revision classifies private MSI /L*v logs into fixed action/error
+# enums and preserves TIMED_OUT_CLEANUP_DENIED without further Wine calls.
+# Vendor logs, binaries, PIDs and original output are never uploaded.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netfx48-signed-msi-timeout-action-once-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: netfx48-original-msi-action-evidence-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  original-microsoft-msi-timeout-action:
+    name: Observe last authentic x64 MSI action and safe timeout cleanup
+    uses: ./.github/workflows/netfx40-legacy-ci.yml
+    with:
+      wine_baseline: '11.21'
+      use_macos26_runner: true
+      host_provenance_only: false
+      try_48_payload_host: false
+      try_48_direct: false
+      try_48_intermediate: false
+      try_48_msi: true

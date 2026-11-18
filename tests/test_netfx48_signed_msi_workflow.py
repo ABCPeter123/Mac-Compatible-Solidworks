@@ -19,6 +19,20 @@ class SignedMSIGates(TestCase):
             self.assertIn(line, source)
         self.assertNotIn("actions/upload-artifact", source)
 
+    def test_original_signed_msi_timeout_action_rerun_is_main_only(self):
+        source = (ROOT / ".github/workflows/netfx48-signed-msi-timeout-action-once-ci.yml"
+                  ).read_text(encoding="utf-8")
+        self.assertIn("branches: [main]", source)
+        self.assertIn(
+            "      - '.github/workflows/netfx48-signed-msi-timeout-action-once-ci.yml'",
+            source)
+        self.assertIn("      try_48_msi: true", source)
+        for key in ("try_48_direct: false", "try_48_intermediate: false",
+                    "host_provenance_only: false", "try_48_payload_host: false",
+                    "use_macos26_runner: true", "wine_baseline: '11.21'"):
+            self.assertIn(key, source)
+        self.assertNotIn("actions/upload-artifact", source)
+
     def test_reusable_only_allows_msi_when_signed_media_authenticated(self):
         workflow = LEGACY.read_text(encoding="utf-8")
         self.assertEqual(workflow.count("      try_48_msi:"), 2)
