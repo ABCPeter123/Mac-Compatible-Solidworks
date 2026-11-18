@@ -114,6 +114,52 @@ class CLITests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.invoke("init", "--timeout", "25")
 
+    def test_skip_mono_gecko_is_scoped_to_one_wineboot_child_only(self):
+        child = mock.Mock()
+        child.wait.return_value = 0
+        with (mock.patch("swcompat.cli.subprocess.Popen", return_value=child) as launch,
+              mock.patch.dict("swcompat.cli.os.environ", {
+                  "WINEDLLOVERRIDES": "mscoree=n;clr=n",
+              })):
+            status, _ = capture([str(self.boot), "--init"], self.prefix,
+                                self.logs, "init", timeout=120,
+                                kill_group_on_timeout=True,
+                                skip_bootstrap_mono_gecko=True)
+        self.assertEqual(status, 0)
+        boot_env = launch.call_args.kwargs["env"]
+        self.assertEqual(boot_env["WINEDLLOVERRIDES"], "mscoree,mshtml=d")
+        self.assertEqual(boot_env["WINE_SKIP_MONO_INSTALLATION"], "1")
+        self.assertEqual(boot_env["WINE_SKIP_GECKO_INSTALLATION"], "1")
+        self.assertEqual(boot_env["WINEARCH"], "win64")
+        self.assertEqual(boot_env["WINEPREFIX"], str(self.prefix))
+        with mock.patch("swcompat.cli.subprocess.run") as ordinary:
+            ordinary.return_value.returncode = 0
+            status, _ = capture([str(self.wine), "cmd.exe"], self.prefix,
+                                self.logs, "win32", timeout=20)
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            ordinary.call_args.kwargs["env"]["WINEDLLOVERRIDES"],
+            "mscoree=n;clr=n")
+        self.assertNotIn("WINEDLLOVERRIDES", __import__("os").environ)
+
+    def test_mono_gecko_suppression_cannot_be_used_for_managed_probe(self):
+        with self.assertRaises(ValueError):
+            capture([str(self.wine), "managed.exe"], self.prefix,
+                    self.logs, "managed", timeout=20,
+                    kill_group_on_timeout=True,
+                    skip_bootstrap_mono_gecko=True)
+        with self.assertRaises(ValueError):
+            capture([str(self.boot), "--init"], self.prefix,
+                    self.logs, "init", timeout=120,
+                    kill_group_on_timeout=False,
+                    skip_bootstrap_mono_gecko=True)
+
+    def test_command_line_scoped_suppression_starts_real_wineboot_stub(self):
+        code, message = self.invoke(
+            "init", "--timeout", "120", "--skip-bootstrap-mono-gecko")
+        self.assertEqual(code, 0, message)
+        self.assertTrue(self.prefix.is_dir())
+
     def test_windows11_profile_command_isolated_prefix(self):
         self.assertEqual(self.invoke("set-winver", "win11")[0], 2)
         self.assertEqual(self.invoke("init")[0], 0)
