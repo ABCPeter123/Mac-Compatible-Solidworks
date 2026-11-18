@@ -37,7 +37,7 @@ class OriginalSignedMSITests(TestCase):
         managed = root / "netfx481_runtime_probe.exe"
         prefix = root / "prefix"
         prefix.mkdir()
-        (prefix / "drive_c").mkdir()
+        (prefix / "drive_c" / "windows").mkdir(parents=True)
         for path in (wine, installer, digest, loader, managed):
             path.write_bytes(b"synthetic (NEVER vendor media)")
         wine.chmod(0o700)
@@ -46,7 +46,7 @@ class OriginalSignedMSITests(TestCase):
     def run_case(self, paths, *, extract="SUCCESS", install="SUCCESS",
                  patch="SUCCESS", changed=True, release="NETFX48_RANGE",
                  valid_media=True, verified_native40=True, scm=False,
-                 post_scm=None):
+                 post_scm=None, prepare_cache=False):
         calls = []
         def fake_run(cmd, env, cwd, timeout):
             calls.append((cmd, timeout))
@@ -87,7 +87,8 @@ class OriginalSignedMSITests(TestCase):
                 service_path.write_bytes(b"self authored original fixture")
             result = p.inspect(
                 *paths, {"persistent_native_managed": verified_native40},
-                service_fixture=service_path if scm else None)
+                service_fixture=service_path if scm else None,
+                prepare_assembly_cache=prepare_cache)
         self.assertTrue(p.validate(result))
         self.assertEqual(result["solidworks_compatibility"], "NOT_DEMONSTRATED")
         self.assertFalse(result["framework481_confirmed"])
@@ -162,6 +163,28 @@ class OriginalSignedMSITests(TestCase):
             self.assertEqual(result["scm_postflight"]["status"], "COMPLETE")
             self.assertFalse(result["native48_candidate"])
             self.assertTrue(p.validate(result))
+
+    def test_opt_in_ngen_cache_creates_only_directory_not_success(self):
+        with TemporaryDirectory() as td:
+            paths = self.fixture(Path(td))
+            result, _ = self.run_case(
+                paths, prepare_cache=True, install="TIMED_OUT",
+                changed=True, release="NETFX48_RANGE")
+            self.assertEqual(result["cache_policy"], "PREPARE")
+            self.assertEqual(result["cache_state"], "CREATED")
+            self.assertTrue((paths[1] / "drive_c" / "windows" / "assembly").is_dir())
+            self.assertFalse(result["native48_candidate"])
+            self.assertTrue(p.validate(result))
+            self.assertFalse(p.validate(dict(result, cache_policy="OBSERVE")))
+
+    def test_observation_only_does_not_modify_cache(self):
+        with TemporaryDirectory() as td:
+            paths = self.fixture(Path(td))
+            result, _ = self.run_case(paths, install="TIMED_OUT")
+            self.assertEqual(result["cache_policy"], "OBSERVE")
+            self.assertEqual(result["cache_state"], "MISSING")
+            self.assertFalse((paths[1] / "drive_c" / "windows" / "assembly").exists())
+            self.assertFalse(result["native48_candidate"])
 
     def test_failed_original_msi_and_patch_never_upgrade(self):
         for params, want_install, want_patch in (
