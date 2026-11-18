@@ -37,4 +37,25 @@ jobs:
           printf '%s  %s\n' \
             d0cea7ff492dd3801dfa26a2a7d5ed1331e60f65929318d17301a3ce9cbba56c \
             "$ARCHIVE" | sha256sum -c -
+          # This is a public, publisher-signed-off open-source Wine release,
+          # not original Microsoft or user media. Show one escaped archive
+          # *entry name*, never extracted contents, for validator diagnosis.
+          python3 - "$ARCHIVE" <<'PY'
+          import sys, tarfile, posixpath
+          from scripts.wine_engine_archive import _safe_name
+          with tarfile.open(sys.argv[1], "r:gz") as archive:
+              for member in archive:
+                  normalized = posixpath.normpath(member.name)
+                  if normalized == "." and member.isdir():
+                      continue
+                  if not _safe_name(member.name):
+                      print("First public Wiage archive unexpected member:",
+                            ascii(member.name)[:150],
+                            "type:", "dir" if member.isdir() else
+                            "file" if member.isfile() else "link" if
+                            (member.issym() or member.islnk()) else "special")
+                      break
+              else:
+                  print("No unexpected archive entry names")
+          PY
           python3 -m scripts.wine_engine_archive --archive "$ARCHIVE"
