@@ -147,7 +147,8 @@ def blank() -> dict:
         "win7": "NOT_RUN", "extract": "NOT_RUN", "media": "NOT_RUN",
         "install": "NOT_RUN", "patch": "NOT_RUN",
         "install_log": blank_msi_log(),
-        "scm_preflight": blank_scm(), "scm_startup": "NOT_RUN",
+        "scm_preflight": blank_scm(), "scm_postflight": blank_scm(),
+        "scm_startup": "NOT_RUN",
         "win10": "NOT_RUN", "restart": "NOT_RUN",
         "clr64_changed": False, "release": "UNAVAILABLE",
         "loader": "NOT_VERIFIED", "native_only_managed": "NOT_VERIFIED",
@@ -165,9 +166,15 @@ def validate(result: object) -> bool:
             or result["media"] not in MEDIA or result["restart"] not in RESTART
             or not valid_msi_log(result["install_log"])
             or not valid_scm(result["scm_preflight"])
+            or not valid_scm(result["scm_postflight"])
             or result["scm_startup"] not in SELFTEST_STATUSES
             or (result["scm_startup"] != "PASS"
-                and result["scm_preflight"] != blank_scm())
+                and (result["scm_preflight"] != blank_scm()
+                     or result["scm_postflight"] != blank_scm()))
+            or (result["scm_postflight"] != blank_scm()
+                and (result["install"] == "NOT_RUN"
+                     or "TIMED_OUT_CLEANUP_DENIED" in
+                        (result["extract"], result["install"], result["patch"])))
             or (result["install"] == "NOT_RUN"
                 and result["install_log"] != blank_msi_log())
             or (result["install"] != "NOT_RUN"
@@ -293,6 +300,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
     extracted, media, installed, patched = ("NOT_RUN", "NOT_RUN", "NOT_RUN", "NOT_RUN")
     restart = "NOT_RUN"
     install_log = blank_msi_log()
+    scm_postflight = blank_scm()
     try:
         if win7 == "APPLIED":
             # /x extracts the *unmodified* official Microsoft's original MSI
@@ -311,6 +319,12 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                     env, prefix, 420,
                 )
                 install_log = classify_private_msi_log(root)
+                # Compare actual Win32 SCM state immediately after the genuine
+                # MSI attempt, before any optional MSP servicing. No query
+                # follows a denied installer process-group cleanup.
+                if (service_fixture is not None and scm_startup == "PASS"
+                        and installed != "TIMED_OUT_CLEANUP_DENIED"):
+                    scm_postflight = measure_scm(wine, prefix, service_fixture)
                 if installed == "SUCCESS":
                     patched = private_run(
                         [str(wine), "msiexec.exe", "/p",
@@ -329,7 +343,9 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                   "native40_persistent": True, "win7": win7,
                   "extract": extracted, "media": media, "install": installed,
                   "patch": patched, "install_log": install_log,
-                  "scm_preflight": scm_preflight, "scm_startup": scm_startup}
+                  "scm_preflight": scm_preflight,
+                  "scm_postflight": scm_postflight,
+                  "scm_startup": scm_startup}
         if not validate(result):
             raise ValueError("Invalid fail-closed signed MSI timeout report")
         return result
@@ -342,7 +358,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
         "status": "MEASURED", "native40_persistent": True,
         "win7": win7, "extract": extracted, "media": media,
         "install": installed, "patch": patched, "install_log": install_log,
-        "scm_preflight": scm_preflight, "scm_startup": scm_startup,
+        "scm_preflight": scm_preflight, "scm_postflight": scm_postflight,
+        "scm_startup": scm_startup,
         "win10": win10, "restart": restart,
         "clr64_changed": (before["CLR64"][1] != after["CLR64"][1]
                           and after["CLR64"][0] == "PE_AMD64"),
