@@ -1211,6 +1211,10 @@ jobs:
                               "release", "loader", "native_only_managed",
                               "native48_candidate"):
                       out.write(f"signed_msi_48_{key}: **{msi[key]}**\n\n")
+                  for key in ("status", "failure", "action",
+                              "last_started_action", "errors"):
+                      out.write(f"signed_msi_48_install_log_{key}: **"
+                                f"{msi['install_log'][key]}**\n\n")
               direct_path = Path("build/netfx40-to-48-direct.json")
               if direct_path.is_file():
                   from scripts.netfx40_to_48_direct import validate as valid_direct
