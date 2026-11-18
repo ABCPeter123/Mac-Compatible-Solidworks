@@ -11,18 +11,28 @@ from scripts import netfx48_scm_service_probe as scm
 
 def packet(*, status="COMPLETE", trusted="ABSENT", msi="PRESENT",
            update="PRESENT", bits="PRESENT",
-           opt64="ABSENT", opt32="ABSENT", msdtc="ABSENT") -> bytes:
-    return ("\n".join([
-        "SWCOMPAT_SCM_API_SCHEMA=1",
-        "SWCOMPAT_SCM_API_STATUS=" + status,
-        "SWCOMPAT_SCM_API_TRUSTEDINSTALLER=" + trusted,
-        "SWCOMPAT_SCM_API_MSISERVER=" + msi,
-        "SWCOMPAT_SCM_API_WUAUSERV=" + update,
-        "SWCOMPAT_SCM_API_BITS=" + bits,
-        "SWCOMPAT_SCM_API_CLR_OPTIMIZATION_64=" + opt64,
-        "SWCOMPAT_SCM_API_CLR_OPTIMIZATION_32=" + opt32,
-        "SWCOMPAT_SCM_API_MSDTC=" + msdtc,
-    ]) + "\n").encode("ascii")
+           opt64="ABSENT", opt32="ABSENT", msdtc="ABSENT",
+           states=None) -> bytes:
+    services = {
+        "TRUSTEDINSTALLER": trusted, "MSISERVER": msi,
+        "WUAUSERV": update, "BITS": bits,
+        "CLR_OPTIMIZATION_64": opt64,
+        "CLR_OPTIMIZATION_32": opt32, "MSDTC": msdtc,
+    }
+    current = {
+        k: ("STOPPED" if v == "PRESENT" else "NOT_APPLICABLE")
+        for k, v in services.items()
+    }
+    if states is not None:
+        current.update(states)
+    return ("\n".join(
+        ["SWCOMPAT_SCM_API_SCHEMA=2",
+         "SWCOMPAT_SCM_API_STATUS=" + status] +
+        ["SWCOMPAT_SCM_API_" + k + "=" + v
+         for k, v in services.items()] +
+        ["SWCOMPAT_SCM_STATE_" + k + "=" + v
+         for k, v in current.items()]
+    ) + "\n").encode("ascii")
 
 
 class NativeSCMProbeTests(unittest.TestCase):
@@ -34,17 +44,41 @@ class NativeSCMProbeTests(unittest.TestCase):
         self.assertEqual(r["services"]["MSISERVER"], "PRESENT")
         self.assertEqual(r["services"]["CLR_OPTIMIZATION_64"], "ABSENT")
         self.assertEqual(r["services"]["CLR_OPTIMIZATION_32"], "ABSENT")
+        self.assertEqual(r["states"]["MSISERVER"], "STOPPED")
+        self.assertEqual(r["states"]["CLR_OPTIMIZATION_64"], "NOT_APPLICABLE")
         self.assertEqual(r["services"]["MSDTC"], "ABSENT")
         self.assertNotIn("service path", str(r))
         denied = scm.parse(packet(trusted="ACCESS_DENIED"), 0)
         self.assertEqual(denied["services"]["TRUSTEDINSTALLER"], "ACCESS_DENIED")
         self.assertNotEqual(denied, r)
 
+    def test_real_service_running_state_and_presence_must_agree(self):
+        report = scm.parse(packet(opt64="PRESENT", opt32="PRESENT",
+                                  states={"CLR_OPTIMIZATION_64": "RUNNING",
+                                          "CLR_OPTIMIZATION_32": "START_PENDING",
+                                          "MSISERVER": "QUERY_FAILED"}), 0)
+        self.assertTrue(scm.valid(report))
+        self.assertEqual(report["states"]["CLR_OPTIMIZATION_64"], "RUNNING")
+        self.assertEqual(report["states"]["CLR_OPTIMIZATION_32"], "START_PENDING")
+        self.assertEqual(report["states"]["MSISERVER"], "QUERY_FAILED")
+        self.assertEqual(scm.parse(
+            packet(states={"TRUSTEDINSTALLER": "RUNNING"}), 0
+        ), scm.blank("MALFORMED"))
+        self.assertEqual(scm.parse(
+            packet(states={"MSISERVER": "NOT_APPLICABLE"}), 0
+        ), scm.blank("MALFORMED"))
+        self.assertEqual(scm.parse(
+            packet(states={"MSISERVER": "PRIVATE"}), 0
+        ), scm.blank("MALFORMED"))
+        self.assertEqual(scm.parse(
+            packet().replace(b"SWCOMPAT_SCM_STATE_MSDTC=NOT_APPLICABLE\n", b""), 0
+        ), scm.blank("INCOMPLETE_FIELDS"))
+
     def test_exact_schema_and_private_text_fail_closed(self):
         variants = (
             (packet() + b"PRIVATE=C:\\Users\\secret\n", "UNEXPECTED_TEXT"),
             (packet() + packet(), "INVALID_FIELD"),
-            (packet().replace(b"SCHEMA=1", b"SCHEMA=2"), "MALFORMED"),
+            (packet().replace(b"SCHEMA=2", b"SCHEMA=1"), "MALFORMED"),
             (packet().replace(b"TRUSTEDINSTALLER=", b"TRUSTEDINSTALLER=PRIVATE"),
              "MALFORMED"),
             (packet().replace(b"MSISERVER=", b"OTHERSERVICE="), "INVALID_FIELD"),

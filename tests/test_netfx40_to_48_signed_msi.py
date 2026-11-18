@@ -69,7 +69,10 @@ class OriginalSignedMSITests(TestCase):
         after = {"CLR64": ("PE_AMD64", "original48" if changed else "original40")}
         scm_before = {"status": "COMPLETE", "services": {
             k: ("PRESENT" if k == "MSISERVER" else "ABSENT")
-            for k in p.blank_scm()["services"]}}
+            for k in p.blank_scm()["services"]},
+            "states": {
+                k: ("STOPPED" if k == "MSISERVER" else "NOT_APPLICABLE")
+                for k in p.blank_scm()["services"]}}
         scm_after = post_scm if post_scm is not None else scm_before
         with (mock.patch.object(p, "validate_prefix"),
               mock.patch.object(p, "verify_original_media"),
@@ -125,6 +128,7 @@ class OriginalSignedMSITests(TestCase):
             self.assertEqual(data["scm_startup"], "PASS")
             self.assertEqual(data["scm_preflight"]["status"], "COMPLETE")
             self.assertEqual(data["scm_preflight"]["services"]["MSISERVER"], "PRESENT")
+            self.assertEqual(data["scm_preflight"]["states"]["MSISERVER"], "STOPPED")
             self.assertEqual(data["scm_preflight"]["services"]["CLR_OPTIMIZATION_64"], "ABSENT")
             self.assertEqual(data["scm_postflight"]["status"], "COMPLETE")
             self.assertEqual(data["scm_postflight"]["services"]["CLR_OPTIMIZATION_64"], "ABSENT")
@@ -138,7 +142,9 @@ class OriginalSignedMSITests(TestCase):
             services = {k: "ABSENT" for k in p.blank_scm()["services"]}
             services["MSISERVER"] = "PRESENT"
             services["CLR_OPTIMIZATION_64"] = "PRESENT"
-            after = {"status": "COMPLETE", "services": services}
+            after = {"status": "COMPLETE", "services": services,
+                     "states": {k: ("STOPPED" if v == "PRESENT" else "NOT_APPLICABLE")
+                                for k, v in services.items()}}
             result, _ = self.run_case(
                 self.fixture(Path(td)), scm=True, install="TIMED_OUT",
                 changed=True, release="NETFX48_RANGE", post_scm=after)
@@ -147,6 +153,7 @@ class OriginalSignedMSITests(TestCase):
             self.assertFalse(result["native48_candidate"])
             self.assertTrue(p.validate(result))
             self.assertFalse(p.validate(dict(result, scm_postflight={"status": "COMPLETE", "services": {"PRIVATE": "PRESENT"}})))
+            self.assertFalse(p.validate(dict(result, scm_postflight={**result["scm_postflight"], "states": {**result["scm_postflight"]["states"], "CLR_OPTIMIZATION_64": "NOT_APPLICABLE"}})))
 
     def test_denied_installer_cleanup_forbids_postflight_wine_probe(self):
         with TemporaryDirectory() as td:

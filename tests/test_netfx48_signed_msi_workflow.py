@@ -104,6 +104,26 @@ class SignedMSIGates(TestCase):
         self.assertNotIn("CreateServiceW", fixture)
         self.assertNotIn("StartServiceW", fixture)
 
+    def test_ngen_msdtc_diagnostic_queries_real_service_state_without_mutation(self):
+        fixture = (ROOT / "probes/netfx48_scm_service_probe.c").read_text(
+            encoding="utf-8")
+        self.assertIn("QueryServiceStatusEx(", fixture)
+        self.assertIn("SERVICE_QUERY_STATUS", fixture)
+        self.assertIn("SWCOMPAT_SCM_STATE_%s", fixture)
+        self.assertIn("SWCOMPAT_SCM_API_SCHEMA=2", fixture)
+        self.assertNotIn("StartServiceW(", fixture)
+        self.assertNotIn("CreateServiceW(", fixture)
+        self.assertNotIn("ChangeServiceConfigW(", fixture)
+        summary = LEGACY.read_text(encoding="utf-8")
+        self.assertIn("signed_msi_48_scm_state_{service}", summary)
+        self.assertIn("signed_msi_48_scm_post_state_{service}", summary)
+        source = (ROOT / ".github/workflows/netfx48-msi-ngen-evidence-once-ci.yml").read_text(
+            encoding="utf-8")
+        self.assertIn("branches: [main]", source)
+        self.assertIn("try_48_msi: true", source)
+        self.assertIn("prepare_48_assembly_cache: true", source)
+        self.assertNotIn("actions/upload-artifact", source)
+
     def test_reusable_only_allows_msi_when_signed_media_authenticated(self):
         workflow = LEGACY.read_text(encoding="utf-8")
         self.assertEqual(workflow.count("      try_48_msi:"), 2)

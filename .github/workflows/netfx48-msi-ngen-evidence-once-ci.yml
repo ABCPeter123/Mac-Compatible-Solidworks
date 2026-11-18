@@ -3,6 +3,10 @@ name: One-shot genuine .NET4.8 MSI NGen log and MSDTC evidence
 # Diagnose the NGen custom-action timeout and independent real MSDTC
 # SCM state. Only newly appended original NGen log bytes yield fixed error
 # categories. No raw Microsoft log, command, assembly or vendor text leaves CI.
+# Also query actual Service Control Manager running/stopped states of every
+# fixed service on the same Win7 profile, before and after original signed
+# MSI attempt. Service existence alone was not sufficient to explain hang.
+# This updated main-only one-shot rerun specifically tests the state API.
 # Same signed Microsoft x64 MSI+MSP and genuine CLR success gates as baseline.
 # Do not fabricate, register or start any Windows service.
 on:
