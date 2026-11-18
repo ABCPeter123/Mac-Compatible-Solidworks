@@ -39,9 +39,16 @@ def verify(path: Path) -> dict[str, object]:
         with tarfile.open(path, "r:gz") as archive:
             for member in archive:
                 count += 1
-                if count > MAX_ENTRIES or not _safe_name(member.name):
-                    raise ValueError("Unsafe Wine runtime archive entry")
+                if count > MAX_ENTRIES:
+                    raise ValueError("Excessive Wine runtime archive entries")
                 name = posixpath.normpath(member.name)
+                # tar -czf runtime.tar.gz -C dist . emits an initial './'
+                # directory. This is safe only when it is a directory;
+                # never permit a root-level file or root-level symlink.
+                if name == "." and member.isdir():
+                    continue
+                if not _safe_name(member.name):
+                    raise ValueError("Unsafe Wine runtime archive entry")
                 if name in seen and not member.isdir():
                     raise ValueError("Duplicate Wine runtime file")
                 seen.add(name)
