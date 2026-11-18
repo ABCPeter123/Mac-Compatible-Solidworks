@@ -280,12 +280,14 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
                                timeout=465, fusion_builtin=True,
                                setup_family="NETFX48")
             finally:
-                # Both classifiers read the short-lived original /log inside
-                # the marked Wine prefix. Never print or retain raw text.
-                evidence = classify_log(log)
-                primary = classify_primary_prerequisite(log, family="NETFX48")
-                blockif_trace = classify_blockif(log)
-                discard_log(log)
+                # All three classifiers read the same private original setup
+                # log. Always erase it, including when classification fails.
+                try:
+                    evidence = classify_log(log)
+                    primary = classify_primary_prerequisite(log, family="NETFX48")
+                    blockif_trace = classify_blockif(log)
+                finally:
+                    discard_log(log)
                 secondary = scan_secondary_logs(
                     prefix, baseline=secondary_before, family="NETFX48")
             if (setup["status"] == "EXIT_CAPTURED"
