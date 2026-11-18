@@ -77,6 +77,7 @@ class DirectNative48Tests(unittest.TestCase):
                 "false_count": 2, "incomplete_count": 0,
                 "true_cause_categories": ["UNKNOWN_PREREQUISITE"],
                 "true_logic_signals": ["TRUSTEDINSTALLER_MISSING_1060"],
+                "milestones": ["BLOCKIF_TEXT"], "log_line_band": "ONE_TO_100",
             }) as blockif_scan,
             mock.patch.object(p, "classify_primary_prerequisite", return_value={
                 "status": "CLASSIFIED", "os_versions": ["BELOW_WINDOWS_10"],
