@@ -58,6 +58,19 @@ def classify_stages(raw: bytes) -> list[str]:
         return []
     return sorted(tag for tag, pattern in STAGE_RULES if pattern.search(raw))
 
+
+def classify_last_stage(raw: bytes) -> str:
+    """Last recognized allowlisted milestone before process exit or timeout."""
+    if not isinstance(raw, bytes) or len(raw) > MAX_PRIVATE_OUTPUT:
+        return "OUTPUT_TOO_LARGE"
+    last_pos = -1
+    last_tag = "NO_OUTPUT" if not raw else "UNKNOWN"
+    for tag, pattern in STAGE_RULES:
+        for match in pattern.finditer(raw):
+            if match.start() > last_pos:
+                last_pos, last_tag = match.start(), tag
+    return last_tag
+
 BOOT = {"COMPLETED", "TIMED_OUT", "START_FAILED", "EXIT_NONZERO", "NOT_RUN"}
 WINVER = {"APPLIED", "FAILED", "NOT_RUN"}
 RELEASE = {"NOT_FOUND", "BELOW_48", "NETFX48_RANGE", "AT_LEAST_481", "UNAVAILABLE"}
@@ -67,7 +80,7 @@ RELEASE_PATTERN = re.compile(rb"(?i)\bRelease\s+REG_DWORD\s+0x([0-9a-f]{1,8})\b"
 def blank() -> dict:
     return {"status": "NOT_ELIGIBLE", "native40_persistent": False,
             "verb": "NOT_RUN", "verb_progress": "NOT_RUN",
-            "verb_stages": [],
+            "verb_stages": [], "verb_last_stage": "NOT_RUN",
             "win7": "NOT_RUN", "win10": "NOT_RUN",
             "restart": "NOT_RUN", "clr64_changed": False,
             "release": "UNAVAILABLE", "loader": "NOT_VERIFIED",
@@ -85,6 +98,8 @@ def validate(result: object) -> bool:
             or any(type(v) is not str or v not in WINETRICKS_STAGES
                    for v in result["verb_stages"])
             or result["verb_stages"] != sorted(set(result["verb_stages"]))
+            or result["verb_last_stage"] not in (
+                WINETRICKS_STAGES | {"NOT_RUN", "UNKNOWN", "NO_OUTPUT", "OUTPUT_TOO_LARGE"})
             or result["restart"] not in BOOT
             or result["win7"] not in WINVER or result["win10"] not in WINVER
             or result["release"] not in RELEASE
@@ -194,7 +209,7 @@ def _terminate_group(child: subprocess.Popen) -> None:
 
 
 def _run_winetricks(command: list[str], env: dict[str, str],
-                    cwd: Path, timeout: int) -> tuple[str, str, list[str]]:
+                    cwd: Path, timeout: int) -> tuple[str, str, list[str], str]:
     """Bound the verb and keep its entire diagnostic stream private."""
     with tempfile.TemporaryFile() as output:
         try:
@@ -204,7 +219,7 @@ def _run_winetricks(command: list[str], env: dict[str, str],
                 start_new_session=True,
             )
         except OSError:
-            return "START_FAILED", "NOT_RUN", []
+            return "START_FAILED", "NOT_RUN", [], "NOT_RUN"
         try:
             rc = child.wait(timeout=timeout)
             status = "SUCCESS" if rc == 0 else "EXIT_NONZERO"
@@ -215,7 +230,8 @@ def _run_winetricks(command: list[str], env: dict[str, str],
         private_bytes = output.read(MAX_PRIVATE_OUTPUT + 1)
         progress = classify_progress(private_bytes)
         stages = classify_stages(private_bytes)
-    return status, progress, stages
+        last_stage = classify_last_stage(private_bytes)
+    return status, progress, stages, last_stage
 
 
 def _set_winver(wine: Path, prefix: Path, env: dict[str, str],
@@ -268,9 +284,10 @@ def inspect(wine: Path, prefix: Path, winetricks: Path, loader: Path,
     verb = "NOT_RUN"
     verb_progress = "NOT_RUN"
     verb_stages: list[str] = []
+    verb_last_stage = "NOT_RUN"
     try:
         if win7 == "APPLIED":
-            verb, verb_progress, verb_stages = _run_winetricks(
+            verb, verb_progress, verb_stages, verb_last_stage = _run_winetricks(
                 ["bash", str(winetricks), "-q", "dotnet48"], env, prefix, timeout)
     finally:
         win10 = _set_winver(wine, prefix, env, "win10")
@@ -279,7 +296,7 @@ def inspect(wine: Path, prefix: Path, winetricks: Path, loader: Path,
     same = before["CLR64"][1] == after["CLR64"][1]
     output = {"status": "MEASURED", "native40_persistent": True,
               "verb": verb, "verb_progress": verb_progress,
-              "verb_stages": verb_stages,
+              "verb_stages": verb_stages, "verb_last_stage": verb_last_stage,
               "win7": win7, "win10": win10,
               "restart": restart,
               "clr64_changed": (not same and after["CLR64"][0] == "PE_AMD64"),
