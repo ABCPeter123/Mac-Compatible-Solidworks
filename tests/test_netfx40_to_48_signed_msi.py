@@ -46,7 +46,7 @@ class OriginalSignedMSITests(TestCase):
     def run_case(self, paths, *, extract="SUCCESS", install="SUCCESS",
                  patch="SUCCESS", changed=True, release="NETFX48_RANGE",
                  valid_media=True, verified_native40=True, scm=False,
-                 post_scm=None, prepare_cache=False):
+                 post_scm=None, prepare_cache=False, ngen_bytes=None):
         calls = []
         def fake_run(cmd, env, cwd, timeout):
             calls.append((cmd, timeout))
@@ -58,6 +58,10 @@ class OriginalSignedMSITests(TestCase):
                         (root / filename).write_bytes(p.OLE_HEADER + b"V" * 8192)
                 return extract
             if "/i" in cmd:
+                if ngen_bytes is not None:
+                    ngen_log = paths[1] / "drive_c" / "windows" / "Microsoft.NET" / "Framework64" / "v4.0.30319" / "ngen.log"
+                    ngen_log.parent.mkdir(parents=True, exist_ok=True)
+                    ngen_log.write_bytes(ngen_bytes)
                 return install
             return patch
 
@@ -186,6 +190,22 @@ class OriginalSignedMSITests(TestCase):
             self.assertFalse((paths[1] / "drive_c" / "windows" / "assembly").exists())
             self.assertFalse(result["native48_candidate"])
 
+    def test_signed_msi_ngen_errors_are_finite_not_proof_of_success(self):
+        with TemporaryDirectory() as td:
+            result, _ = self.run_case(
+                self.fixture(Path(td)), install="TIMED_OUT",
+                changed=True, release="NETFX48_RANGE",
+                ngen_bytes=b"Compiling assembly PRIVATE_PATH\\n"
+                           b"Ngen failed to generate native code 0x80070003\\n")
+            self.assertEqual(result["ngen_log"]["x64"], "CLASSIFIED")
+            self.assertEqual(result["ngen_log"]["signals"], [
+                "NGEN_COMPILE", "NGEN_FAILURE", "PATH_NOT_FOUND"])
+            self.assertTrue(p.validate(result))
+            self.assertFalse(result["native48_candidate"])
+            self.assertNotIn("PRIVATE_PATH", str(result))
+            self.assertFalse(p.validate(dict(result, ngen_log={
+                **result["ngen_log"], "signals": ["VENDOR_LOG"]})))
+
     def test_failed_original_msi_and_patch_never_upgrade(self):
         for params, want_install, want_patch in (
             ({"extract": "EXIT_NONZERO"}, "NOT_RUN", "NOT_RUN"),
@@ -293,6 +313,7 @@ class OriginalSignedMSITests(TestCase):
             self.assertEqual(result["install"], "TIMED_OUT_CLEANUP_DENIED")
             self.assertEqual(result["win10"], "NOT_RUN")
             self.assertFalse(result["native48_candidate"])
+            self.assertEqual(result["ngen_log"], p.blank_ngen())
             self.assertEqual(events.count("msiexec.exe"), 1)
             self.assertEqual(snapshots.call_count, 1)
             self.assertEqual(loader.call_count, 1)
