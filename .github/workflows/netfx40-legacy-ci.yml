@@ -23,6 +23,11 @@ on:
         type: boolean
         required: false
         default: false
+      prepare_48_assembly_cache:
+        description: 'Only for signed x64 MSI, opt-in create missing Windows assembly cache in isolated prefix'
+        type: boolean
+        required: false
+        default: false
       original_48_profile:
         description: 'Original signed 4.8 setup reported Windows profile; Win10 is distinct experiment'
         type: string
@@ -1008,8 +1013,14 @@ jobs:
       - name: Extract authenticated original .NET 4.8 x64 MSI and MSP after genuine CLR4.0
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && inputs.try_48_msi && !inputs.try_48_intermediate && !inputs.try_48_direct
         shell: bash
+        env:
+          SWCOMPAT_PREPARE_ASSEMBLY_CACHE: ${{ inputs.prepare_48_assembly_cache }}
         run: |
           set -euo pipefail
+          cache_flags=()
+          if [[ "$SWCOMPAT_PREPARE_ASSEMBLY_CACHE" == "true" ]]; then
+            cache_flags+=(--prepare-assembly-cache)
+          fi
           python3 -m scripts.netfx40_to_48_signed_msi \
             --wine "$SWCOMPAT_WINE" \
             --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
@@ -1020,6 +1031,7 @@ jobs:
             --service-fixture build/netfx48_scm_service_probe.exe \
             --native40-report build/netfx40-msxml3-restart.json \
             --output build/netfx40-to-48-signed-msi.json \
+            "${cache_flags[@]}" \
             --agree-disposable-prefix
       - name: Gate 4.8.1 on authenticated original MSI with real x64 .NET 4.8 execution
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && inputs.try_48_msi && !inputs.try_48_intermediate && !inputs.try_48_direct
@@ -1207,7 +1219,7 @@ jobs:
                   from scripts.netfx40_to_48_signed_msi import validate as valid_msi
                   msi = json.loads(msi_path.read_text(encoding="ascii"))
                   assert valid_msi(msi)
-                  for key in ("status", "win7", "extract", "media", "install",
+                  for key in ("status", "win7", "cache_policy", "cache_state", "extract", "media", "install",
                               "patch", "win10", "restart", "clr64_changed",
                               "release", "loader", "native_only_managed",
                               "native48_candidate"):
