@@ -1187,6 +1187,16 @@ jobs:
                                "verb_stages", "verb_last_stage",
                                "timeout_processes"):
                       out.write(f"intermediate_48_{name}: **{step[name]}**\n\n")
+              msi_path = Path("build/netfx40-to-48-signed-msi.json")
+              if msi_path.is_file():
+                  from scripts.netfx40_to_48_signed_msi import validate as valid_msi
+                  msi = json.loads(msi_path.read_text(encoding="ascii"))
+                  assert valid_msi(msi)
+                  for key in ("status", "win7", "extract", "media", "install",
+                              "patch", "win10", "restart", "clr64_changed",
+                              "release", "loader", "native_only_managed",
+                              "native48_candidate"):
+                      out.write(f"signed_msi_48_{key}: **{msi[key]}**\n\n")
               direct_path = Path("build/netfx40-to-48-direct.json")
               if direct_path.is_file():
                   from scripts.netfx40_to_48_direct import validate as valid_direct
@@ -1376,8 +1386,9 @@ jobs:
                       intermediate_ready = intermediate["native48_candidate"]
                   direct_path = Path("build/netfx40-to-48-direct.json")
                   direct_required = os.environ.get("SWCOMPAT_TRY_48_DIRECT") == "true"
-                  assert not (direct_required and intermediate_required), (
-                      "Cannot mix original and Winetricks native 4.8 prerequisites")
+                  msi_required = os.environ.get("SWCOMPAT_TRY_48_MSI") == "true"
+                  assert sum((direct_required, intermediate_required, msi_required)) <= 1, (
+                      "Cannot mix original signed MSI, bootstrapper or Winetricks 4.8")
                   assert direct_path.is_file() == direct_required, (
                       "Requested signed original 4.8 experiment was not measured")
                   if direct_path.is_file():
@@ -1385,15 +1396,24 @@ jobs:
                       direct = json.loads(direct_path.read_text(encoding="ascii"))
                       assert valid_direct(direct)
                       intermediate_ready = direct["native48_candidate"]
+                  msi_path = Path("build/netfx40-to-48-signed-msi.json")
+                  assert msi_path.is_file() == msi_required, (
+                      "Requested original signed 4.8 MSI experiment not measured")
+                  if msi_path.is_file():
+                      from scripts.netfx40_to_48_signed_msi import validate as valid_msi
+                      msi = json.loads(msi_path.read_text(encoding="ascii"))
+                      assert valid_msi(msi)
+                      intermediate_ready = msi["native48_candidate"]
                   upgrade_path = Path("build/netfx40-to-481-upgrade.json")
                   assert upgrade_path.is_file() == (
                       not host_only and (
-                          (not intermediate_required and not direct_required)
+                          (not intermediate_required and not direct_required and not msi_required)
                           or intermediate_ready)), (
                       "4.8.1 is forbidden in host-only mode and requires verified 4.8 otherwise")
                   if host_only:
-                      assert not intermediate_required and not direct_required
+                      assert not intermediate_required and not direct_required and not msi_required
                       assert not intermediate_path.is_file() and not direct_path.is_file()
+                      assert not msi_path.is_file()
                       assert not upgrade_path.is_file(), "Host-only must skip 4.8.1"
                   if upgrade_path.is_file():
                       upgraded = json.loads(upgrade_path.read_text(encoding="utf-8"))
