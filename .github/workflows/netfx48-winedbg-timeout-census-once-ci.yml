@@ -1,0 +1,33 @@
+name: One-shot .NET 4.8 Winetricks macOS hang process census
+
+# Gcenx documents winedbg interfering with .NET installation in macOS Wine.
+# Previous native Microsoft CLR4.0 -> Winetricks dotnet48 on pinned 11.21
+# lasted 840 seconds, then timed out without changing CLR64/Release.
+# Snapshot the Winetricks POSIX process group immediately before cleanup.
+# Publish only fixed process categories; no PID, argv, full command line,
+# Microsoft binaries/logs, installer original text, or unredacted paths.
+# Read-only observation never terminates or modifies unrelated processes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netfx48-winedbg-timeout-census-once-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: netfx48-winedbg-timeout-census-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  authenticated-dotnet48-hang-processes:
+    name: Locate Wine debugger versus installer hang in original .NET4.8 recipe
+    uses: ./.github/workflows/netfx40-legacy-ci.yml
+    with:
+      wine_baseline: '11.21'
+      use_macos26_runner: true
+      host_provenance_only: false
+      try_48_payload_host: false
+      try_48_direct: false
+      try_48_intermediate: true
