@@ -48,7 +48,10 @@ class NativeSCMProbeTests(unittest.TestCase):
         for value, expected in variants:
             with self.subTest(category=expected, value=value[:50]):
                 self.assertEqual(scm.parse(value, 0), scm.blank(expected))
-        self.assertEqual(scm.parse(packet(), 5), scm.blank("NONZERO_EXIT"))
+        self.assertEqual(scm.parse(packet(), 5), scm.blank("NONZERO_WITH_REPORT"))
+        self.assertEqual(scm.parse(b"", 5), scm.blank("NONZERO_WITHOUT_REPORT"))
+        self.assertEqual(scm.parse(b"WINE FAILED", 53),
+                         scm.blank("NONZERO_WITHOUT_REPORT"))
         self.assertEqual(scm.parse(b"", 0), scm.blank("EMPTY_OUTPUT"))
         self.assertEqual(scm.parse(packet() + b"x" * 513, 0),
                          scm.blank("OVERSIZED_OUTPUT"))
@@ -59,7 +62,8 @@ class NativeSCMProbeTests(unittest.TestCase):
     def test_finite_failure_categories_never_invent_service_presence(self):
         for status in ("NONZERO_EXIT", "EMPTY_OUTPUT", "OVERSIZED_OUTPUT",
                        "MALFORMED", "TIMEOUT", "PROCESS_FAILED", "NONASCII_OUTPUT",
-                       "UNEXPECTED_TEXT", "INVALID_FIELD", "INCOMPLETE_FIELDS"):
+                       "UNEXPECTED_TEXT", "INVALID_FIELD", "INCOMPLETE_FIELDS",
+                       "NONZERO_WITH_REPORT", "NONZERO_WITHOUT_REPORT"):
             with self.subTest(status=status):
                 outcome = scm.blank(status)
                 self.assertTrue(scm.valid(outcome))
