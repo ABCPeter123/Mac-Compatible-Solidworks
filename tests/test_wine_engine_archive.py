@@ -72,6 +72,55 @@ class PinnedWineRuntimeArchiveTests(TestCase):
             with self.assertRaises(ValueError):
                 w.verify(path)
 
+    def test_authentic_macos_appledouble_regular_metadata_is_ignored_by_validator(self):
+        with TemporaryDirectory() as td:
+            path = Path(td) / "wiage-runtime.tar.gz"
+            with tarfile.open(path, "w:gz") as archive:
+                for name in ("._wiage", "wiage/._bin", "wiage/bin/._wine"):
+                    member = tarfile.TarInfo(name)
+                    member.size = 2
+                    archive.addfile(member, io.BytesIO(b"MF"))
+                for name in ("wiage/bin/wine", "wiage/bin/wineserver"):
+                    member = tarfile.TarInfo(name)
+                    member.size = 2
+                    archive.addfile(member, io.BytesIO(b"MZ"))
+            self.assertEqual(w.verify(path), {"status": "SAFE", "files_checked": 5})
+            for bad_name in ("._other", "../._wiage",
+                             "wiage/../._wiage", "wiage/bin/../._wine"):
+                with tarfile.open(path, "w:gz") as archive:
+                    member = tarfile.TarInfo(bad_name)
+                    member.size = 2
+                    archive.addfile(member, io.BytesIO(b"MF"))
+                    for name in ("wiage/bin/wine", "wiage/bin/wineserver"):
+                        member = tarfile.TarInfo(name)
+                        member.size = 2
+                        archive.addfile(member, io.BytesIO(b"MZ"))
+                with self.subTest(bad_name=bad_name), self.assertRaises(ValueError):
+                    w.verify(path)
+            for type_code in (tarfile.SYMTYPE, tarfile.LNKTYPE,
+                              tarfile.DIRTYPE, tarfile.CHRTYPE):
+                with tarfile.open(path, "w:gz") as archive:
+                    meta = tarfile.TarInfo("._wiage")
+                    meta.type = type_code
+                    meta.linkname = "../outside"
+                    archive.addfile(meta)
+                    for name in ("wiage/bin/wine", "wiage/bin/wineserver"):
+                        member = tarfile.TarInfo(name)
+                        member.size = 2
+                        archive.addfile(member, io.BytesIO(b"MZ"))
+                with self.subTest(type_code=type_code), self.assertRaises(ValueError):
+                    w.verify(path)
+            with tarfile.open(path, "w:gz") as archive:
+                meta = tarfile.TarInfo("._wiage")
+                meta.size = w.MAX_APPLEDOUBLE + 1
+                archive.addfile(meta, io.BytesIO(b"0" * meta.size))
+                for name in ("wiage/bin/wine", "wiage/bin/wineserver"):
+                    member = tarfile.TarInfo(name)
+                    member.size = 2
+                    archive.addfile(member, io.BytesIO(b"MZ"))
+            with self.assertRaises(ValueError):
+                w.verify(path)
+
     def test_rejects_traversal_absolute_special_and_escape_links(self):
         with TemporaryDirectory() as td:
             path = Path(td) / "wiage-runtime.tar.gz"
