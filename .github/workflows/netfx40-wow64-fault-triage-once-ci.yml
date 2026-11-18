@@ -1,0 +1,32 @@
+name: One-shot Apple Silicon WoW64 x86 native and Microsoft CLR exception triage
+
+# Bug 60494 concerns macOS Rosetta 32-bit WoW64 mode-switch crashes/hangs.
+# No signed 4.8 MSI or 4.8.1 installer is started. Only fixed self-authored
+# Windows x86 native and 32BITREQUIRED managed executables are exercised.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netfx40-wow64-fault-triage-once-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: original-microsoft-clr4-wow64-fault-triage-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  original-x86-wow64-fault-triage:
+    name: Compare original Windows x86 process and native Microsoft managed CLR
+    uses: ./.github/workflows/netfx40-legacy-ci.yml
+    with:
+      wine_baseline: '11.21'
+      use_macos26_runner: true
+      host_provenance_only: true
+      try_wow64_managed: true
+      try_wow64_faults: true
+      try_48_msi: false
+      try_48_direct: false
+      try_48_intermediate: false
+      try_48_payload_host: false

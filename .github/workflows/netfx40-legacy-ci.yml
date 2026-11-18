@@ -18,6 +18,11 @@ on:
         type: boolean
         required: false
         default: false
+      try_wow64_faults:
+        description: 'Collect private bounded exception categories for x86 managed/native WoW64'
+        type: boolean
+        required: false
+        default: false
       try_wow64_managed:
         description: 'Verify native Microsoft CLR4 executes x86 managed code under Wine WoW64'
         type: boolean
@@ -92,6 +97,11 @@ on:
         default: false
       try_48_direct:
         description: 'Opt-in original signed Microsoft 4.8 offline upgrade after real 4.0, before 4.8.1'
+        type: boolean
+        required: false
+        default: false
+      try_wow64_faults:
+        description: 'Opt in native vs managed x86 WoW64 exception triage'
         type: boolean
         required: false
         default: false
@@ -284,6 +294,16 @@ jobs:
           }
           $csc = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
           if (!(Test-Path $csc)) { throw "Microsoft C# compiler missing" }
+          $vcvars32 = Join-Path $vs "VC\Auxiliary\Build\vcvars32.bat"
+          if (!(Test-Path -LiteralPath $vcvars32)) { throw "MSVC x86 compiler environment missing" }
+          $cmdText = "@echo off`r`ncall `"$vcvars32`"`r`ncl /nologo /W4 /O2 /Fe:build\netfx40_wow64_native_smoke.exe probes\netfx40_wow64_native_smoke.c`r`nexit /b %errorlevel%`r`n"
+          Set-Content -LiteralPath build/compile-netfx40-wow64-x86.cmd -Value $cmdText -Encoding ascii
+          & cmd.exe /d /c build\compile-netfx40-wow64-x86.cmd
+          if ($LASTEXITCODE -ne 0) { throw "Native Windows 32-bit process control compilation failed" }
+          $x86Native = & build\netfx40_wow64_native_smoke.exe
+          if ($LASTEXITCODE -ne 0 -or $x86Native -notcontains 'SWCOMPAT_WOW64_NATIVE_RESULT=PASS') {
+            throw "Native Windows x86 process control failed on Windows"
+          }
           & $csc /nologo /platform:x86 /target:exe /reference:System.Core.dll /reference:System.Xml.dll /out:build\netfx40_wow64_managed_probe.exe probes\netfx481_runtime_probe.cs
           if ($LASTEXITCODE -ne 0) { throw "Authenticated x86 Microsoft managed WoW64 fixture compilation failed" }
           & build\netfx40_wow64_managed_probe.exe | Out-Null
@@ -516,6 +536,7 @@ jobs:
             build/netfx48_scm_service_probe.exe
             build/netfx481_runtime_probe.exe
             build/netfx40_wow64_managed_probe.exe
+            build/netfx40_wow64_native_smoke.exe
             build/netfx481_clr_load.exe
             build/netfx40_win32_launch.exe
             build/netfx481_win32_launch.exe
@@ -879,6 +900,29 @@ jobs:
               with open(os.environ["GITHUB_ENV"], "a") as f:
                   f.write("SWCOMPAT_NATIVE40_READY=yes\n")
           print("Original native .NET 4.0 prerequisites passed:", r["persistent_native_managed"])
+          PY
+      - name: Diagnose new WoW64 x86 process startup versus original Microsoft managed activation
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_wow64_managed && inputs.try_wow64_faults
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx40_wow64_fault_triage import inspect, valid
+          wine = Path(os.environ["SWCOMPAT_WINE"])
+          prefix = Path(os.environ["RUNNER_TEMP"]) / "netfx40-msxml3-prefix"
+          native = Path("build/netfx40_wow64_native_smoke.exe").resolve()
+          managed = Path("build/netfx40_wow64_managed_probe.exe").resolve()
+          outcome = inspect(wine, prefix, native, managed)
+          assert valid(outcome)
+          if any(outcome[key] == "TIMED_OUT_CLEANUP_DENIED"
+                 for key in ("native_run", "managed_run")):
+              raise RuntimeError("Unsafe WoW64 process group cleanup; stop Wine trials")
+          Path("build/netfx40-wow64-faults.json").write_text(
+              json.dumps(outcome, sort_keys=True), encoding="ascii")
+          for key, value in outcome.items():
+              print("Native original CLR4 WoW64 x86 diagnostic", key, value)
           PY
       - name: Verify native Microsoft CLR4 x86 managed execution under Wine WoW64
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_wow64_managed
@@ -1332,6 +1376,16 @@ jobs:
                                 f"{msi['scm_postflight']['states'][service]}**\n\n")
               x86_path = Path("build/netfx40-wow64-managed.json")
               if x86_path.is_file():
+                  from scripts.netfx40_wow64_fault_triage import valid as valid_faults
+                  fault_path = Path("build/netfx40-wow64-faults.json")
+                  if fault_path.is_file():
+                      faults = json.loads(fault_path.read_text(encoding="ascii"))
+                      assert valid_faults(faults)
+                      for key in ("native_run", "native_seh", "native_control",
+                                  "managed_run", "managed_seh", "managed_family",
+                                  "managed_execution"):
+                          out.write(f"native_microsoft_wow64_fault_{key}: **"
+                                    f"{faults[key]}**\n\n")
                   from scripts.netfx40_wow64_managed_probe import valid as valid_x86
                   x86 = json.loads(x86_path.read_text(encoding="ascii"))
                   assert valid_x86(x86)
