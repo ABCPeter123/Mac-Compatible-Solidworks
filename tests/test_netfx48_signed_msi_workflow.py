@@ -417,7 +417,7 @@ class SignedMSIGates(TestCase):
                           "try_48_msi: true", "SOLIDWORKS installer",
                           "actions/upload-artifact", "workflow_dispatch"):
             self.assertNotIn(forbidden, control)
-        self.assertIn("Original Microsoft software", control)
+        self.assertIn("original Microsoft software", control)
 
     def test_reusable_only_allows_msi_when_signed_media_authenticated(self):
         workflow = LEGACY.read_text(encoding="utf-8")
