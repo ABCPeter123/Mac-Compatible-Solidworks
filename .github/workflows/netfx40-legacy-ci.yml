@@ -850,8 +850,8 @@ jobs:
             # ._wiage and potentially wiage/**/._* host metadata entries.
             # Validation permits only small regular sidecars. Never extract
             # them, especially ._wiage outside the isolated wiage root.
-            tar --exclude='._*' --exclude='*/._*' -xzf "$ARCHIVE" \
-              -C "$RUNNER_TEMP/msxml3-wine-build"
+            COPYFILE_DISABLE=1 tar --exclude='._*' --exclude='*/._*' \
+              -xzf "$ARCHIVE" -C "$RUNNER_TEMP/msxml3-wine-build"
             test ! -e "$RUNNER_TEMP/msxml3-wine-build/._wiage"
             WINE_BIN="$RUNNER_TEMP/msxml3-wine-build/wiage/bin/wine"
             test -e "$WINE_BIN" && test -x "$WINE_BIN"
