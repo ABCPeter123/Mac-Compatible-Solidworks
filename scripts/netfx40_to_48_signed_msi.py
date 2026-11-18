@@ -28,6 +28,7 @@ from scripts.netfx48_msi_service_evidence import (
     classify as classify_service_evidence,
     valid as valid_service_evidence,
 )
+from scripts.netfx48_assembly_cache import inspect_assembly_cache, STATES as CACHE_STATES
 from scripts.netfx481_clr_load import run as load_clr, STATUSES as LOAD_STATES
 from scripts.netfx48_scm_service_probe import (
     measure as measure_scm, selftest as selftest_scm,
@@ -149,6 +150,7 @@ def blank() -> dict:
         "install_log": blank_msi_log(),
         "scm_preflight": blank_scm(), "scm_postflight": blank_scm(),
         "scm_startup": "NOT_RUN",
+        "cache_policy": "OBSERVE", "cache_state": "NOT_RUN",
         "win10": "NOT_RUN", "restart": "NOT_RUN",
         "clr64_changed": False, "release": "UNAVAILABLE",
         "loader": "NOT_VERIFIED", "native_only_managed": "NOT_VERIFIED",
@@ -168,6 +170,12 @@ def validate(result: object) -> bool:
             or not valid_scm(result["scm_preflight"])
             or not valid_scm(result["scm_postflight"])
             or result["scm_startup"] not in SELFTEST_STATUSES
+            or result["cache_policy"] not in {"OBSERVE", "PREPARE"}
+            or result["cache_state"] not in CACHE_STATES
+            or (result["cache_policy"] != "PREPARE"
+                and result["cache_state"] == "CREATED")
+            or (result["install"] != "NOT_RUN"
+                and result["cache_state"] not in {"PRESENT", "MISSING", "CREATED"})
             or (result["scm_startup"] != "PASS"
                 and (result["scm_preflight"] != blank_scm()
                      or result["scm_postflight"] != blank_scm()))
@@ -256,7 +264,10 @@ def private_run(args: list[str], env: dict[str, str], cwd: Path,
 
 def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
             loader: Path, managed: Path, native40: dict, *,
-            service_fixture: Path | None = None) -> dict:
+            service_fixture: Path | None = None,
+            prepare_assembly_cache: bool = False) -> dict:
+    if type(prepare_assembly_cache) is not bool:
+        raise ValueError("Cache preparation must be explicitly boolean")
     if os.name == "nt" or any(p.is_symlink() for p in (
             wine, prefix, installer, digest, loader, managed)):
         raise ValueError("Only isolated native Microsoft 4.0 Wine tests permitted")
@@ -285,6 +296,19 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
         raise ValueError("Original signed MSI extraction must start with empty directory")
     env = _env(wine, prefix)
     win7 = _set_winver(wine, prefix, env, "win7")
+    cache_policy = "PREPARE" if prepare_assembly_cache else "OBSERVE"
+    cache_state = "NOT_RUN"
+    if win7 == "APPLIED":
+        cache_state = inspect_assembly_cache(prefix, prepare=prepare_assembly_cache)
+        if cache_state in {"UNSAFE", "FAILED"}:
+            # Do not launch another original Microsoft setup if its one
+            # target directory cannot be independently authenticated.
+            result = {**blank(), "status": "MEASURED",
+                      "native40_persistent": True, "win7": win7,
+                      "cache_policy": cache_policy, "cache_state": cache_state}
+            if not validate(result):
+                raise ValueError("Invalid fail-closed NGen cache report")
+            return result
 
     # Compare native SCM before and after MSI under the same Win7 profile.
     # A Windows-version switch must not confound the service transition.
@@ -346,7 +370,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                   "patch": patched, "install_log": install_log,
                   "scm_preflight": scm_preflight,
                   "scm_postflight": scm_postflight,
-                  "scm_startup": scm_startup}
+                  "scm_startup": scm_startup,
+                  "cache_policy": cache_policy, "cache_state": cache_state}
         if not validate(result):
             raise ValueError("Invalid fail-closed signed MSI timeout report")
         return result
@@ -361,6 +386,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
         "install": installed, "patch": patched, "install_log": install_log,
         "scm_preflight": scm_preflight, "scm_postflight": scm_postflight,
         "scm_startup": scm_startup,
+        "cache_policy": cache_policy, "cache_state": cache_state,
         "win10": win10, "restart": restart,
         "clr64_changed": (before["CLR64"][1] != after["CLR64"][1]
                           and after["CLR64"][0] == "PE_AMD64"),
@@ -389,12 +415,14 @@ def main(argv: list[str] | None = None) -> int:
                 "managed", "native40-report", "output"):
         parser.add_argument("--" + key, required=True, type=Path)
     parser.add_argument("--service-fixture", type=Path)
+    parser.add_argument("--prepare-assembly-cache", action="store_true")
     parser.add_argument("--agree-disposable-prefix", action="store_true", required=True)
     a = parser.parse_args(argv)
     result = inspect(a.wine, a.prefix, a.installer, a.sha256_file,
                      a.loader, a.managed,
                      json.loads(a.native40_report.read_text(encoding="utf-8")),
-                     service_fixture=a.service_fixture)
+                     service_fixture=a.service_fixture,
+                     prepare_assembly_cache=a.prepare_assembly_cache)
     if a.output.is_symlink():
         raise ValueError("Linked experiment report")
     a.output.parent.mkdir(parents=True, exist_ok=True)
