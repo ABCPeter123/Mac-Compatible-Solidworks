@@ -140,12 +140,24 @@ class OriginalSignedMSITests(TestCase):
                 b"some vendor name and private installation path\\n")
             result = p.classify_private_msi_log(root)
             self.assertEqual(result, {"status": "CLASSIFIED", "failure": True,
-                                      "action": "SERVICE", "errors": ["EXTERNAL_ACTION_FAILURE"]})
+                                      "action": "SERVICE",
+                                      "last_started_action": "UNKNOWN",
+                                      "errors": ["EXTERNAL_ACTION_FAILURE"]})
             self.assertTrue(p.valid_msi_log(result))
             self.assertFalse(log.exists())
             self.assertNotIn("private installation path", str(result))
             self.assertNotIn("some vendor name", str(result))
 
+            log.write_bytes(
+                b"Action start 12:22:23: InstallFiles.\\n"
+                b"Action start 12:23:10: InstallServices.\\n")
+            pending = p.classify_private_msi_log(root)
+            self.assertEqual(pending["action"], "UNKNOWN")
+            self.assertEqual(pending["last_started_action"], "SERVICE")
+            self.assertFalse(pending["failure"])
+            self.assertTrue(p.valid_msi_log(pending))
+            self.assertEqual(p.last_started_action(
+                b"Doing action: MsiInstallService"), "SERVICE")
             log.write_bytes(b"z" * (p.MAX_FILE_BYTES + 1))
             self.assertEqual(p.classify_private_msi_log(root)["status"], "TOO_LARGE")
             self.assertFalse(log.exists())
