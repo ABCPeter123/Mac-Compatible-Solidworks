@@ -59,9 +59,9 @@ def verify(path: Path) -> dict[str, object]:
                             or not _safe_name(posixpath.normpath(target))):
                         raise ValueError("Wine runtime link escapes archive root")
                 if name == WINE:
-                    has_wine = member.isfile() or member.issym()
+                    has_wine = member.isfile() or member.issym() or member.islnk()
                 elif name == SERVER:
-                    has_server = member.isfile() or member.issym()
+                    has_server = member.isfile() or member.issym() or member.islnk()
     except (OSError, EOFError, tarfile.TarError) as exc:
         raise ValueError("Unreadable pinned Wine runtime archive") from exc
     if not (has_wine and has_server):
