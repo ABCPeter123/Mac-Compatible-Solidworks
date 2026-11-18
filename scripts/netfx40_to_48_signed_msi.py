@@ -36,8 +36,8 @@ PRIVATE_LOG = "netfx48-msi-install-private.log"
 # An MSI hang may have no Return value 3. Retain the last *action class*,
 # never its raw name, timestamp, command, vendor log line, or package path.
 ACTION_STARTED = re.compile(
-    r"(?i)\\b(?:Action start\\s+\\d{1,2}:\\d{2}:\\d{2}:\\s*|"
-    r"Doing action:\\s*)([a-z][a-z0-9_. -]{0,90})\\.?"
+    r"(?i)\b(?:Action start\s+\d{1,2}:\d{2}:\d{2}:\s*|"
+    r"Doing action:\s*)([a-z][a-z0-9_. -]{0,90})\.?"
 )
 
 
