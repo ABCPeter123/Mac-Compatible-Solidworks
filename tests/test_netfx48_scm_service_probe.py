@@ -61,7 +61,7 @@ class NativeSCMProbeTests(unittest.TestCase):
         self.assertEqual(scm.parse(b"WINE FAILED", 53),
                          scm.blank("NONZERO_WITHOUT_REPORT"))
         self.assertEqual(scm.parse(b"", 0), scm.blank("EMPTY_OUTPUT"))
-        self.assertEqual(scm.parse(packet() + b"x" * 513, 0),
+        self.assertEqual(scm.parse(packet() + b"x" * (scm.MAX_BYTES + 1), 0),
                          scm.blank("OVERSIZED_OUTPUT"))
         self.assertFalse(scm.valid(dict(scm.blank(), original_log="secret")))
         self.assertFalse(scm.valid(dict(scm.blank(), services={
