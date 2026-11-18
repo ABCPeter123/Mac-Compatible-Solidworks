@@ -84,9 +84,13 @@ int main(int argc, char **argv) {
     printf("SWCOMPAT_SCM_API_STATUS=%s\n",
            manager ? "COMPLETE" : "UNAVAILABLE");
     for (i = 0; i < sizeof(targets) / sizeof(targets[0]); ++i) {
-        SERVICE_INFO info = manager
-            ? service_information(manager, targets[i].wide_name)
-            : (SERVICE_INFO){"UNKNOWN", "NOT_APPLICABLE"};
+        SERVICE_INFO info;
+        if (manager) {
+            info = service_information(manager, targets[i].wide_name);
+        } else {
+            info.presence = "UNKNOWN";
+            info.state = "NOT_APPLICABLE";
+        }
         printf("SWCOMPAT_SCM_API_%s=%s\n", targets[i].field, info.presence);
         printf("SWCOMPAT_SCM_STATE_%s=%s\n", targets[i].field, info.state);
     }
