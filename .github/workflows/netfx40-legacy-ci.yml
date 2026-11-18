@@ -28,6 +28,11 @@ on:
         type: boolean
         required: false
         default: false
+      pause_native_ngen_queue:
+        description: 'Opt-in real Microsoft ngen queue pause/continue around original signed MSI'
+        type: boolean
+        required: false
+        default: false
       signed_msi_timeout_seconds:
         description: 'Allowlisted genuine signed MSI NGen experiment timeout (seconds)'
         type: number
@@ -97,6 +102,11 @@ on:
         default: false
       try_48_msi:
         description: 'Test extracted original signed 4.8 x64 MSI and MSP after native 4.0'
+        type: boolean
+        required: false
+        default: false
+      pause_native_ngen_queue:
+        description: 'Opt-in original Microsoft NGen queue pause before signed MSI'
         type: boolean
         required: false
         default: false
@@ -1066,9 +1076,13 @@ jobs:
         env:
           SWCOMPAT_PREPARE_ASSEMBLY_CACHE: ${{ inputs.prepare_48_assembly_cache }}
           SWCOMPAT_SIGNED_MSI_TIMEOUT: ${{ inputs.signed_msi_timeout_seconds }}
+          SWCOMPAT_PAUSE_NGEN_QUEUE: ${{ inputs.pause_native_ngen_queue }}
         run: |
           set -euo pipefail
           cache_flags=()
+          if [[ "$SWCOMPAT_PAUSE_NGEN_QUEUE" == "true" ]]; then
+            cache_flags+=(--pause-native-ngen-queue)
+          fi
           if [[ "$SWCOMPAT_PREPARE_ASSEMBLY_CACHE" == "true" ]]; then
             cache_flags+=(--prepare-assembly-cache)
           fi
@@ -1293,6 +1307,13 @@ jobs:
                                 "x64_growth_windows", "x86_last", "x64_last"):
                       out.write(f"signed_msi_48_ngen_progress_{field}: **"
                                 f"{msi['ngen_progress'][field]}**\n\n")
+                  from scripts.netfx48_ngen_queue_control import valid as valid_queue
+                  assert valid_queue(msi["ngen_queue"])
+                  out.write(f"signed_msi_48_ngen_queue_policy: **{msi['ngen_queue_policy']}**\n\n")
+                  for field in ("status", "x64_pause", "x86_pause",
+                                "x64_continue", "x86_continue"):
+                      out.write(f"signed_msi_48_ngen_queue_{field}: **"
+                                f"{msi['ngen_queue'][field]}**\n\n")
                   from scripts.netfx48_scm_service_probe import FIELDS as scm_fields
                   out.write(f"signed_msi_48_scm_startup: **{msi['scm_startup']}**\n\n")
                   out.write(f"signed_msi_48_scm_status: **{msi['scm_preflight']['status']}**\n\n")
