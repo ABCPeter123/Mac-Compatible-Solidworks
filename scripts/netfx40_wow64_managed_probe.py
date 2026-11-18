@@ -33,6 +33,8 @@ def valid(result: object) -> bool:
         return result == blank()
     if result["status"] == "INVALID_IMAGE":
         return result["family"] == "NOT_RUN" and result["managed"] == "NOT_RUN"
+    if result["family"] == "NOT_RUN" or result["managed"] == "NOT_RUN":
+        return False
     return ((result["status"] == "MANAGED_X86_PASS") ==
             (result["family"] == "MICROSOFT_CLR_CANDIDATE"
              and result["managed"] == "PASS"))
