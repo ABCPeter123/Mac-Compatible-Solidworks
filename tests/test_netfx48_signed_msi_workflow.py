@@ -207,6 +207,30 @@ class SignedMSIGates(TestCase):
         self.assertIn("flags & 0x2", module)
         self.assertNotIn("WINEDLLOVERRIDES=mscoree=b", module)
 
+    def test_native_microsoft_ngen_queue_control_one_shot_is_narrow_and_authenticated(self):
+        path = ROOT / ".github/workflows/netfx48-ngen-queue-pause-once-ci.yml"
+        caller = path.read_text(encoding="utf-8")
+        for token in ("branches: [main]", "pause_native_ngen_queue: true",
+                      "try_48_msi: true", "prepare_48_assembly_cache: true",
+                      "signed_msi_timeout_seconds: 420", "try_48_direct: false",
+                      "try_48_intermediate: false", "try_48_payload_host: false",
+                      "use_macos26_runner: true", "wine_baseline: '11.21'",
+                      "cancel-in-progress: false"):
+            self.assertIn(token, caller)
+        self.assertNotIn("actions/upload-artifact", caller)
+        reusable = LEGACY.read_text(encoding="utf-8")
+        self.assertIn("pause_native_ngen_queue:", reusable)
+        self.assertIn("SWCOMPAT_PAUSE_NGEN_QUEUE", reusable)
+        self.assertIn("--pause-native-ngen-queue", reusable)
+        self.assertIn("signed_msi_48_ngen_queue_{field}", reusable)
+        module = (ROOT / "scripts/netfx48_ngen_queue_control.py").read_text(
+            encoding="utf-8")
+        self.assertIn('"mscoree=n;clr=n"', module)
+        self.assertIn('"queue", operation', module)
+        self.assertNotIn("CreateServiceW", module)
+        self.assertNotIn("StartServiceW", module)
+        self.assertNotIn("ChangeServiceConfigW", module)
+
     def test_reusable_only_allows_msi_when_signed_media_authenticated(self):
         workflow = LEGACY.read_text(encoding="utf-8")
         self.assertEqual(workflow.count("      try_48_msi:"), 2)

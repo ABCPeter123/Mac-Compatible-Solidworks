@@ -31,6 +31,10 @@ from scripts.netfx48_msi_service_evidence import (
     valid as valid_service_evidence,
 )
 from scripts.netfx48_assembly_cache import inspect_assembly_cache, STATES as CACHE_STATES
+from scripts.netfx48_ngen_queue_control import (
+    blank as blank_queue, valid as valid_queue,
+    prepare as prepare_queue, resume as resume_queue,
+)
 from scripts.netfx48_ngen_progress import (
     NgenProgress, blank as blank_progress,
     valid as valid_progress, SAMPLE_INTERVAL,
@@ -162,6 +166,7 @@ def blank() -> dict:
         "install": "NOT_RUN", "patch": "NOT_RUN",
         "install_log": blank_msi_log(), "ngen_log": blank_ngen(),
         "ngen_progress": blank_progress(),
+        "ngen_queue_policy": "OFF", "ngen_queue": blank_queue(),
         "scm_preflight": blank_scm(), "scm_postflight": blank_scm(),
         "scm_startup": "NOT_RUN",
         "cache_policy": "OBSERVE", "cache_state": "NOT_RUN",
@@ -185,6 +190,16 @@ def validate(result: object) -> bool:
             or not valid_msi_log(result["install_log"])
             or not valid_ngen(result["ngen_log"])
             or not valid_progress(result["ngen_progress"])
+            or type(result["ngen_queue_policy"]) is not str
+            or result["ngen_queue_policy"] not in {"OFF", "PAUSE"}
+            or not valid_queue(result["ngen_queue"])
+            or (result["ngen_queue_policy"] == "OFF"
+                and result["ngen_queue"] != blank_queue())
+            or (result["ngen_queue"]["status"] == "DIRTY"
+                and result["win10"] != "NOT_RUN")
+            or (result["ngen_queue_policy"] == "PAUSE"
+                and result["install"] != "NOT_RUN"
+                and result["ngen_queue"]["status"] not in {"COMPLETE", "INCOMPLETE", "DIRTY"})
             or (result["install"] == "NOT_RUN"
                 and result["ngen_progress"] != blank_progress())
             or (result["install"] in {"NOT_RUN", "TIMED_OUT_CLEANUP_DENIED"}
@@ -222,6 +237,8 @@ def validate(result: object) -> bool:
         result["native40_persistent"] and result["win7"] == "APPLIED"
         and result["extract"] == "SUCCESS" and result["media"] == "VERIFIED"
         and result["install"] == "SUCCESS" and result["patch"] == "SUCCESS"
+        and (result["ngen_queue_policy"] == "OFF"
+             or result["ngen_queue"]["status"] == "COMPLETE")
         and result["win10"] == "APPLIED" and result["restart"] == "COMPLETED"
         and result["clr64_changed"] and result["release"] == "NETFX48_RANGE"
         and result["loader"] == "LOADED" and result["native_only_managed"] == "PASS"
@@ -302,7 +319,10 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
             loader: Path, managed: Path, native40: dict, *,
             service_fixture: Path | None = None,
             prepare_assembly_cache: bool = False,
-            msi_timeout_seconds: int = 420) -> dict:
+            msi_timeout_seconds: int = 420,
+            pause_native_ngen_queue: bool = False) -> dict:
+    if type(pause_native_ngen_queue) is not bool:
+        raise ValueError("Genuine NGen queue pause must be explicit")
     if type(msi_timeout_seconds) is not int or msi_timeout_seconds not in MSI_TIMEOUTS:
         raise ValueError("Unsupported authenticated MSI timeout budget")
     if type(prepare_assembly_cache) is not bool:
@@ -345,7 +365,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
             result = {**blank(), "status": "MEASURED",
                       "native40_persistent": True, "win7": win7,
                       "cache_policy": cache_policy, "cache_state": cache_state,
-                      "msi_timeout_seconds": msi_timeout_seconds}
+                      "msi_timeout_seconds": msi_timeout_seconds,
+                      "ngen_queue_policy": "PAUSE" if pause_native_ngen_queue else "OFF"}
             if not validate(result):
                 raise ValueError("Invalid fail-closed NGen cache report")
             return result
@@ -367,6 +388,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
     install_log = blank_msi_log()
     ngen_log = blank_ngen()
     ngen_progress = blank_progress()
+    queue_report = blank_queue()
+    queue_policy = "PAUSE" if pause_native_ngen_queue else "OFF"
     scm_postflight = blank_scm()
     try:
         if win7 == "APPLIED":
@@ -378,7 +401,9 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
             )
             if extracted == "SUCCESS":
                 media = verify_extracted_media(root)
-            if media == "VERIFIED":
+            if media == "VERIFIED" and pause_native_ngen_queue:
+                queue_report = prepare_queue(wine, prefix, env, private_run)
+            if media == "VERIFIED" and (not pause_native_ngen_queue or queue_report["status"] == "PREPARED"):
                 # Only new NGen log bytes after original MSI startup can
                 # contribute bounded signals. Pre-existing CLR4 logs cannot.
                 ngen_start = ngen_baseline(prefix)
@@ -402,6 +427,9 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                 if (service_fixture is not None and scm_startup == "PASS"
                         and installed != "TIMED_OUT_CLEANUP_DENIED"):
                     scm_postflight = measure_scm(wine, prefix, service_fixture)
+                # Keep both signed framework packages in the same native
+                # queue-pause servicing window, per Microsoft's NGen guidance.
+                # The custom MSI and MSP operations remain unmodified.
                 if installed == "SUCCESS":
                     patched = private_run(
                         [str(wine), "msiexec.exe", "/p",
@@ -409,10 +437,15 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                          "/qn", "/norestart", "EXTUI=1"],
                         env, prefix, 420,
                     )
+                if pause_native_ngen_queue:
+                    queue_report = resume_queue(
+                        wine, prefix, env, queue_report, private_run,
+                        dirty=("TIMED_OUT_CLEANUP_DENIED" in (installed, patched)))
     finally:
         # A denied process-group cleanup can leave active Windows Installer
         # descendants. Do not issue *any* further Wine commands in that prefix.
-        denied = "TIMED_OUT_CLEANUP_DENIED" in (extracted, installed, patched)
+        denied = ("TIMED_OUT_CLEANUP_DENIED" in (extracted, installed, patched)
+                  or queue_report["status"] == "DIRTY")
         win10 = ("NOT_RUN" if denied
                  else _set_winver(wine, prefix, env, "win10"))
     if denied:
@@ -421,6 +454,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                   "extract": extracted, "media": media, "install": installed,
                   "patch": patched, "install_log": install_log,
                   "ngen_log": ngen_log, "ngen_progress": ngen_progress,
+                  "ngen_queue_policy": queue_policy, "ngen_queue": queue_report,
                   "scm_preflight": scm_preflight,
                   "scm_postflight": scm_postflight,
                   "scm_startup": scm_startup,
@@ -440,6 +474,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
         "win7": win7, "extract": extracted, "media": media,
         "install": installed, "patch": patched, "install_log": install_log,
         "ngen_log": ngen_log, "ngen_progress": ngen_progress,
+        "ngen_queue_policy": queue_policy, "ngen_queue": queue_report,
         "scm_preflight": scm_preflight, "scm_postflight": scm_postflight,
         "scm_startup": scm_startup,
         "cache_policy": cache_policy, "cache_state": cache_state,
@@ -456,6 +491,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
         result["native40_persistent"] and result["win7"] == "APPLIED"
         and result["extract"] == "SUCCESS" and result["media"] == "VERIFIED"
         and result["install"] == "SUCCESS" and result["patch"] == "SUCCESS"
+        and (result["ngen_queue_policy"] == "OFF"
+             or result["ngen_queue"]["status"] == "COMPLETE")
         and result["win10"] == "APPLIED" and result["restart"] == "COMPLETED"
         and result["clr64_changed"] and result["release"] == "NETFX48_RANGE"
         and result["loader"] == "LOADED" and result["native_only_managed"] == "PASS"
@@ -472,6 +509,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--" + key, required=True, type=Path)
     parser.add_argument("--service-fixture", type=Path)
     parser.add_argument("--prepare-assembly-cache", action="store_true")
+    parser.add_argument("--pause-native-ngen-queue", action="store_true")
     parser.add_argument("--msi-timeout-seconds", type=int,
                         choices=sorted(MSI_TIMEOUTS), default=420)
     parser.add_argument("--agree-disposable-prefix", action="store_true", required=True)
@@ -481,6 +519,7 @@ def main(argv: list[str] | None = None) -> int:
                      json.loads(a.native40_report.read_text(encoding="utf-8")),
                      service_fixture=a.service_fixture,
                      prepare_assembly_cache=a.prepare_assembly_cache,
+                     pause_native_ngen_queue=a.pause_native_ngen_queue,
                      msi_timeout_seconds=a.msi_timeout_seconds)
     if a.output.is_symlink():
         raise ValueError("Linked experiment report")
