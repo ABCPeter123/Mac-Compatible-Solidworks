@@ -1,0 +1,82 @@
+"""Verify pinned experimental Wine runtime archive paths before extraction.
+
+Authenticity comes from the release SHA256 check in the caller. This module
+only checks extraction metadata for path traversal, out-of-tree symlinks and
+special device files. It never extracts or runs the archive itself.
+"""
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+import posixpath
+import tarfile
+
+MAX_ENTRIES = 100000
+MAX_EXPANDED = 4 * 1024 * 1024 * 1024
+EXPECTED_ROOT = "wiage"
+WINE = "wiage/bin/wine"
+SERVER = "wiage/bin/wineserver"
+
+
+def _safe_name(name: str) -> bool:
+    if (not name or name.startswith("/") or "\x00" in name
+            or "\\" in name or len(name) > 1024):
+        return False
+    pieces = name.split("/")
+    return (".." not in pieces
+            and posixpath.normpath(name).split("/")[0] == EXPECTED_ROOT)
+
+
+def verify(path: Path) -> dict[str, object]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("Only downloaded, authenticated regular runtime archives")
+    seen = set()
+    has_wine = False
+    has_server = False
+    size = 0
+    count = 0
+    try:
+        with tarfile.open(path, "r:gz") as archive:
+            for member in archive:
+                count += 1
+                if count > MAX_ENTRIES or not _safe_name(member.name):
+                    raise ValueError("Unsafe Wine runtime archive entry")
+                name = posixpath.normpath(member.name)
+                if name in seen and not member.isdir():
+                    raise ValueError("Duplicate Wine runtime file")
+                seen.add(name)
+                if not (member.isdir() or member.isfile()
+                        or member.issym() or member.islnk()):
+                    raise ValueError("Unsafe Wine runtime device or special entry")
+                if member.isfile():
+                    size += member.size
+                    if size > MAX_EXPANDED:
+                        raise ValueError("Excessive expanded Wine runtime")
+                elif member.issym() or member.islnk():
+                    target = (posixpath.join(posixpath.dirname(name), member.linkname)
+                              if member.issym() else member.linkname)
+                    if (not member.linkname or member.linkname.startswith("/")
+                            or not _safe_name(posixpath.normpath(target))):
+                        raise ValueError("Wine runtime link escapes archive root")
+                if name == WINE:
+                    has_wine = member.isfile() or member.issym() or member.islnk()
+                elif name == SERVER:
+                    has_server = member.isfile() or member.issym() or member.islnk()
+    except (OSError, EOFError, tarfile.TarError) as exc:
+        raise ValueError("Unreadable pinned Wine runtime archive") from exc
+    if not (has_wine and has_server):
+        raise ValueError("Pinned Wine runtime lacks expected wine/wineserver")
+    return {"status": "SAFE", "files_checked": count}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--archive", type=Path, required=True)
+    report = verify(parser.parse_args().archive)
+    assert report["status"] == "SAFE" and report["files_checked"] > 0
+    print("Experimental authenticated Wine runtime archive metadata: SAFE")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

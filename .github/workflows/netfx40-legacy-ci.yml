@@ -89,7 +89,7 @@ on:
         required: false
         default: false
       wine_baseline:
-        description: 'Only authenticated SHA256-pinned Wine Staging baseline releases'
+        description: 'Pinned Wine baseline, or experimental pinned Wiage Rosetta 11.13 only on macOS26 host-only'
         type: string
         required: false
         default: '11.21'
@@ -813,8 +813,43 @@ jobs:
         shell: bash
         env:
           SWCOMPAT_WINE_BASELINE: ${{ inputs.wine_baseline }}
+          SWCOMPAT_HOST_ONLY: ${{ inputs.host_provenance_only }}
+          SWCOMPAT_MACOS26: ${{ inputs.use_macos26_runner }}
+          SWCOMPAT_WIAGE_TRY_MSI: ${{ inputs.try_48_msi }}
+          SWCOMPAT_WIAGE_TRY_DIRECT: ${{ inputs.try_48_direct }}
+          SWCOMPAT_WIAGE_TRY_INTERMEDIATE: ${{ inputs.try_48_intermediate }}
+          SWCOMPAT_WIAGE_TRY_PAYLOAD: ${{ inputs.try_48_payload_host }}
         run: |
           set -euo pipefail
+          if [[ "$SWCOMPAT_WINE_BASELINE" == "wiage-11.13" ]]; then
+            # Wiage's open-source Rosetta WoW64 fixes must only be trialled
+            # in the separate macOS26 authenticated CLR4, no-MSI one-shot.
+            if [[ "$SWCOMPAT_HOST_ONLY" != "true" ||
+                  "$SWCOMPAT_MACOS26" != "true" ||
+                  "$SWCOMPAT_WIAGE_TRY_MSI" != "false" ||
+                  "$SWCOMPAT_WIAGE_TRY_DIRECT" != "false" ||
+                  "$SWCOMPAT_WIAGE_TRY_INTERMEDIATE" != "false" ||
+                  "$SWCOMPAT_WIAGE_TRY_PAYLOAD" != "false" ]]; then
+              echo "Pinned Wiage experiment requires macOS26 and host-only native CLR4 trial" >&2
+              exit 1
+            fi
+            EXPECTED_SHA=d0cea7ff492dd3801dfa26a2a7d5ed1331e60f65929318d17301a3ce9cbba56c
+            ARCHIVE="$RUNNER_TEMP/wiage-11.13-runtime.tar.gz"
+            curl --fail --location --retry 3 --max-time 600 --output "$ARCHIVE" \
+              "https://github.com/dttdrv/mage/releases/download/preview-2026-08-02/wiage-runtime.tar.gz"
+            printf '%s  %s\n' "$EXPECTED_SHA" "$ARCHIVE" | shasum -a 256 -c -
+            mkdir -p "$RUNNER_TEMP/msxml3-wine-build"
+            # Independently reject archive traversal, malformed metadata,
+            # untrusted special files and links before any bytes are extracted.
+            python3 -m scripts.wine_engine_archive --archive "$ARCHIVE"
+            tar -xzf "$ARCHIVE" -C "$RUNNER_TEMP/msxml3-wine-build"
+            WINE_BIN="$RUNNER_TEMP/msxml3-wine-build/wiage/bin/wine"
+            test -e "$WINE_BIN" && test -x "$WINE_BIN"
+            test -x "$RUNNER_TEMP/msxml3-wine-build/wiage/bin/wineserver"
+            echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+            echo "Authenticated separate Wiage Rosetta WoW64 experimental Wine 11.13 runtime"
+            exit 0
+          fi
           case "$SWCOMPAT_WINE_BASELINE" in
             '11.21')
               EXPECTED_SHA=d7bcd5abf4df27aae397a7898aef074fea4a2e0b51e0a55aa9659517bbf9d452

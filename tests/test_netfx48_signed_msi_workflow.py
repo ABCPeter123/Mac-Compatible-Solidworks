@@ -307,6 +307,39 @@ class SignedMSIGates(TestCase):
             "- '.github/workflows/netfx40-wow64-hoststack64-macos15-once-ci.yml'",
             comparison)
 
+    def test_pinned_wiage_engine_cannot_enter_original_48_installer_pipeline(self):
+        caller = (ROOT / ".github/workflows/netfx40-wiage-rosetta-clr4-once-ci.yml").read_text(
+            encoding="utf-8")
+        for token in ("branches: [main]", "wine_baseline: 'wiage-11.13'",
+                      "use_macos26_runner: true", "host_provenance_only: true",
+                      "try_wow64_managed: true", "try_wow64_faults: true",
+                      "wow64_host_stack64: false", "cancel-in-progress: false",
+                      "try_48_msi: false", "try_48_direct: false",
+                      "try_48_intermediate: false", "try_48_payload_host: false"):
+            self.assertIn(token, caller)
+        self.assertNotIn("actions/upload-artifact", caller)
+        reusable = LEGACY.read_text(encoding="utf-8")
+        self.assertIn('[[ "$SWCOMPAT_WINE_BASELINE" == "wiage-11.13" ]]', reusable)
+        self.assertIn("SWCOMPAT_HOST_ONLY:", reusable)
+        self.assertIn("SWCOMPAT_MACOS26:", reusable)
+        for env_name in ("SWCOMPAT_WIAGE_TRY_MSI", "SWCOMPAT_WIAGE_TRY_DIRECT",
+                         "SWCOMPAT_WIAGE_TRY_INTERMEDIATE", "SWCOMPAT_WIAGE_TRY_PAYLOAD"):
+            self.assertIn(env_name + ":", reusable)
+            self.assertIn('"' + "$" + env_name + '" != "false"', reusable)
+        self.assertIn("d0cea7ff492dd3801dfa26a2a7d5ed1331e60f65929318d17301a3ce9cbba56c",
+                      reusable)
+        self.assertIn("github.com/dttdrv/mage/releases/download/preview-2026-08-02",
+                      reusable)
+        self.assertIn("python3 -m scripts.wine_engine_archive", reusable)
+        self.assertIn("wiage/bin/wine", reusable)
+        self.assertIn("wiage/bin/wineserver", reusable)
+        self.assertIn("macOS26 and host-only native CLR4 trial", reusable)
+        self.assertIn("Unsupported Wine baseline", reusable)
+        self.assertIn("d7bcd5abf4df27aae397a7898aef074fea4a2e0b51e0a55aa9659517bbf9d452",
+                      reusable)
+        self.assertIn("940bdd1a177872020be01c5c33917cb8eecc1cc3193ad554914fb6efd90d7889",
+                      reusable)
+
     def test_reusable_only_allows_msi_when_signed_media_authenticated(self):
         workflow = LEGACY.read_text(encoding="utf-8")
         self.assertEqual(workflow.count("      try_48_msi:"), 2)
