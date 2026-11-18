@@ -1,5 +1,5 @@
 /*
- * Source-authored, read-only Win32 SCM presence probe.
+ * Source-authored, read-only Win32 SCM presence and running-state probe.
  * Does not start, configure, register, modify or stop any service.
  * Never prints service paths, registry keys, tokens or GetLastError values.
  * Only emits fixed public-service-name and finite-state categories.
@@ -24,20 +24,48 @@ static const SERVICE_TARGET targets[] = {
     {L"MSDTC", "MSDTC"}
 };
 
-static const char *service_presence(SC_HANDLE manager, const wchar_t *name) {
+/* Report both existence and current Win32 service state.
+ * Never configure, start, stop, or impersonate a service.
+ * Do not expose process IDs, exit codes or raw Windows error strings. */
+typedef struct {
+    const char *presence;
+    const char *state;
+} SERVICE_INFO;
+
+static SERVICE_INFO service_information(SC_HANDLE manager, const wchar_t *name) {
+    SERVICE_INFO info = {"UNKNOWN", "NOT_APPLICABLE"};
     SC_HANDLE service = OpenServiceW(manager, name, SERVICE_QUERY_STATUS);
-    if (service != NULL) {
-        CloseServiceHandle(service);
-        return "PRESENT";
+    SERVICE_STATUS_PROCESS current;
+    DWORD bytes_needed = 0;
+    DWORD err;
+
+    if (service == NULL) {
+        err = GetLastError();
+        if (err == ERROR_SERVICE_DOES_NOT_EXIST)
+            info.presence = "ABSENT";
+        else if (err == ERROR_ACCESS_DENIED)
+            info.presence = "ACCESS_DENIED";
+        return info;
     }
-    switch (GetLastError()) {
-        case ERROR_SERVICE_DOES_NOT_EXIST:
-            return "ABSENT";
-        case ERROR_ACCESS_DENIED:
-            return "ACCESS_DENIED";
-        default:
-            return "UNKNOWN";
+    info.presence = "PRESENT";
+    info.state = "QUERY_FAILED";
+    memset(&current, 0, sizeof(current));
+    if (QueryServiceStatusEx(service, SC_STATUS_PROCESS_INFO,
+                             (LPBYTE)&current, sizeof(current),
+                             &bytes_needed)) {
+        switch (current.dwCurrentState) {
+            case SERVICE_STOPPED:          info.state = "STOPPED"; break;
+            case SERVICE_START_PENDING:    info.state = "START_PENDING"; break;
+            case SERVICE_STOP_PENDING:     info.state = "STOP_PENDING"; break;
+            case SERVICE_RUNNING:          info.state = "RUNNING"; break;
+            case SERVICE_CONTINUE_PENDING: info.state = "CONTINUE_PENDING"; break;
+            case SERVICE_PAUSE_PENDING:    info.state = "PAUSE_PENDING"; break;
+            case SERVICE_PAUSED:           info.state = "PAUSED"; break;
+            default:                       info.state = "OTHER"; break;
+        }
     }
+    CloseServiceHandle(service);
+    return info;
 }
 
 int main(int argc, char **argv) {
@@ -52,14 +80,15 @@ int main(int argc, char **argv) {
     if (argc != 1)
         return 2;
     SC_HANDLE manager = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
-    printf("SWCOMPAT_SCM_API_SCHEMA=1\n");
+    printf("SWCOMPAT_SCM_API_SCHEMA=2\n");
     printf("SWCOMPAT_SCM_API_STATUS=%s\n",
            manager ? "COMPLETE" : "UNAVAILABLE");
     for (i = 0; i < sizeof(targets) / sizeof(targets[0]); ++i) {
-        const char *value = manager
-            ? service_presence(manager, targets[i].wide_name)
-            : "UNKNOWN";
-        printf("SWCOMPAT_SCM_API_%s=%s\n", targets[i].field, value);
+        SERVICE_INFO info = manager
+            ? service_information(manager, targets[i].wide_name)
+            : (SERVICE_INFO){"UNKNOWN", "NOT_APPLICABLE"};
+        printf("SWCOMPAT_SCM_API_%s=%s\\n", targets[i].field, info.presence);
+        printf("SWCOMPAT_SCM_STATE_%s=%s\\n", targets[i].field, info.state);
     }
     if (manager)
         CloseServiceHandle(manager);
