@@ -51,6 +51,21 @@ class SignedMSIGates(TestCase):
         self.assertNotIn("actions/upload-artifact", source)
         self.assertNotIn("sc.exe create", source)
 
+    def test_native_original_scm_optimization_control_is_read_only(self):
+        source = (ROOT / ".github/workflows/netfx48-msi-optimizer-scm-once-ci.yml"
+                  ).read_text(encoding="utf-8")
+        self.assertIn("branches: [main]", source)
+        self.assertIn("      - '.github/workflows/netfx48-msi-optimizer-scm-once-ci.yml'", source)
+        self.assertIn("      try_48_msi: true", source)
+        self.assertIn("      try_48_direct: false", source)
+        self.assertIn("      try_48_intermediate: false", source)
+        self.assertIn("uses: ./.github/workflows/netfx40-legacy-ci.yml", source)
+        self.assertNotIn("actions/upload-artifact", source)
+        legacy = LEGACY.read_text(encoding="utf-8")
+        self.assertIn("(inputs.try_48_direct || inputs.try_48_msi)", legacy)
+        self.assertIn("--service-fixture build/netfx48_scm_service_probe.exe", legacy)
+        self.assertIn("msi['scm_preflight']['services'][service]", legacy)
+
     def test_reusable_only_allows_msi_when_signed_media_authenticated(self):
         workflow = LEGACY.read_text(encoding="utf-8")
         self.assertEqual(workflow.count("      try_48_msi:"), 2)
