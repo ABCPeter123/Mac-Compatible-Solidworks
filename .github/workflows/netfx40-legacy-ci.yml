@@ -1234,7 +1234,7 @@ jobs:
                   assert valid_ngen(msi["ngen_log"])
                   for field in ("x64", "x86", "signals"):
                       out.write(f"signed_msi_48_ngen_{field}: **"
-                                f"{msi['ngen_log'][field]}**\\n\\n")
+                                f"{msi['ngen_log'][field]}**\n\n")
                   from scripts.netfx48_scm_service_probe import FIELDS as scm_fields
                   out.write(f"signed_msi_48_scm_startup: **{msi['scm_startup']}**\n\n")
                   out.write(f"signed_msi_48_scm_status: **{msi['scm_preflight']['status']}**\n\n")
