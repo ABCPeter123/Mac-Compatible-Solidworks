@@ -89,7 +89,7 @@ def validate(value: object) -> bool:
                    for item in value["milestones"])):
         return False
     if value["status"] in {"NOT_RUN", "NOT_FOUND", "READ_FAILED",
-                           "TOO_LARGE", "INVALID_ENCODING"}:
+                           "TOO_LARGE", "INVALID_ENCODING", "LIMIT_REACHED"}:
         return value == blank(value["status"])
     if value["log_line_band"] == "NOT_REPORTED":
         return False
@@ -98,7 +98,7 @@ def validate(value: object) -> bool:
             value["true_cause_categories"] or value["true_logic_signals"])
     if value["status"] == "CAPTURED":
         return 0 < value["true_count"] + value["false_count"] <= MAX_VERDICTS
-    return value["status"] == "LIMIT_REACHED"
+    return False
 
 
 def _signals(logic_lines: list[str]) -> set[str]:
