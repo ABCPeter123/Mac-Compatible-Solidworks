@@ -18,6 +18,11 @@ on:
         type: boolean
         required: false
         default: false
+      try_48_msi:
+        description: 'Original signed .NET 4.8 MSI+MSP control after authentic 4.0'
+        type: boolean
+        required: false
+        default: false
       original_48_profile:
         description: 'Original signed 4.8 setup reported Windows profile; Win10 is distinct experiment'
         type: string
@@ -62,6 +67,11 @@ on:
         default: false
       try_48_direct:
         description: 'Opt-in original signed Microsoft 4.8 offline upgrade after real 4.0, before 4.8.1'
+        type: boolean
+        required: false
+        default: false
+      try_48_msi:
+        description: 'Test extracted original signed 4.8 x64 MSI and MSP after native 4.0'
         type: boolean
         required: false
         default: false
@@ -372,7 +382,7 @@ jobs:
             Set-Content -LiteralPath build/netfx481.sha256 -NoNewline -Encoding ascii
           Write-Output "Verified signed official .NET 4.8.1 in-place upgrade package"
       - name: Download and authenticate original signed Microsoft .NET Framework 4.8 intermediate
-        if: (inputs.try_48_direct && !inputs.host_provenance_only) || inputs.try_48_payload_host
+        if: ((inputs.try_48_direct || inputs.try_48_msi) && !inputs.host_provenance_only) || inputs.try_48_payload_host
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -672,6 +682,7 @@ jobs:
     env:
       SWCOMPAT_TRY_48_INTERMEDIATE: ${{ inputs.try_48_intermediate }}
       SWCOMPAT_TRY_48_DIRECT: ${{ inputs.try_48_direct }}
+      SWCOMPAT_TRY_48_MSI: ${{ inputs.try_48_msi }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -682,7 +693,7 @@ jobs:
           name: self-authored-netfx40-probes-and-signed-digests
           path: build
       - name: Reject payload-only mode outside native 4.0 host-only trial
-        if: inputs.try_48_payload_host && (!inputs.host_provenance_only || inputs.try_48_direct || inputs.try_48_intermediate)
+        if: inputs.try_48_payload_host && (!inputs.host_provenance_only || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_msi)
         run: |
           echo "Original .NET 4.8 payload-host trial requires host-only and forbids all installer trials."
           exit 1
@@ -690,7 +701,7 @@ jobs:
         shell: bash
         env:
           SWCOMPAT_PROVENANCE_ONLY: ${{ inputs.host_provenance_only }}
-          SWCOMPAT_DIRECT_48: ${{ inputs.try_48_direct }}
+          SWCOMPAT_DIRECT_48: ${{ inputs.try_48_direct || inputs.try_48_msi }}
           SWCOMPAT_PAYLOAD_48: ${{ inputs.try_48_payload_host }}
         run: |
           set -euo pipefail
@@ -937,12 +948,12 @@ jobs:
                                 "**\n\n")
           PY
       - name: Reject combining host-provenance-only with any 4.8 installer experiment
-        if: inputs.host_provenance_only && (inputs.try_48_intermediate || inputs.try_48_direct)
+        if: inputs.host_provenance_only && (inputs.try_48_intermediate || inputs.try_48_direct || inputs.try_48_msi)
         run: |
           echo "Host-provenance-only cannot run a 4.8 installer."
           exit 1
       - name: Reject conflicting 4.8 intermediate experiment selections
-        if: inputs.try_48_intermediate && inputs.try_48_direct
+        if: (inputs.try_48_intermediate && inputs.try_48_direct) || (inputs.try_48_msi && (inputs.try_48_intermediate || inputs.try_48_direct))
         shell: bash
         run: |
           echo "Select either Winetricks 4.8 OR original signed 4.8, not both."
@@ -984,6 +995,39 @@ jobs:
                   out.write("SWCOMPAT_NATIVE48_READY=yes\n")
           print("Original signed Microsoft native 4.8 verified:", r["native48_candidate"])
           PY
+      - name: Extract authenticated original .NET 4.8 x64 MSI and MSP after genuine CLR4.0
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && inputs.try_48_msi && !inputs.try_48_intermediate && !inputs.try_48_direct
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx40_to_48_signed_msi \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --installer build/NDP48-x86-x64-AllOS-ENU.exe \
+            --sha256-file build/netfx48.sha256 \
+            --loader build/netfx481_clr_load.exe \
+            --managed build/netfx481_runtime_probe.exe \
+            --native40-report build/netfx40-msxml3-restart.json \
+            --output build/netfx40-to-48-signed-msi.json \
+            --agree-disposable-prefix
+      - name: Gate 4.8.1 on authenticated original MSI with real x64 .NET 4.8 execution
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && inputs.try_48_msi && !inputs.try_48_intermediate && !inputs.try_48_direct
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx40_to_48_signed_msi import validate
+          path = Path("build/netfx40-to-48-signed-msi.json")
+          assert path.is_file(), "Original signed MSI experiment not measured"
+          result = json.loads(path.read_text(encoding="ascii"))
+          assert validate(result)
+          if result["native48_candidate"]:
+              with open(os.environ["GITHUB_ENV"], "a") as out:
+                  out.write("SWCOMPAT_NATIVE48_READY=yes\n")
+          print("Original signed .NET 4.8 MSI and MSP verified:", result["native48_candidate"])
+          PY
       - name: Test pinned Winetricks dotnet48 on existing verified Microsoft 4.0 prefix
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && inputs.try_48_intermediate
         shell: bash
@@ -1023,7 +1067,7 @@ jobs:
           print("Real native Microsoft 4.8 intermediate candidate verified:", r["native48_candidate"])
           PY
       - name: Read disk-space prerequisites on actual persistent native CLR 4.0 prefix
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct) || env.SWCOMPAT_NATIVE48_READY == 'yes')
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct && !inputs.try_48_msi) || env.SWCOMPAT_NATIVE48_READY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
@@ -1034,7 +1078,7 @@ jobs:
             --output build/netfx481-disk-before-upgrade.json \
             --agree-disposable-prefix
       - name: Select Windows 10 reported version for original Microsoft 4.8.1 upgrade
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct) || env.SWCOMPAT_NATIVE48_READY == 'yes')
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct && !inputs.try_48_msi) || env.SWCOMPAT_NATIVE48_READY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
@@ -1042,7 +1086,7 @@ jobs:
             --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
             --logs-dir "$RUNNER_TEMP/netfx40-msxml3-logs" set-winver win10
       - name: Upgrade functioning Microsoft .NET 4.x CLR with original Microsoft 4.8.1
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct) || env.SWCOMPAT_NATIVE48_READY == 'yes')
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct && !inputs.try_48_msi) || env.SWCOMPAT_NATIVE48_READY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
@@ -1059,7 +1103,7 @@ jobs:
             --experiment-private-setup-evidence \
             --agree-disposable-prefix
       - name: Restore Windows 11 profile and verify native-only managed CLR
-        if: always() && env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct) || env.SWCOMPAT_NATIVE48_READY == 'yes')
+        if: always() && env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct && !inputs.try_48_msi) || env.SWCOMPAT_NATIVE48_READY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
@@ -1143,6 +1187,16 @@ jobs:
                                "verb_stages", "verb_last_stage",
                                "timeout_processes"):
                       out.write(f"intermediate_48_{name}: **{step[name]}**\n\n")
+              msi_path = Path("build/netfx40-to-48-signed-msi.json")
+              if msi_path.is_file():
+                  from scripts.netfx40_to_48_signed_msi import validate as valid_msi
+                  msi = json.loads(msi_path.read_text(encoding="ascii"))
+                  assert valid_msi(msi)
+                  for key in ("status", "win7", "extract", "media", "install",
+                              "patch", "win10", "restart", "clr64_changed",
+                              "release", "loader", "native_only_managed",
+                              "native48_candidate"):
+                      out.write(f"signed_msi_48_{key}: **{msi[key]}**\n\n")
               direct_path = Path("build/netfx40-to-48-direct.json")
               if direct_path.is_file():
                   from scripts.netfx40_to_48_direct import validate as valid_direct
@@ -1255,6 +1309,7 @@ jobs:
             build/netfx48-core-host-categories.json
             build/netfx40-to-48-intermediate.json
             build/netfx40-to-48-direct.json
+            build/netfx40-to-48-signed-msi.json
             build/netfx481-disk-before-upgrade.json
             build/netfx40-to-481-upgrade.json
             build/netfx40-to-481-win11.json
@@ -1331,8 +1386,9 @@ jobs:
                       intermediate_ready = intermediate["native48_candidate"]
                   direct_path = Path("build/netfx40-to-48-direct.json")
                   direct_required = os.environ.get("SWCOMPAT_TRY_48_DIRECT") == "true"
-                  assert not (direct_required and intermediate_required), (
-                      "Cannot mix original and Winetricks native 4.8 prerequisites")
+                  msi_required = os.environ.get("SWCOMPAT_TRY_48_MSI") == "true"
+                  assert sum((direct_required, intermediate_required, msi_required)) <= 1, (
+                      "Cannot mix original signed MSI, bootstrapper or Winetricks 4.8")
                   assert direct_path.is_file() == direct_required, (
                       "Requested signed original 4.8 experiment was not measured")
                   if direct_path.is_file():
@@ -1340,15 +1396,24 @@ jobs:
                       direct = json.loads(direct_path.read_text(encoding="ascii"))
                       assert valid_direct(direct)
                       intermediate_ready = direct["native48_candidate"]
+                  msi_path = Path("build/netfx40-to-48-signed-msi.json")
+                  assert msi_path.is_file() == msi_required, (
+                      "Requested original signed 4.8 MSI experiment not measured")
+                  if msi_path.is_file():
+                      from scripts.netfx40_to_48_signed_msi import validate as valid_msi
+                      msi = json.loads(msi_path.read_text(encoding="ascii"))
+                      assert valid_msi(msi)
+                      intermediate_ready = msi["native48_candidate"]
                   upgrade_path = Path("build/netfx40-to-481-upgrade.json")
                   assert upgrade_path.is_file() == (
                       not host_only and (
-                          (not intermediate_required and not direct_required)
+                          (not intermediate_required and not direct_required and not msi_required)
                           or intermediate_ready)), (
                       "4.8.1 is forbidden in host-only mode and requires verified 4.8 otherwise")
                   if host_only:
-                      assert not intermediate_required and not direct_required
+                      assert not intermediate_required and not direct_required and not msi_required
                       assert not intermediate_path.is_file() and not direct_path.is_file()
+                      assert not msi_path.is_file()
                       assert not upgrade_path.is_file(), "Host-only must skip 4.8.1"
                   if upgrade_path.is_file():
                       upgraded = json.loads(upgrade_path.read_text(encoding="utf-8"))
