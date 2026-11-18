@@ -1,6 +1,7 @@
 """Native .NET 4.8 intermediate never confuses a Winetricks marker with CLR."""
 import os
 import signal
+import struct
 import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -44,7 +45,7 @@ class Native40To48IntermediateTests(unittest.TestCase):
 
     def _run_fixture(self, paths, winetricks="SUCCESS",
                      changed=True, release="NETFX48_RANGE",
-                     progress="DOTNET48_VERB_SEEN"):
+                     progress="DOTNET48_VERB_SEEN", reuse=False):
         hash_before = b"orig40"
         hash_after = b"orig48" if changed else hash_before
         before = {"CLR64": ("PE_AMD64", hash_before)}
@@ -68,11 +69,17 @@ class Native40To48IntermediateTests(unittest.TestCase):
               mock.patch.object(p, "load_clr", return_value="LOADED"),
               mock.patch.object(p, "probe", return_value={"managed": "PASS"}),
               mock.patch.object(p, "_set_winver", return_value="APPLIED") as profile,
+              mock.patch.object(p, "mark_verified_native40",
+                                return_value="RECORDED") as reused,
               mock.patch.object(p, "_run_winetricks", side_effect=runner),
               mock.patch.object(p, "wineboot_restart", return_value="COMPLETED"),
               mock.patch.object(p, "_release", return_value=release)):
-            outcome = p.inspect(*paths, {"persistent_native_managed": True})
+            outcome = p.inspect(*paths, {"persistent_native_managed": True},
+                                reuse_verified_native40=reuse)
         self.assertTrue(p.validate(outcome))
+        self.assertEqual(outcome["native40_marker"],
+                         "RECORDED" if reuse else "NOT_RUN")
+        self.assertEqual(reused.call_count, 1 if reuse else 0)
         self.assertEqual([x.args[3] for x in profile.call_args_list],
                          ["win7", "win10"])
         self.assertFalse(outcome["framework481_confirmed"])
@@ -104,6 +111,18 @@ class Native40To48IntermediateTests(unittest.TestCase):
             self.assertFalse(p.validate(dict(result, framework481_confirmed=True)))
             self.assertFalse(p.validate(dict(result, original_registry_text="PRIVATE")))
             self.assertFalse(p.validate(dict(result, native48_candidate=False)))
+
+    @unittest.skipIf(os.name == "nt", "POSIX-only Wine wrapper")
+    def test_opt_in_verified_native_40_marker_never_makes_48_ready(self):
+        with TemporaryDirectory() as td:
+            paths = self._fixture(Path(td))
+            ready = self._run_fixture(paths, reuse=True)
+            self.assertEqual(ready["native40_marker"], "RECORDED")
+            self.assertTrue(ready["native48_candidate"])
+            failed = self._run_fixture(paths, reuse=True, changed=False)
+            self.assertEqual(failed["native40_marker"], "RECORDED")
+            self.assertFalse(failed["native48_candidate"])
+            self.assertFalse(p.validate(dict(failed, native40_marker="PRIVATE")))
 
     @unittest.skipIf(os.name == "nt", "POSIX-only Wine wrapper")
     def test_existing_native_40_must_be_verified_before_any_action(self):
