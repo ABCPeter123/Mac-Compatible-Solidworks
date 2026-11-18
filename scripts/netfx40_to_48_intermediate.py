@@ -25,6 +25,14 @@ VERB = {"SUCCESS", "EXIT_NONZERO", "TIMED_OUT", "START_FAILED", "NOT_RUN"}
 PROGRESS = {"NOT_RUN", "NO_OUTPUT", "WINETRICKS_ACTIVE", "DOTNET48_VERB_SEEN",
             "DOTNET48_PACKAGE_MENTIONED", "OUTPUT_TOO_LARGE"}
 MAX_PRIVATE_OUTPUT = 1024 * 1024
+# Read-only snapshot of processes in the *Winetricks command's process group*.
+# No PIDs, command arguments or executable paths may leave the runner.
+PROCESS_CATEGORIES = {
+    "WINE_DEBUGGER", "WINE_SERVER", "WINE_HOST", "MSI_EXEC",
+    "NETFX48_BOOTSTRAPPER", "WINE_REGISTRY", "WINETRICKS_SHELL",
+    "OTHER_PROCESS",
+}
+PROCESS_LIMIT = 262144
 # All events are fixed enum values. Never export Winetricks text, paths, or
 # original Microsoft installer output outside the disposable run.
 WINETRICKS_STAGES = {
@@ -81,6 +89,7 @@ def blank() -> dict:
     return {"status": "NOT_ELIGIBLE", "native40_persistent": False,
             "verb": "NOT_RUN", "verb_progress": "NOT_RUN",
             "verb_stages": [], "verb_last_stage": "NOT_RUN",
+            "timeout_processes": [],
             "win7": "NOT_RUN", "win10": "NOT_RUN",
             "restart": "NOT_RUN", "clr64_changed": False,
             "release": "UNAVAILABLE", "loader": "NOT_VERIFIED",
@@ -100,6 +109,11 @@ def validate(result: object) -> bool:
             or result["verb_stages"] != sorted(set(result["verb_stages"]))
             or result["verb_last_stage"] not in (
                 WINETRICKS_STAGES | {"NOT_RUN", "UNKNOWN", "NO_OUTPUT", "OUTPUT_TOO_LARGE"})
+            or type(result["timeout_processes"]) is not list
+            or any(type(v) is not str or v not in PROCESS_CATEGORIES
+                   for v in result["timeout_processes"])
+            or result["timeout_processes"] != sorted(set(result["timeout_processes"]))
+            or (result["verb"] != "TIMED_OUT" and result["timeout_processes"])
             or result["restart"] not in BOOT
             or result["win7"] not in WINVER or result["win10"] not in WINVER
             or result["release"] not in RELEASE
@@ -186,6 +200,53 @@ def classify_progress(raw: bytes) -> str:
     return "WINETRICKS_ACTIVE"
 
 
+def classify_process_group(raw: bytes, group_id: int) -> list[str]:
+    """Return only fixed process classes from a bounded ps process-group census."""
+    if (not isinstance(raw, bytes) or len(raw) > PROCESS_LIMIT
+            or type(group_id) is not int or group_id <= 0):
+        return []
+    found: set[str] = set()
+    for line in raw.splitlines():
+        match = re.fullmatch(rb"\s*(\d{1,10})\s+([^\r\n]{1,1024})\s*", line)
+        if not match or int(match.group(1)) != group_id:
+            continue
+        name = match.group(2).decode("utf-8", "replace").replace("\\\\", "/").rsplit("/", 1)[-1].lower()
+        if name.startswith("winedbg"):
+            found.add("WINE_DEBUGGER")
+        elif name.startswith("wineserver"):
+            found.add("WINE_SERVER")
+        elif name.startswith(("msiexec", "msiinstall")):
+            found.add("MSI_EXEC")
+        elif name.startswith(("ndp48", "dotnetfx48")):
+            found.add("NETFX48_BOOTSTRAPPER")
+        elif name.startswith(("regedit", "reg.exe")):
+            found.add("WINE_REGISTRY")
+        elif name.startswith(("wine", "wine64")):
+            found.add("WINE_HOST")
+        elif name in {"bash", "sh", "zsh"}:
+            found.add("WINETRICKS_SHELL")
+        else:
+            found.add("OTHER_PROCESS")
+    return sorted(found)
+
+
+def snapshot_process_group(group_id: int) -> list[str]:
+    """Read only this new Winetricks process group before terminating on timeout."""
+    if type(group_id) is not int or group_id <= 0:
+        return []
+    try:
+        proc = subprocess.run(
+            ["ps", "-axo", "pgid=,comm="],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, check=False, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if proc.returncode != 0:
+        return []
+    return classify_process_group(proc.stdout, group_id)
+
+
 def _terminate_group(child: subprocess.Popen) -> None:
     """Timeout must kill the whole installer session, not just its shell."""
     try:
@@ -209,7 +270,7 @@ def _terminate_group(child: subprocess.Popen) -> None:
 
 
 def _run_winetricks(command: list[str], env: dict[str, str],
-                    cwd: Path, timeout: int) -> tuple[str, str, list[str], str]:
+                    cwd: Path, timeout: int) -> tuple[str, str, list[str], str, list[str]]:
     """Bound the verb and keep its entire diagnostic stream private."""
     with tempfile.TemporaryFile() as output:
         try:
@@ -219,11 +280,13 @@ def _run_winetricks(command: list[str], env: dict[str, str],
                 start_new_session=True,
             )
         except OSError:
-            return "START_FAILED", "NOT_RUN", [], "NOT_RUN"
+            return "START_FAILED", "NOT_RUN", [], "NOT_RUN", []
+        process_census: list[str] = []
         try:
             rc = child.wait(timeout=timeout)
             status = "SUCCESS" if rc == 0 else "EXIT_NONZERO"
         except subprocess.TimeoutExpired:
+            process_census = snapshot_process_group(child.pid)
             _terminate_group(child)
             status = "TIMED_OUT"
         output.seek(0)
@@ -231,7 +294,7 @@ def _run_winetricks(command: list[str], env: dict[str, str],
         progress = classify_progress(private_bytes)
         stages = classify_stages(private_bytes)
         last_stage = classify_last_stage(private_bytes)
-    return status, progress, stages, last_stage
+    return status, progress, stages, last_stage, process_census
 
 
 def _set_winver(wine: Path, prefix: Path, env: dict[str, str],
@@ -285,9 +348,11 @@ def inspect(wine: Path, prefix: Path, winetricks: Path, loader: Path,
     verb_progress = "NOT_RUN"
     verb_stages: list[str] = []
     verb_last_stage = "NOT_RUN"
+    timeout_processes: list[str] = []
     try:
         if win7 == "APPLIED":
-            verb, verb_progress, verb_stages, verb_last_stage = _run_winetricks(
+            (verb, verb_progress, verb_stages, verb_last_stage,
+             timeout_processes) = _run_winetricks(
                 ["bash", str(winetricks), "-q", "dotnet48"], env, prefix, timeout)
     finally:
         win10 = _set_winver(wine, prefix, env, "win10")
@@ -297,6 +362,7 @@ def inspect(wine: Path, prefix: Path, winetricks: Path, loader: Path,
     output = {"status": "MEASURED", "native40_persistent": True,
               "verb": verb, "verb_progress": verb_progress,
               "verb_stages": verb_stages, "verb_last_stage": verb_last_stage,
+              "timeout_processes": timeout_processes,
               "win7": win7, "win10": win10,
               "restart": restart,
               "clr64_changed": (not same and after["CLR64"][0] == "PE_AMD64"),
