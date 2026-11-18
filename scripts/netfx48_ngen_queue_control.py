@@ -48,8 +48,9 @@ def valid(report: object) -> bool:
         return all(p == "SUCCESS" for p in pauses) and all(
             r == "SUCCESS" for r in resumes)
     if report["status"] == "DIRTY":
-        return (all(p == "SUCCESS" for p in pauses)
-                and all(r == "NOT_RUN" for r in resumes))
+        return (any(x == "TIMED_OUT_CLEANUP_DENIED" for x in pauses + resumes)
+                or (all(p == "SUCCESS" for p in pauses)
+                    and all(r == "NOT_RUN" for r in resumes)))
     return (any(p != "SUCCESS" for p in pauses)
             or any(r != "SUCCESS" for r in resumes))
 
@@ -98,6 +99,10 @@ def prepare(wine: Path, prefix: Path, env: dict, runner: Runner) -> dict:
             break
     if all(result[a + "_pause"] == "SUCCESS" for a in ARCS):
         result["status"] = "PREPARED"
+    elif any(result[a + "_pause"] == "TIMED_OUT_CLEANUP_DENIED"
+             for a in ARCS):
+        # No more Wine calls, including continue, if process cleanup failed.
+        result["status"] = "DIRTY"
     else:
         # If the first queue was paused, do not leave it paused after failing
         # to prepare the other architecture. Never continue an unpaused queue.
@@ -105,7 +110,11 @@ def prepare(wine: Path, prefix: Path, env: dict, runner: Runner) -> dict:
             if result[arch + "_pause"] == "SUCCESS":
                 result[arch + "_continue"] = _command(
                     wine, prefix, env, arch, "continue", runner)
-        result["status"] = "INCOMPLETE"
+                if result[arch + "_continue"] == "TIMED_OUT_CLEANUP_DENIED":
+                    break
+        result["status"] = ("DIRTY" if any(
+            result[a + "_continue"] == "TIMED_OUT_CLEANUP_DENIED" for a in ARCS)
+            else "INCOMPLETE")
     if not valid(result):
         raise ValueError("Invalid original NGen queue preparation")
     return result
@@ -125,8 +134,12 @@ def resume(wine: Path, prefix: Path, env: dict,
         for arch in ARCS:
             result[arch + "_continue"] = _command(
                 wine, prefix, env, arch, "continue", runner)
-        result["status"] = ("COMPLETE" if all(
-            result[a + "_continue"] == "SUCCESS" for a in ARCS)
+            if result[arch + "_continue"] == "TIMED_OUT_CLEANUP_DENIED":
+                break
+        result["status"] = ("DIRTY" if any(
+            result[a + "_continue"] == "TIMED_OUT_CLEANUP_DENIED" for a in ARCS)
+            else "COMPLETE" if all(
+                result[a + "_continue"] == "SUCCESS" for a in ARCS)
             else "INCOMPLETE")
     if not valid(result):
         raise ValueError("Invalid original NGen queue restoration")
