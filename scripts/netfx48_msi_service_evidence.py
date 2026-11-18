@@ -7,7 +7,7 @@ that its absence caused the reported 0x80070424.
 from __future__ import annotations
 import re
 
-from scripts.netfx40_msi_evidence import _decode, MAX_FILE_BYTES, classify_action
+from scripts.netfx40_msi_evidence import _decode, MAX_FILE_BYTES
 
 MAX_LINE = 8192
 CANDIDATES = {
@@ -94,7 +94,7 @@ def classify(raw: bytes) -> dict:
         match = START.search(line)
         if match:
             name = match.group(1).strip().rstrip(".")
-            if classify_action(name) == "CUSTOM_ACTION":
+            if name.casefold().startswith(("ca_", "customaction")):
                 last_custom = next(
                     (tag for tag, pat in DETAIL_RULES if pat.search(name)),
                     "OTHER_CUSTOM",
