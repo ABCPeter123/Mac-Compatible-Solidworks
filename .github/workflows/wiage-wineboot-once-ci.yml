@@ -1,0 +1,63 @@
+name: One-shot Wiage macOS 26 native Wineboot startup control
+
+# No original Microsoft software, license, CLR, installer or SOLIDWORKS media.
+# Isolates the Wineboot bug 59595 workaround independently of the slower
+# authenticated .NET 4.0 Windows media pipeline on Apple Silicon.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/wiage-wineboot-once-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pinned-wiage-1113-wineboot-macos26-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  genuine-wiage-wineboot:
+    name: Verify real pinned Rosetta-patched Wineboot and basic Win32 process startup
+    runs-on: macos-26
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - name: Confirm Rosetta x86_64 host support
+        shell: bash
+        run: |
+          set -euo pipefail
+          arch -x86_64 /usr/bin/true
+          echo "Rosetta x86_64: AVAILABLE"
+      - name: Authenticate pinned public Wine engine without proprietary media
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wiage-runtime.tar.gz"
+          curl --fail --location --retry 3 --max-time 300 --output "$ARCHIVE" \
+            "https://github.com/dttdrv/mage/releases/download/preview-2026-08-02/wiage-runtime.tar.gz"
+          printf '%s  %s\n' \
+            d0cea7ff492dd3801dfa26a2a7d5ed1331e60f65929318d17301a3ce9cbba56c \
+            "$ARCHIVE" | shasum -a 256 -c -
+          python3 -m scripts.wine_engine_archive --archive "$ARCHIVE"
+          mkdir -p "$RUNNER_TEMP/wiage-test"
+          COPYFILE_DISABLE=1 tar --exclude='._*' --exclude='*/._*' \
+            -xzf "$ARCHIVE" -C "$RUNNER_TEMP/wiage-test"
+          rm -f "$ARCHIVE"
+          WINE="$RUNNER_TEMP/wiage-test/wiage/bin/wine"
+          test -x "$WINE" && test -x "$RUNNER_TEMP/wiage-test/wiage/bin/wineserver"
+          echo "SWCOMPAT_WINE=$WINE" >> "$GITHUB_ENV"
+      - name: Initialize isolated Wineboot using fork-native macOS26 helper handling
+        shell: bash
+        env:
+          WINEMSYNC: '1'
+          MAGE_BACKGROUND_EXE: 'rundll32.exe:services.exe:explorer.exe:conhost.exe'
+        run: |
+          set -euo pipefail
+          PREFIX="$RUNNER_TEMP/wiage-boot-control"
+          python3 -m swcompat --prefix "$PREFIX" \
+            --logs-dir "$RUNNER_TEMP/wiage-boot-control-logs" init --timeout 120
+          echo "Pinned patched Wineboot: EXIT_ZERO"
+          python3 -m swcompat --prefix "$PREFIX" \
+            --logs-dir "$RUNNER_TEMP/wiage-boot-control-logs" probe-win32
+          echo "Pinned patched Wine Win32 startup: EXIT_ZERO"

@@ -4,8 +4,11 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import subprocess
+import signal
+from unittest import mock
 
-from swcompat.cli import main, find_wine
+from swcompat.cli import main, find_wine, capture
 
 class CLITests(unittest.TestCase):
     def setUp(self):
@@ -63,6 +66,53 @@ class CLITests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("PASS", output)
         self.assertEqual(len(list(self.logs.glob("*-win32-*.log"))), 1)
+
+    def test_wineboot_timeout_uses_isolated_process_group_and_forced_kill(self):
+        child = mock.Mock()
+        child.pid = 71321
+        child.wait.side_effect = [
+            subprocess.TimeoutExpired("wineboot", 120),
+            subprocess.TimeoutExpired("wineboot", 3),
+            0,
+        ]
+        with (mock.patch("swcompat.cli.subprocess.Popen", return_value=child) as launched,
+              mock.patch("swcompat.cli.os.killpg") as killpg):
+            status, path = capture([str(self.boot), "--init"], self.prefix,
+                                   self.logs, "init", timeout=120,
+                                   kill_group_on_timeout=True)
+        self.assertEqual(status, 124)
+        self.assertIn("SWCOMPAT_TIMED_OUT=1", path.read_text())
+        self.assertNotIn("SWCOMPAT_TIMED_OUT_CLEANUP_DENIED=1", path.read_text())
+        self.assertTrue(launched.call_args.kwargs["start_new_session"])
+        self.assertEqual(launched.call_args.kwargs["stdin"], subprocess.DEVNULL)
+        self.assertEqual(killpg.call_args_list, [
+            mock.call(71321, signal.SIGTERM),
+            mock.call(71321, signal.SIGKILL),
+        ])
+
+    def test_wineboot_denied_process_group_cleanup_remains_explicit_failure(self):
+        child = mock.Mock()
+        child.pid = 71322
+        child.wait.side_effect = [
+            subprocess.TimeoutExpired("wineboot", 120),
+            subprocess.TimeoutExpired("wineboot", 3),
+            subprocess.TimeoutExpired("wineboot", 5),
+        ]
+        with (mock.patch("swcompat.cli.subprocess.Popen", return_value=child),
+              mock.patch("swcompat.cli.os.killpg",
+                         side_effect=PermissionError("private host path"))):
+            status, path = capture([str(self.boot), "--init"], self.prefix,
+                                   self.logs, "init", timeout=120,
+                                   kill_group_on_timeout=True)
+        self.assertEqual(status, 125)
+        self.assertIn("SWCOMPAT_TIMED_OUT_CLEANUP_DENIED=1", path.read_text())
+        self.assertNotIn("private host path", path.read_text())
+
+    def test_wineboot_timeout_can_be_120_or_240_only(self):
+        self.assertEqual(self.invoke("init", "--timeout", "120")[0], 0)
+        self.assertEqual(self.invoke("init", "--timeout", "240")[0], 0)
+        with self.assertRaises(SystemExit):
+            self.invoke("init", "--timeout", "25")
 
     def test_windows11_profile_command_isolated_prefix(self):
         self.assertEqual(self.invoke("set-winver", "win11")[0], 2)

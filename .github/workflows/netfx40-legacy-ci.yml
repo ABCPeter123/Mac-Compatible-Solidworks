@@ -883,9 +883,28 @@ jobs:
           echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
       - name: Initialize new marked Wine x64 prefix for msxml3 fix
         shell: bash
+        env:
+          SWCOMPAT_WINE_BASELINE: ${{ inputs.wine_baseline }}
         run: |
           set -euo pipefail
-          python3 -m swcompat --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" --logs-dir "$RUNNER_TEMP/netfx40-msxml3-logs" init
+          if [[ "$SWCOMPAT_WINE_BASELINE" == "wiage-11.13" ]]; then
+            # The pinned Wiage fork implements MAGE_BACKGROUND_EXE in its
+            # ntdll loader and suppresses helper window foreground activation
+            # in winemac. WineHQ bug 59595 reports rundll32's visible window
+            # can keep macOS26 wineboot stuck inside display event callbacks.
+            # The fork also explicitly documents WINEMSYNC=1 for both its
+            # client and wineserver. Apply only to this experimental engine.
+            export MAGE_BACKGROUND_EXE=rundll32.exe:services.exe:explorer.exe:conhost.exe
+            export WINEMSYNC=1
+            echo "MAGE_BACKGROUND_EXE=$MAGE_BACKGROUND_EXE" >> "$GITHUB_ENV"
+            echo "WINEMSYNC=1" >> "$GITHUB_ENV"
+            BOOT_TIMEOUT=120
+            echo "Original CLR4 Wiage Wineboot environment: BACKGROUND_HELPERS_AND_MSYNC"
+          else
+            BOOT_TIMEOUT=240
+            echo "Original CLR4 Wineboot environment: DEFAULT"
+          fi
+          python3 -m swcompat --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" --logs-dir "$RUNNER_TEMP/netfx40-msxml3-logs" init --timeout "$BOOT_TIMEOUT"
           touch "$RUNNER_TEMP/netfx40-msxml3-prefix/.swcompat-netfx481-disposable"
       - name: Install native msxml3 through original Winetricks verb
         shell: bash
