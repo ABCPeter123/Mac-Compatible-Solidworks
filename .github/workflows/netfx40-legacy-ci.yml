@@ -1212,7 +1212,9 @@ jobs:
                               "native48_candidate"):
                       out.write(f"signed_msi_48_{key}: **{msi[key]}**\n\n")
                   for key in ("status", "failure", "action",
-                              "last_started_action", "errors"):
+                              "last_started_action", "errors",
+                              "services_mentioned", "services_near_missing_error",
+                              "custom_action_detail"):
                       out.write(f"signed_msi_48_install_log_{key}: **"
                                 f"{msi['install_log'][key]}**\n\n")
               direct_path = Path("build/netfx40-to-48-direct.json")
