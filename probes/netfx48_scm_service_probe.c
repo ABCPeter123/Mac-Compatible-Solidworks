@@ -7,6 +7,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <stdio.h>
+#include <string.h>
 
 typedef struct {
     const wchar_t *wide_name;
@@ -36,8 +37,17 @@ static const char *service_presence(SC_HANDLE manager, const wchar_t *name) {
     }
 }
 
-int main(void) {
+int main(int argc, char **argv) {
     size_t i;
+    if (argc == 2 && strcmp(argv[1], "--selftest") == 0) {
+        /* Does not call SCM. Confirms this self-authored MSVC x64 exe
+         * starts and writes through the native Windows CRT under Wine. */
+        puts("SWCOMPAT_SCM_FIXTURE_SELFTEST=PASS");
+        fflush(stdout);
+        return 0;
+    }
+    if (argc != 1)
+        return 2;
     SC_HANDLE manager = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
     printf("SWCOMPAT_SCM_API_SCHEMA=1\n");
     printf("SWCOMPAT_SCM_API_STATUS=%s\n",
