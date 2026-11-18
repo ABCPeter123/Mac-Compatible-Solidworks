@@ -55,6 +55,7 @@ class DirectNative48Tests(unittest.TestCase):
             mock.patch.object(p, "verify_original_media"),
             mock.patch.object(p, "validate_native40", return_value=True),
             mock.patch.object(p, "mono_inventory", return_value=()),
+            mock.patch.object(p, "selftest_scm", return_value="PASS"),
             mock.patch.object(p, "inspect_registrations", return_value={
                 "native64": "OLDER_RELEASE", "wow32": "AT_LEAST_481",
                 "native64_version": "V4_0", "wow32_version": "V4_7_PLUS"}),
@@ -107,6 +108,7 @@ class DirectNative48Tests(unittest.TestCase):
         self.assertTrue(evidence.validate_secondary_report(result["secondary_evidence"]))
         self.assertEqual(result["service_prerequisites"]["TrustedInstaller"], "ABSENT")
         self.assertEqual(result["wine_mono_registration"], "ABSENT")
+        self.assertEqual(result["scm_fixture_selftest"], "NOT_RUN")
         self.assertEqual(result["registry_preflight"]["native64"], "OLDER_RELEASE")
         self.assertEqual(result["registry_preflight"]["wow32"], "AT_LEAST_481")
         self.assertTrue(p.valid_services(result["service_prerequisites"]))
@@ -123,6 +125,9 @@ class DirectNative48Tests(unittest.TestCase):
             self.assertFalse(p.validate(dict(result, framework481_confirmed=True)))
             self.assertFalse(p.validate(dict(result, private_text="PRIVATE")))
             self.assertFalse(p.validate(dict(result, wine_mono_registration="PRIVATE")))
+            self.assertFalse(p.validate(dict(result, scm_fixture_selftest="private text")))
+            self.assertTrue(p.validate(dict(result, scm_fixture_selftest="PASS")))
+            self.assertTrue(p.validate(dict(result, scm_fixture_selftest="NONZERO_EXIT")))
             self.assertFalse(p.validate(dict(result, blockif_trace={
                 **result["blockif_trace"], "private_expression": "SECRET"})))
             self.assertTrue(p.validate(dict(result, wine_mono_registration="PRESENT")))
