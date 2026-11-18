@@ -97,7 +97,10 @@ def classify_private_msi_log(root: Path) -> dict:
 def valid_msi_log(report: object) -> bool:
     if type(report) is not dict or set(report) != set(blank_msi_log()):
         return False
-    if (report["status"] not in LOG_STATES or type(report["failure"]) is not bool
+    if (any(type(report[k]) is not str for k in
+            ("status", "action", "last_started_action"))
+            or report["status"] not in LOG_STATES
+            or type(report["failure"]) is not bool
             or report["action"] not in ACTION_CLASSES
             or report["last_started_action"] not in ACTION_CLASSES
             or type(report["errors"]) is not list
