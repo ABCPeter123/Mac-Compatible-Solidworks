@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -19,7 +20,8 @@ from scripts.netfx40_msxml3_restart import validate as valid_native40
 from scripts.netfx40_to_48_direct import verify_original_media
 from scripts.netfx40_to_48_intermediate import _env, _release, _set_winver, _terminate_group
 from scripts.netfx40_msi_evidence import (
-    classify_msi_log, ACTION_CLASSES, ERROR_CLASSES, MAX_FILE_BYTES,
+    classify_msi_log, classify_action, _decode,
+    ACTION_CLASSES, ERROR_CLASSES, MAX_FILE_BYTES,
 )
 from scripts.netfx481_clr_load import run as load_clr, STATUSES as LOAD_STATES
 from scripts.netfx481_payload_audit import snapshot
@@ -31,10 +33,33 @@ STEPS = {
 }
 LOG_STATES = {"NOT_RUN", "NO_LOG", "CLASSIFIED", "TOO_LARGE", "UNSAFE", "UNREADABLE"}
 PRIVATE_LOG = "netfx48-msi-install-private.log"
+# An MSI hang may have no Return value 3. Retain the last *action class*,
+# never its raw name, timestamp, command, vendor log line, or package path.
+ACTION_STARTED = re.compile(
+    r"(?i)\\b(?:Action start\\s+\\d{1,2}:\\d{2}:\\d{2}:\\s*|"
+    r"Doing action:\\s*)([a-z][a-z0-9_. -]{0,90})\\.?"
+)
+
+
+def last_started_action(raw: bytes) -> str:
+    if type(raw) is not bytes or len(raw) > MAX_FILE_BYTES:
+        return "UNKNOWN"
+    decoded = _decode(raw)
+    if decoded is None:
+        return "UNKNOWN"
+    last = "UNKNOWN"
+    for line in decoded.splitlines():
+        if len(line) > 8192:
+            continue
+        match = ACTION_STARTED.search(line)
+        if match:
+            last = classify_action(match.group(1).strip().rstrip("."))
+    return last
 
 
 def blank_msi_log() -> dict:
-    return {"status": "NOT_RUN", "failure": False, "action": "UNKNOWN", "errors": []}
+    return {"status": "NOT_RUN", "failure": False, "action": "UNKNOWN",
+            "last_started_action": "UNKNOWN", "errors": []}
 
 
 def classify_private_msi_log(root: Path) -> dict:
@@ -56,7 +81,9 @@ def classify_private_msi_log(root: Path) -> dict:
         if not scan["readable"]:
             return {**blank_msi_log(), "status": "UNREADABLE"}
         return {"status": "CLASSIFIED", "failure": scan["failure"],
-                "action": scan["action"], "errors": scan["errors"]}
+                "action": scan["action"],
+                "last_started_action": last_started_action(raw),
+                "errors": scan["errors"]}
     except OSError:
         return {**blank_msi_log(), "status": "UNREADABLE"}
     finally:
@@ -72,6 +99,7 @@ def valid_msi_log(report: object) -> bool:
         return False
     if (report["status"] not in LOG_STATES or type(report["failure"]) is not bool
             or report["action"] not in ACTION_CLASSES
+            or report["last_started_action"] not in ACTION_CLASSES
             or type(report["errors"]) is not list
             or any(type(x) is not str or x not in ERROR_CLASSES
                    for x in report["errors"])
