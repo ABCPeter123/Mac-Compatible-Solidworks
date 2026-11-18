@@ -1,5 +1,6 @@
 name: One-shot Wiage Rosetta-patched Wine original Microsoft x86 CLR4
 
+# Reattempt after authentic release metadata preflight verifies AppleDouble sidecar exclusion.
 # Independent Wine 11.13 Rosetta WoW64 engine A/B, pinned to the exact
 # SHA256 GitHub release runtime. Native Microsoft CLR4 only, never 4.8 MSI.
 # Requires macOS 26. Do not upload originals or private exception traces.
