@@ -846,7 +846,13 @@ jobs:
             # Independently reject archive traversal, malformed metadata,
             # untrusted special files and links before any bytes are extracted.
             python3 -m scripts.wine_engine_archive --archive "$ARCHIVE"
-            tar -xzf "$ARCHIVE" -C "$RUNNER_TEMP/msxml3-wine-build"
+            # The pinned macOS-produced tar contains AppleDouble
+            # ._wiage and potentially wiage/**/._* host metadata entries.
+            # Validation permits only small regular sidecars. Never extract
+            # them, especially ._wiage outside the isolated wiage root.
+            COPYFILE_DISABLE=1 tar --exclude='._*' --exclude='*/._*' \
+              -xzf "$ARCHIVE" -C "$RUNNER_TEMP/msxml3-wine-build"
+            test ! -e "$RUNNER_TEMP/msxml3-wine-build/._wiage"
             WINE_BIN="$RUNNER_TEMP/msxml3-wine-build/wiage/bin/wine"
             test -e "$WINE_BIN" && test -x "$WINE_BIN"
             test -x "$RUNNER_TEMP/msxml3-wine-build/wiage/bin/wineserver"
@@ -982,13 +988,15 @@ jobs:
           managed = Path("build/netfx40_wow64_managed_probe.exe").resolve()
           outcome = inspect(wine, prefix, native, managed)
           assert valid(outcome)
-          if any(outcome[key] == "TIMED_OUT_CLEANUP_DENIED"
-                 for key in ("native_run", "managed_run")):
-              raise RuntimeError("Unsafe WoW64 process group cleanup; stop Wine trials")
+          # Report only finite classifications *before* a strict unsafe
+          # process-group abort. Never run another Wine process after denial.
           Path("build/netfx40-wow64-faults.json").write_text(
               json.dumps(outcome, sort_keys=True), encoding="ascii")
           for key, value in outcome.items():
               print("Native original CLR4 WoW64 x86 diagnostic", key, value)
+          if any(outcome[key] == "TIMED_OUT_CLEANUP_DENIED"
+                 for key in ("native_run", "managed_run")):
+              raise RuntimeError("Unsafe WoW64 process group cleanup; stop Wine trials")
           PY
       - name: Verify native Microsoft CLR4 x86 managed execution under Wine WoW64
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_wow64_managed

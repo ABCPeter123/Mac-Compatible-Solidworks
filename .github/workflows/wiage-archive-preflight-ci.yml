@@ -1,0 +1,69 @@
+name: Verify pinned Wiage Rosetta runtime archive before macOS experiments
+
+# Public open-source Wine binary provenance only. No Microsoft installers,
+# original media, Wine prefixes or SOLIDWORKS files. Keep binary off artifacts.
+on:
+  pull_request:
+    paths:
+      - 'scripts/wine_engine_archive.py'
+      - 'tests/test_wine_engine_archive.py'
+      - '.github/workflows/wiage-archive-preflight-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/wiage-archive-preflight-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-pinned-wiage:
+    name: SHA256-check actual public Wiage archive and validate extraction metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run strict archive metadata regression tests
+        run: python3 -m unittest tests.test_wine_engine_archive -v
+      - name: Authenticate exact open-source release and inspect safe metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/wiage-runtime.tar.gz"
+          trap 'rm -f "$ARCHIVE"' EXIT
+          curl --fail --location --retry 3 --max-time 300 --output "$ARCHIVE" \
+            "https://github.com/dttdrv/mage/releases/download/preview-2026-08-02/wiage-runtime.tar.gz"
+          printf '%s  %s\n' \
+            d0cea7ff492dd3801dfa26a2a7d5ed1331e60f65929318d17301a3ce9cbba56c \
+            "$ARCHIVE" | sha256sum -c -
+          # This is a public, publisher-signed-off open-source Wine release,
+          # not original Microsoft or user media. Show one escaped archive
+          # *entry name*, never extracted contents, for validator diagnosis.
+          python3 - "$ARCHIVE" <<'PY'
+          import sys, tarfile, posixpath
+          from scripts.wine_engine_archive import _safe_name
+          with tarfile.open(sys.argv[1], "r:gz") as archive:
+              for member in archive:
+                  normalized = posixpath.normpath(member.name)
+                  if normalized == "." and member.isdir():
+                      continue
+                  if not _safe_name(member.name):
+                      print("First public Wiage archive unexpected member:",
+                            ascii(member.name)[:150],
+                            "type:", "dir" if member.isdir() else
+                            "file" if member.isfile() else "link" if
+                            (member.issym() or member.islnk()) else "special")
+                      break
+              else:
+                  print("No unexpected archive entry names")
+          PY
+          python3 -m scripts.wine_engine_archive --archive "$ARCHIVE"
+          mkdir -p "$RUNNER_TEMP/wiage-extract"
+          tar --exclude='._*' --exclude='*/._*' -xzf "$ARCHIVE" \
+            -C "$RUNNER_TEMP/wiage-extract"
+          test -x "$RUNNER_TEMP/wiage-extract/wiage/bin/wine"
+          test -x "$RUNNER_TEMP/wiage-extract/wiage/bin/wineserver"
+          test ! -e "$RUNNER_TEMP/wiage-extract/._wiage"
+          test -z "$(find "$RUNNER_TEMP/wiage-extract" -name '._*' -print -quit)"
+          echo "Actual public Wiage runtime extracted with no AppleDouble members"
