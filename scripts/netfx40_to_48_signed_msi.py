@@ -18,7 +18,7 @@ import tempfile
 from scripts.netfx40_msxml3_restart import validate as valid_native40
 from scripts.netfx40_to_48_direct import verify_original_media
 from scripts.netfx40_to_48_intermediate import _env, _release, _set_winver
-from scripts.netfx481_clr_load import run as load_clr
+from scripts.netfx481_clr_load import run as load_clr, STATUSES as LOAD_STATES
 from scripts.netfx481_payload_audit import snapshot
 from scripts.netfx481_trial import validate_prefix, probe, wineboot_restart
 
@@ -27,8 +27,7 @@ MEDIA = {"NOT_RUN", "VERIFIED", "FILES_MISSING", "UNSAFE", "INVALID_PACKAGE"}
 WINVER = {"NOT_RUN", "APPLIED", "FAILED"}
 RESTART = {"NOT_RUN", "COMPLETED", "EXIT_NONZERO", "START_FAILED", "TIMED_OUT"}
 RELEASE = {"UNAVAILABLE", "NOT_FOUND", "BELOW_48", "NETFX48_RANGE", "AT_LEAST_481"}
-LOADER = {"NOT_VERIFIED", "LOADED", "LOAD_FAILED", "NOT_FOUND", "START_FAILED", "TIMED_OUT",
-          "BAD_REPORT", "PROCESS_FAILED", "UNKNOWN"}
+LOADER = LOAD_STATES | {"NOT_VERIFIED"}
 NATIVE = {"NOT_VERIFIED", "PASS", "FAIL"}
 TARGET = "swcompat-original-netfx48-msi"
 MSI = "netfx_Full_x64.msi"
@@ -82,8 +81,10 @@ def validate(result: object) -> bool:
 
 def verify_extracted_media(root: Path) -> str:
     """No arbitrary MSI paths, symlinks, filenames or external MSPs."""
-    if root.is_symlink() or not root.is_dir():
+    if root.is_symlink():
         return "UNSAFE"
+    if not root.is_dir():
+        return "FILES_MISSING"
     for filename in (MSI, MSP):
         file = root / filename
         if file.is_symlink():
