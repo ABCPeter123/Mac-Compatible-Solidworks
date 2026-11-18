@@ -87,6 +87,26 @@ class Wow64FaultTriageTests(TestCase):
             self.assertEqual((run, status, raw), ("TIMED_OUT", "NO_EXCEPTION", b""))
             terminate.assert_called_once_with(child)
 
+    def test_bounded_stdout_pipe_drains_without_retaining_full_wine_trace(self):
+        with TemporaryDirectory() as td:
+            child = mock.Mock()
+            child.wait.return_value = 0
+            child.stdout.fileno.return_value = 19
+            block = b"SECRETPATH" * (d.MAX_CAPTURE // 10 + 2)
+            with (mock.patch.object(d.subprocess, "Popen", return_value=child) as launch,
+                  mock.patch.object(d.time, "monotonic", return_value=0),
+                  mock.patch.object(d.select, "select",
+                                    return_value=([child.stdout], [], [])),
+                  mock.patch.object(d.os, "read", side_effect=[block, b""])):
+                run, category, out = d._capture(Path("wine"), Path(td),
+                                                Path("x86.exe"), 25, managed=False)
+            self.assertEqual(run, "EXIT_ZERO")
+            self.assertEqual(category, "TOO_LARGE")
+            self.assertLessEqual(len(out), d.MAX_CAPTURE)
+            self.assertEqual(launch.call_args.kwargs["stdout"], subprocess.PIPE)
+            self.assertEqual(launch.call_args.kwargs["stderr"], subprocess.STDOUT)
+            self.assertTrue(launch.call_args.kwargs["start_new_session"])
+
     def test_strict_report_rejects_untrusted_and_ambiguous_fields(self):
         b = d.blank()
         self.assertTrue(d.valid(b))
