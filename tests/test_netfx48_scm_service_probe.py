@@ -1,5 +1,6 @@
 """Synthetic finite-only Windows Service Control Manager API probe tests."""
 from pathlib import Path
+import os
 import subprocess
 import tempfile
 import unittest
@@ -94,7 +95,7 @@ class NativeSCMProbeTests(unittest.TestCase):
             fixture.write_bytes(b"fixture")
 
             def execute(args, **kwargs):
-                self.assertEqual(args, [str(wine), str(fixture)])
+                self.assertEqual(args, [str(wine.resolve()), str(fixture.resolve())])
                 self.assertEqual(kwargs["env"]["WINEPREFIX"], str(prefix))
                 self.assertEqual(kwargs["env"]["WINEDEBUG"], "-all")
                 self.assertEqual(kwargs["env"]["WINEARCH"], "win64")
@@ -117,6 +118,40 @@ class NativeSCMProbeTests(unittest.TestCase):
                     scm.measure(wine, prefix, root / "user-binary.exe")
                 run.assert_not_called()
 
+    def test_relative_ci_fixture_is_absolute_when_wine_changes_cwd(self):
+        # GitHub Actions passes 'build/netfx48_scm_service_probe.exe'.
+        # Using cwd='build' without resolving argv[1] misaddresses the exe.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            build = root / "build"
+            build.mkdir()
+            wine = root / "wine"
+            wine.write_bytes(b"wine")
+            prefix = root / "prefix"
+            prefix.mkdir()
+            fixture = build / "netfx48_scm_service_probe.exe"
+            fixture.write_bytes(b"native Win32 fixture")
+            relative = Path(os.path.relpath(fixture, Path.cwd()))
+            self.assertFalse(relative.is_absolute())
+            calls = []
+
+            def execute(args, **kwargs):
+                calls.append((args, kwargs))
+                self.assertEqual(args[0], str(wine.resolve()))
+                self.assertEqual(args[1], str(fixture.resolve()))
+                self.assertEqual(kwargs["cwd"], build.resolve())
+                self.assertNotIn("WINEDLLOVERRIDES", kwargs["env"])
+                kwargs["stdout"].write(
+                    scm.SELFTEST_MARKER if len(args) == 3 else packet())
+                return mock.Mock(returncode=0)
+
+            with mock.patch.object(scm, "validate_prefix"), \
+                 mock.patch.object(scm.subprocess, "run", side_effect=execute):
+                self.assertEqual(scm.selftest(wine, prefix, relative), "PASS")
+                self.assertEqual(
+                    scm.measure(wine, prefix, relative)["status"], "COMPLETE")
+            self.assertEqual(len(calls), 2)
+
     def test_independent_selftest_has_no_service_claims(self):
         self.assertEqual(scm.parse_selftest(scm.SELFTEST_MARKER, 0), "PASS")
         self.assertEqual(scm.parse_selftest(
@@ -137,7 +172,7 @@ class NativeSCMProbeTests(unittest.TestCase):
             fixture.write_bytes(b"fixture")
 
             def execute(args, **kwargs):
-                self.assertEqual(args, [str(wine), str(fixture), "--selftest"])
+                self.assertEqual(args, [str(wine.resolve()), str(fixture.resolve()), "--selftest"])
                 self.assertEqual(kwargs["env"]["WINEPREFIX"], str(prefix))
                 self.assertNotIn("WINEDLLOVERRIDES", kwargs["env"])
                 self.assertIs(kwargs["stdin"], subprocess.DEVNULL)

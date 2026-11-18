@@ -1,0 +1,31 @@
+name: One-shot signed .NET 4.8 with corrected SCM executable path
+
+# The prior original signed Win10 run returned error 5100, while a native
+# Win32 SCM fixture did not even reach its no-service startup selftest.
+# The fixture received a relative build/foo.exe while cwd was build/.
+# Retest actual SCM presence after resolving that path, without forging
+# any Windows services, registry versions, or signed Microsoft files.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netfx48-scm-path-once-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: netfx48-scm-path-once-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  authenticated-scm-path-differential:
+    name: Verify native SCM presence then original Microsoft 4.8 setup
+    uses: ./.github/workflows/netfx40-legacy-ci.yml
+    with:
+      host_provenance_only: false
+      try_48_payload_host: false
+      try_48_intermediate: false
+      try_48_direct: true
+      original_48_profile: win10
+      use_macos26_runner: true
