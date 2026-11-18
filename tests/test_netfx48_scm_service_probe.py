@@ -95,7 +95,7 @@ class NativeSCMProbeTests(unittest.TestCase):
             fixture.write_bytes(b"fixture")
 
             def execute(args, **kwargs):
-                self.assertEqual(args, [str(wine), str(fixture)])
+                self.assertEqual(args, [str(wine.resolve()), str(fixture.resolve())])
                 self.assertEqual(kwargs["env"]["WINEPREFIX"], str(prefix))
                 self.assertEqual(kwargs["env"]["WINEDEBUG"], "-all")
                 self.assertEqual(kwargs["env"]["WINEARCH"], "win64")
@@ -137,9 +137,9 @@ class NativeSCMProbeTests(unittest.TestCase):
 
             def execute(args, **kwargs):
                 calls.append((args, kwargs))
-                self.assertEqual(args[0], str(wine))
-                self.assertEqual(args[1], str(fixture))
-                self.assertEqual(kwargs["cwd"], build)
+                self.assertEqual(args[0], str(wine.resolve()))
+                self.assertEqual(args[1], str(fixture.resolve()))
+                self.assertEqual(kwargs["cwd"], build.resolve())
                 self.assertNotIn("WINEDLLOVERRIDES", kwargs["env"])
                 kwargs["stdout"].write(
                     scm.SELFTEST_MARKER if len(args) == 3 else packet())
@@ -172,7 +172,7 @@ class NativeSCMProbeTests(unittest.TestCase):
             fixture.write_bytes(b"fixture")
 
             def execute(args, **kwargs):
-                self.assertEqual(args, [str(wine), str(fixture), "--selftest"])
+                self.assertEqual(args, [str(wine.resolve()), str(fixture.resolve()), "--selftest"])
                 self.assertEqual(kwargs["env"]["WINEPREFIX"], str(prefix))
                 self.assertNotIn("WINEDLLOVERRIDES", kwargs["env"])
                 self.assertIs(kwargs["stdin"], subprocess.DEVNULL)
