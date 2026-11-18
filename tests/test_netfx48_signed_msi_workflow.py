@@ -131,6 +131,23 @@ class SignedMSIGates(TestCase):
         self.assertIn(r"""f"{msi['ngen_log'][field]}**\n\n")""", source)
         self.assertNotIn(r"""f"{msi['ngen_log'][field]}**\\n\\n")""", source)
 
+    def test_original_extended_ngen_budget_is_only_on_isolated_one_shot(self):
+        source = (ROOT / ".github/workflows/netfx48-msi-ngen-long-budget-once-ci.yml").read_text(
+            encoding="utf-8")
+        self.assertIn("branches: [main]", source)
+        self.assertIn("      - '.github/workflows/netfx48-msi-ngen-long-budget-once-ci.yml'", source)
+        for expected in ("try_48_msi: true", "signed_msi_timeout_seconds: 1200",
+                         "try_48_direct: false", "try_48_intermediate: false",
+                         "prepare_48_assembly_cache: true", "use_macos26_runner: true",
+                         "wine_baseline: '11.21'"):
+            self.assertIn(expected, source)
+        self.assertNotIn("actions/upload-artifact", source)
+        legacy = LEGACY.read_text(encoding="utf-8")
+        self.assertIn("timeout-minutes: ${{ inputs.try_48_msi && inputs.signed_msi_timeout_seconds == 1200 && 55 || 35 }}", legacy)
+        self.assertIn('--msi-timeout-seconds "$SWCOMPAT_SIGNED_MSI_TIMEOUT"', legacy)
+        self.assertIn("signed_msi_timeout_seconds:", legacy)
+        self.assertIn('"msi_timeout_seconds"', legacy)
+
     def test_reusable_only_allows_msi_when_signed_media_authenticated(self):
         workflow = LEGACY.read_text(encoding="utf-8")
         self.assertEqual(workflow.count("      try_48_msi:"), 2)
