@@ -190,8 +190,12 @@ permissions:
 # Apple Silicon installer experiments when a new commit queued a follow-up.
 # Fast non-MSI checks retain the existing cancel-in-progress behavior.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.try_48_msi && github.sha || 'shared' }}
-  cancel-in-progress: ${{ !inputs.try_48_msi }}
+  # Original signed MSI and genuine x86 runtime controls can last 10+ minutes.
+  # Keep experiments from distinct commits separated, even when the reusable
+  # workflow is called on the same branch and shares the workflow name.
+  # Preserve existing cancellation behavior for ordinary non-experiment CI.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ (inputs.try_48_msi || inputs.try_wow64_managed) && github.sha || 'shared' }}
+  cancel-in-progress: ${{ !inputs.try_48_msi && !inputs.try_wow64_managed }}
 
 jobs:
   absolute-path-regressions:
