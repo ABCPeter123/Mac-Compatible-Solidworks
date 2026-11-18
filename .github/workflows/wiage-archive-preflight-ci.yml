@@ -59,3 +59,11 @@ jobs:
                   print("No unexpected archive entry names")
           PY
           python3 -m scripts.wine_engine_archive --archive "$ARCHIVE"
+          mkdir -p "$RUNNER_TEMP/wiage-extract"
+          tar --exclude='._*' --exclude='*/._*' -xzf "$ARCHIVE" \
+            -C "$RUNNER_TEMP/wiage-extract"
+          test -x "$RUNNER_TEMP/wiage-extract/wiage/bin/wine"
+          test -x "$RUNNER_TEMP/wiage-extract/wiage/bin/wineserver"
+          test ! -e "$RUNNER_TEMP/wiage-extract/._wiage"
+          test -z "$(find "$RUNNER_TEMP/wiage-extract" -name '._*' -print -quit)"
+          echo "Actual public Wiage runtime extracted with no AppleDouble members"
