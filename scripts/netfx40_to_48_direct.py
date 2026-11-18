@@ -27,6 +27,7 @@ from scripts.netfx48_registry_preflight import (
 )
 from scripts.netfx48_scm_service_probe import (
     blank as blank_scm, valid as valid_scm, measure as measure_scm,
+    selftest as selftest_scm, SELFTEST_STATUSES,
 )
 from scripts.netfx40_to_48_intermediate import _env, _release, _set_winver, RELEASE
 from scripts.netfx481_clr_load import run as load_clr, STATUSES as LOAD_STATES
@@ -115,6 +116,7 @@ def blank() -> dict:
         "status": "NOT_ELIGIBLE", "native40_persistent": False,
         "service_prerequisites": blank_services(),
         "service_api": blank_scm(),
+        "scm_fixture_selftest": "NOT_RUN",
         "registry_preflight": blank_registrations(),
         "wine_mono_registration": "NOT_RUN",
         "setup_profile": "NOT_RUN", "setup_profile_applied": "NOT_RUN",
@@ -161,6 +163,7 @@ def validate(report: object) -> bool:
             or not valid_blockif(report["blockif_trace"])
             or not valid_services(report["service_prerequisites"])
             or not valid_scm(report["service_api"])
+            or report["scm_fixture_selftest"] not in SELFTEST_STATUSES
             or not valid_registrations(report["registry_preflight"])
             or report["wine_mono_registration"] not in {
                 "NOT_RUN", "ABSENT", "PRESENT", "UNKNOWN"}
@@ -258,6 +261,9 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
     except ValueError:
         mono_registration = "UNKNOWN"
     services = inventory_services(wine, prefix)
+    scm_fixture_selftest = (
+        selftest_scm(wine, prefix, service_fixture)
+        if service_fixture is not None else "NOT_RUN")
     service_api = (measure_scm(wine, prefix, service_fixture)
                    if service_fixture is not None else blank_scm())
     env = _env(wine, prefix)
@@ -312,6 +318,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
         "status": "MEASURED", "native40_persistent": True,
         "service_prerequisites": services,
         "service_api": service_api,
+        "scm_fixture_selftest": scm_fixture_selftest,
         "registry_preflight": registrations,
         "wine_mono_registration": mono_registration,
         "setup_profile": setup_profile.upper(),
