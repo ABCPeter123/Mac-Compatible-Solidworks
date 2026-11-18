@@ -30,7 +30,8 @@ def parse_selftest(raw: bytes, exit_code: int) -> str:
         return "NONZERO_EXIT"
     if not raw:
         return "EMPTY_OUTPUT"
-    return "PASS" if raw == SELFTEST_MARKER else "UNEXPECTED_OUTPUT"
+    return ("PASS" if raw in {SELFTEST_MARKER, SELFTEST_MARKER[:-1] + b"\r\n"}
+            else "UNEXPECTED_OUTPUT")
 
 
 def blank(status: str = "NOT_RUN") -> dict:
