@@ -53,6 +53,11 @@ on:
         type: boolean
         required: false
         default: false
+      settle_wineserver:
+        description: 'Opt-in stop lingering Wine server and clients in disposable prefix before dotnet48'
+        type: boolean
+        required: false
+        default: false
       wine_baseline:
         description: 'Only authenticated SHA256-pinned Wine Staging baseline releases'
         type: string
@@ -105,6 +110,11 @@ on:
         default: false
       reuse_verified_native40:
         description: 'Avoid duplicate original 4.0 Winetricks install only if independently verified'
+        type: boolean
+        required: false
+        default: false
+      settle_wineserver:
+        description: 'Test clearing Wine clients blocking Winetricks wineserver -w'
         type: boolean
         required: false
         default: false
@@ -1033,11 +1043,15 @@ jobs:
         shell: bash
         env:
           SWCOMPAT_REUSE_NATIVE40: ${{ inputs.reuse_verified_native40 }}
+          SWCOMPAT_SETTLE_WINESERVER: ${{ inputs.settle_wineserver }}
         run: |
           set -euo pipefail
           extra=()
           if [ "$SWCOMPAT_REUSE_NATIVE40" = "true" ]; then
             extra+=(--reuse-verified-native40)
+          fi
+          if [ "$SWCOMPAT_SETTLE_WINESERVER" = "true" ]; then
+            extra+=(--settle-disposable-wineserver)
           fi
           python3 -m scripts.netfx40_to_48_intermediate \
             --wine "$SWCOMPAT_WINE" \
@@ -1185,7 +1199,7 @@ jobs:
                                "clr64_changed", "release", "loader",
                                "native_only_managed", "native48_candidate",
                                "verb_stages", "verb_last_stage",
-                               "timeout_processes"):
+                               "timeout_processes", "wineserver_settle"):
                       out.write(f"intermediate_48_{name}: **{step[name]}**\n\n")
               msi_path = Path("build/netfx40-to-48-signed-msi.json")
               if msi_path.is_file():

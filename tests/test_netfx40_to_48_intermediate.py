@@ -45,7 +45,7 @@ class Native40To48IntermediateTests(unittest.TestCase):
 
     def _run_fixture(self, paths, winetricks="SUCCESS",
                      changed=True, release="NETFX48_RANGE",
-                     progress="DOTNET48_VERB_SEEN", reuse=False):
+                     progress="DOTNET48_VERB_SEEN", reuse=False, settle=False):
         hash_before = b"orig40"
         hash_after = b"orig48" if changed else hash_before
         before = {"CLR64": ("PE_AMD64", hash_before)}
@@ -71,15 +71,21 @@ class Native40To48IntermediateTests(unittest.TestCase):
               mock.patch.object(p, "_set_winver", return_value="APPLIED") as profile,
               mock.patch.object(p, "mark_verified_native40",
                                 return_value="RECORDED") as reused,
+              mock.patch.object(p, "settle_disposable_wineserver",
+                                return_value="SUCCESS") as server_reset,
               mock.patch.object(p, "_run_winetricks", side_effect=runner),
               mock.patch.object(p, "wineboot_restart", return_value="COMPLETED"),
               mock.patch.object(p, "_release", return_value=release)):
             outcome = p.inspect(*paths, {"persistent_native_managed": True},
-                                reuse_verified_native40=reuse)
+                                reuse_verified_native40=reuse,
+                                settle_wineserver=settle)
         self.assertTrue(p.validate(outcome))
         self.assertEqual(outcome["native40_marker"],
                          "RECORDED" if reuse else "NOT_RUN")
         self.assertEqual(reused.call_count, 1 if reuse else 0)
+        self.assertEqual(server_reset.call_count, 1 if settle else 0)
+        self.assertEqual(outcome["wineserver_settle"],
+                         "SUCCESS" if settle else "NOT_RUN")
         self.assertEqual([x.args[3] for x in profile.call_args_list],
                          ["win7", "win10"])
         self.assertFalse(outcome["framework481_confirmed"])
@@ -291,6 +297,65 @@ class Native40To48IntermediateTests(unittest.TestCase):
             self.assertEqual(run.call_args.kwargs["timeout"], 5)
         with mock.patch.object(p.subprocess, "run", side_effect=OSError):
             self.assertEqual(p.snapshot_process_group(444), [])
+
+    def test_prefix_scoped_wineserver_preflight_only_kills_disposable_prefix(self):
+        with TemporaryDirectory() as td:
+            paths = self._fixture(Path(td))
+            wine, prefix = paths[:2]
+            fake = mock.Mock()
+            fake.wait.return_value = 0
+            with (mock.patch.object(p, "validate_prefix"),
+                  mock.patch.object(p.subprocess, "Popen", return_value=fake) as process):
+                self.assertEqual(
+                    p.settle_disposable_wineserver(wine, prefix,
+                                                  {"WINEPREFIX": str(prefix)}),
+                    "SUCCESS")
+            self.assertEqual(process.call_args.args[0],
+                             [str(wine.parent / "wineserver"), "-k"])
+            self.assertEqual(process.call_args.kwargs["cwd"], prefix)
+            self.assertEqual(process.call_args.kwargs["env"]["WINEPREFIX"], str(prefix))
+            self.assertEqual(process.call_args.kwargs["timeout"] if
+                             "timeout" in process.call_args.kwargs else None, None)
+            self.assertTrue(process.call_args.kwargs["start_new_session"])
+            self.assertEqual(fake.wait.call_args.kwargs["timeout"], 30)
+
+            fake.wait.side_effect = p.subprocess.TimeoutExpired("wineserver", 30)
+            with (mock.patch.object(p, "validate_prefix"),
+                  mock.patch.object(p.subprocess, "Popen", return_value=fake),
+                  mock.patch.object(p, "_terminate_group") as terminate):
+                self.assertEqual(p.settle_disposable_wineserver(
+                    wine, prefix, {"WINEPREFIX": str(prefix)}), "TIMED_OUT")
+                terminate.assert_called_once_with(fake)
+            with (mock.patch.object(p, "validate_prefix"),
+                  mock.patch.object(p.subprocess, "Popen", side_effect=OSError)):
+                self.assertEqual(p.settle_disposable_wineserver(
+                    wine, prefix, {"WINEPREFIX": str(prefix)}), "START_FAILED")
+
+    @unittest.skipIf(os.name == "nt", "POSIX-only Wine wrapper")
+    def test_opt_in_preflight_fails_closed_before_dotnet48(self):
+        with TemporaryDirectory() as td:
+            paths = self._fixture(Path(td))
+            before = {"CLR64": ("PE_AMD64", "same")}
+            with (mock.patch.object(p, "validate_prefix"),
+                  mock.patch.object(p, "validate_native40", return_value=True),
+                  mock.patch.object(p, "snapshot", side_effect=[before, before]),
+                  mock.patch.object(p, "load_clr", return_value="LOADED"),
+                  mock.patch.object(p, "probe", return_value={"managed": "PASS"}),
+                  mock.patch.object(p, "_set_winver", return_value="APPLIED"),
+                  mock.patch.object(p, "settle_disposable_wineserver",
+                                    return_value="TIMED_OUT") as server,
+                  mock.patch.object(p, "_run_winetricks") as verb,
+                  mock.patch.object(p, "wineboot_restart", return_value="COMPLETED"),
+                  mock.patch.object(p, "_release", return_value="NOT_FOUND")):
+                output = p.inspect(*paths, {"persistent_native_managed": True},
+                                   settle_wineserver=True)
+            self.assertEqual(server.call_count, 1)
+            verb.assert_not_called()
+            self.assertTrue(p.validate(output))
+            self.assertEqual(output["verb"], "NOT_RUN")
+            self.assertEqual(output["wineserver_settle"], "TIMED_OUT")
+            self.assertFalse(output["native48_candidate"])
+            self.assertFalse(p.validate(dict(output, native48_candidate=True)))
 
     def test_group_cleanup_terminates_even_if_parent_exits_early(self):
         proc = mock.Mock()

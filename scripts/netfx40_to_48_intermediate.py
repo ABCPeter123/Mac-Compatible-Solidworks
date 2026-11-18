@@ -37,6 +37,9 @@ MARKER_STATES = {
     "NOT_RUN", "RECORDED", "ALREADY_RECORDED", "NGEN_ABSENT",
     "NGEN_INVALID", "LOG_UNSAFE",
 }
+SERVER_SETTLE_STATES = {
+    "NOT_RUN", "SUCCESS", "TIMED_OUT", "EXIT_NONZERO", "START_FAILED", "UNAVAILABLE",
+}
 # All events are fixed enum values. Never export Winetricks text, paths, or
 # original Microsoft installer output outside the disposable run.
 WINETRICKS_STAGES = {
@@ -94,6 +97,7 @@ def blank() -> dict:
             "verb": "NOT_RUN", "verb_progress": "NOT_RUN",
             "verb_stages": [], "verb_last_stage": "NOT_RUN",
             "timeout_processes": [], "native40_marker": "NOT_RUN",
+            "wineserver_settle": "NOT_RUN",
             "win7": "NOT_RUN", "win10": "NOT_RUN",
             "restart": "NOT_RUN", "clr64_changed": False,
             "release": "UNAVAILABLE", "loader": "NOT_VERIFIED",
@@ -118,6 +122,9 @@ def validate(result: object) -> bool:
                    for v in result["timeout_processes"])
             or result["timeout_processes"] != sorted(set(result["timeout_processes"]))
             or result["native40_marker"] not in MARKER_STATES
+            or result["wineserver_settle"] not in SERVER_SETTLE_STATES
+            or (result["wineserver_settle"] not in {"NOT_RUN", "SUCCESS"}
+                and result["verb"] != "NOT_RUN")
             or (result["verb"] != "TIMED_OUT" and result["timeout_processes"])
             or result["restart"] not in BOOT
             or result["win7"] not in WINVER or result["win10"] not in WINVER
@@ -323,6 +330,36 @@ def _terminate_group(child: subprocess.Popen) -> None:
         pass
 
 
+def settle_disposable_wineserver(wine: Path, prefix: Path,
+                                env: dict[str, str]) -> str:
+    """Shut down lingering Wine children in the isolated already-verified prefix.
+
+    Invoke only for the explicit opt-in. Never touch a user's default prefix,
+    never fabricate Windows services, runtime DLLs or Release registration.
+    This can interrupt Wine processes so MUST be limited to a disposable CI
+    prefix with persistent original native 4.0 already independently verified.
+    """
+    validate_prefix(prefix)
+    server = wine.parent / "wineserver"
+    if (server.is_symlink() or not server.is_file()
+            or not os.access(server, os.X_OK)):
+        return "UNAVAILABLE"
+    try:
+        child = subprocess.Popen(
+            [str(server), "-k"], cwd=prefix, env=env,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True,
+        )
+    except OSError:
+        return "START_FAILED"
+    try:
+        result = child.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        _terminate_group(child)
+        return "TIMED_OUT"
+    return "SUCCESS" if result == 0 else "EXIT_NONZERO"
+
+
 def _run_winetricks(command: list[str], env: dict[str, str],
                     cwd: Path, timeout: int) -> tuple[str, str, list[str], str, list[str]]:
     """Bound the verb and keep its entire diagnostic stream private."""
@@ -375,9 +412,11 @@ def _release(wine: Path, prefix: Path, env: dict[str, str]) -> str:
 
 def inspect(wine: Path, prefix: Path, winetricks: Path, loader: Path,
             managed: Path, native40: dict, *, timeout: int = 840,
-            reuse_verified_native40: bool = False) -> dict:
+            reuse_verified_native40: bool = False,
+            settle_wineserver: bool = False) -> dict:
     if (os.name == "nt" or not 120 <= timeout <= 900
-            or type(reuse_verified_native40) is not bool):
+            or type(reuse_verified_native40) is not bool
+            or type(settle_wineserver) is not bool):
         raise ValueError("Only bounded disposable Wine tests supported")
     if any(p.is_symlink() for p in (wine, prefix, winetricks, loader, managed)):
         raise ValueError("Linked experiment input")
@@ -403,13 +442,18 @@ def inspect(wine: Path, prefix: Path, winetricks: Path, loader: Path,
     )
     env = _env(wine, prefix)
     win7 = _set_winver(wine, prefix, env, "win7")
+    wineserver_settle = (
+        settle_disposable_wineserver(wine, prefix, env)
+        if settle_wineserver and win7 == "APPLIED" else "NOT_RUN"
+    )
     verb = "NOT_RUN"
     verb_progress = "NOT_RUN"
     verb_stages: list[str] = []
     verb_last_stage = "NOT_RUN"
     timeout_processes: list[str] = []
     try:
-        if win7 == "APPLIED":
+        if win7 == "APPLIED" and (
+                not settle_wineserver or wineserver_settle == "SUCCESS"):
             (verb, verb_progress, verb_stages, verb_last_stage,
              timeout_processes) = _run_winetricks(
                 ["bash", str(winetricks), "-q", "dotnet48"], env, prefix, timeout)
@@ -423,6 +467,7 @@ def inspect(wine: Path, prefix: Path, winetricks: Path, loader: Path,
               "verb_stages": verb_stages, "verb_last_stage": verb_last_stage,
               "timeout_processes": timeout_processes,
               "native40_marker": native40_marker,
+              "wineserver_settle": wineserver_settle,
               "win7": win7, "win10": win10,
               "restart": restart,
               "clr64_changed": (not same and after["CLR64"][0] == "PE_AMD64"),
@@ -433,7 +478,9 @@ def inspect(wine: Path, prefix: Path, winetricks: Path, loader: Path,
               "native48_candidate": False, "framework481_confirmed": False,
               "solidworks_compatibility": "NOT_DEMONSTRATED"}
     output["native48_candidate"] = (
-        output["verb"] == "SUCCESS" and output["win7"] == "APPLIED"
+        output["verb"] == "SUCCESS"
+        and (not settle_wineserver or output["wineserver_settle"] == "SUCCESS")
+        and output["win7"] == "APPLIED"
         and output["win10"] == "APPLIED" and output["restart"] == "COMPLETED"
         and output["clr64_changed"]
         and output["release"] == "NETFX48_RANGE"
@@ -451,12 +498,14 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--" + field, type=Path, required=True)
     p.add_argument("--timeout", type=int, default=840)
     p.add_argument("--reuse-verified-native40", action="store_true")
+    p.add_argument("--settle-disposable-wineserver", action="store_true")
     p.add_argument("--agree-disposable-prefix", action="store_true", required=True)
     args = p.parse_args(argv)
     result = inspect(args.wine, args.prefix, args.winetricks, args.loader,
                      args.managed, json.loads(args.native40_report.read_text()),
                      timeout=args.timeout,
-                     reuse_verified_native40=args.reuse_verified_native40)
+                     reuse_verified_native40=args.reuse_verified_native40,
+                     settle_wineserver=args.settle_disposable_wineserver)
     if args.output.is_symlink():
         raise ValueError("Linked result file")
     args.output.parent.mkdir(parents=True, exist_ok=True)
