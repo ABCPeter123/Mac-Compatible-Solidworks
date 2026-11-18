@@ -135,9 +135,9 @@ class OriginalSignedMSITests(TestCase):
             self.assertEqual(p.classify_private_msi_log(root)["status"], "NO_LOG")
             log = root / p.PRIVATE_LOG
             log.write_bytes(
-                b"Action ended 11:01:02: InstallServices. Return value 3.\\n"
-                b"Error 1722\\n"
-                b"some vendor name and private installation path\\n")
+                b"Action ended 11:01:02: InstallServices. Return value 3.\n"
+                b"Error 1722\n"
+                b"some vendor name and private installation path\n")
             result = p.classify_private_msi_log(root)
             self.assertEqual(result, {"status": "CLASSIFIED", "failure": True,
                                       "action": "SERVICE",
@@ -149,8 +149,8 @@ class OriginalSignedMSITests(TestCase):
             self.assertNotIn("some vendor name", str(result))
 
             log.write_bytes(
-                b"Action start 12:22:23: InstallFiles.\\n"
-                b"Action start 12:23:10: InstallServices.\\n")
+                b"Action start 12:22:23: InstallFiles.\n"
+                b"Action start 12:23:10: InstallServices.\n")
             pending = p.classify_private_msi_log(root)
             self.assertEqual(pending["action"], "UNKNOWN")
             self.assertEqual(pending["last_started_action"], "SERVICE")
