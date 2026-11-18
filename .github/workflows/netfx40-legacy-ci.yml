@@ -412,7 +412,7 @@ jobs:
             Set-Content -LiteralPath build/netfx48.sha256 -NoNewline -Encoding ascii
           Write-Output "Original signed Microsoft .NET 4.8 authenticated, checksum staged privately"
       - name: Compile distinct 4.8 original Windows process monitor
-        if: inputs.try_48_direct && !inputs.host_provenance_only
+        if: (inputs.try_48_direct || inputs.try_48_msi) && !inputs.host_provenance_only
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -1017,6 +1017,7 @@ jobs:
             --sha256-file build/netfx48.sha256 \
             --loader build/netfx481_clr_load.exe \
             --managed build/netfx481_runtime_probe.exe \
+            --service-fixture build/netfx48_scm_service_probe.exe \
             --native40-report build/netfx40-msxml3-restart.json \
             --output build/netfx40-to-48-signed-msi.json \
             --agree-disposable-prefix
@@ -1217,6 +1218,12 @@ jobs:
                               "custom_action_detail"):
                       out.write(f"signed_msi_48_install_log_{key}: **"
                                 f"{msi['install_log'][key]}**\n\n")
+                  from scripts.netfx48_scm_service_probe import FIELDS as scm_fields
+                  out.write(f"signed_msi_48_scm_startup: **{msi['scm_startup']}**\n\n")
+                  out.write(f"signed_msi_48_scm_status: **{msi['scm_preflight']['status']}**\n\n")
+                  for service in scm_fields:
+                      out.write(f"signed_msi_48_scm_{service}: **"
+                                f"{msi['scm_preflight']['services'][service]}**\n\n")
               direct_path = Path("build/netfx40-to-48-direct.json")
               if direct_path.is_file():
                   from scripts.netfx40_to_48_direct import validate as valid_direct
