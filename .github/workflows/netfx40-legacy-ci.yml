@@ -1124,7 +1124,8 @@ jobs:
                   for name in ("status", "verb", "verb_progress", "win7", "win10", "restart",
                                "clr64_changed", "release", "loader",
                                "native_only_managed", "native48_candidate",
-                               "verb_stages", "verb_last_stage"):
+                               "verb_stages", "verb_last_stage",
+                               "timeout_processes"):
                       out.write(f"intermediate_48_{name}: **{step[name]}**\n\n")
               direct_path = Path("build/netfx40-to-48-direct.json")
               if direct_path.is_file():
