@@ -280,21 +280,24 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
             or initial["managed"] != "PASS"):
         return blank()
 
+    root = prefix / "drive_c" / TARGET
+    if root.is_symlink() or root.exists():
+        raise ValueError("Original signed MSI extraction must start with empty directory")
+    env = _env(wine, prefix)
+    win7 = _set_winver(wine, prefix, env, "win7")
+
+    # Compare native SCM before and after MSI under the same Win7 profile.
+    # A Windows-version switch must not confound the service transition.
     scm_startup = "NOT_RUN"
     scm_preflight = blank_scm()
     if service_fixture is not None:
         if service_fixture.is_symlink() or service_fixture.name != "netfx48_scm_service_probe.exe":
             raise ValueError("Unrecognized native read-only SCM executable")
         service_fixture = service_fixture.resolve(strict=True)
-        scm_startup = selftest_scm(wine, prefix, service_fixture)
-        if scm_startup == "PASS":
-            scm_preflight = measure_scm(wine, prefix, service_fixture)
-
-    root = prefix / "drive_c" / TARGET
-    if root.is_symlink() or root.exists():
-        raise ValueError("Original signed MSI extraction must start with empty directory")
-    env = _env(wine, prefix)
-    win7 = _set_winver(wine, prefix, env, "win7")
+        if win7 == "APPLIED":
+            scm_startup = selftest_scm(wine, prefix, service_fixture)
+            if scm_startup == "PASS":
+                scm_preflight = measure_scm(wine, prefix, service_fixture)
     extracted, media, installed, patched = ("NOT_RUN", "NOT_RUN", "NOT_RUN", "NOT_RUN")
     restart = "NOT_RUN"
     install_log = blank_msi_log()
