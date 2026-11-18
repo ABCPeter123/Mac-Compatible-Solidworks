@@ -164,6 +164,25 @@ class SignedMSIGates(TestCase):
             self.assertIn("cancel-in-progress: false", caller)
             self.assertIn("branches: [main]", caller)
 
+    def test_authenticated_ngen_interval_heartbeat_has_fixed_private_boundaries(self):
+        source = (ROOT / "scripts/netfx48_ngen_progress.py").read_text(
+            encoding="utf-8")
+        self.assertIn("MAX_SAMPLES = 24", source)
+        self.assertIn("SAMPLE_INTERVAL = 60", source)
+        self.assertIn("def sample(self)", source)
+        self.assertNotIn("subprocess.run(", source)
+        self.assertNotIn("subprocess.Popen(", source)
+        self.assertNotIn("read_bytes(", source)
+        workflow = LEGACY.read_text(encoding="utf-8")
+        self.assertIn("signed_msi_48_ngen_progress_{field}", workflow)
+        self.assertIn('valid_progress(msi["ngen_progress"])', workflow)
+        runner = (ROOT / "scripts/netfx40_to_48_signed_msi.py").read_text(
+            encoding="utf-8")
+        self.assertIn("progress=progress.sample", runner)
+        self.assertIn("time.monotonic()", runner)
+        self.assertIn("ngen_progress = progress.snapshot()", runner)
+        self.assertIn("native48_candidate", runner)
+
     def test_reusable_only_allows_msi_when_signed_media_authenticated(self):
         workflow = LEGACY.read_text(encoding="utf-8")
         self.assertEqual(workflow.count("      try_48_msi:"), 2)
