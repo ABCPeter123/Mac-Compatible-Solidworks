@@ -19,8 +19,8 @@ SERVER = "wiage/bin/wineserver"
 
 
 def _safe_name(name: str) -> bool:
-    if (not name or name.startswith("/") or "\x00" in name
-            or "\\" in name or len(name) > 1024):
+    if (not name or name.startswith("/") or chr(92) in name
+            or ".." in parts or chr(0) in name or len(name) > 1024):
         return False
     pieces = name.split("/")
     return (".." not in pieces
