@@ -18,6 +18,11 @@ on:
         type: boolean
         required: false
         default: false
+      wow64_host_stack64:
+        description: 'Only for isolated x86 WoW64 probes: raise inherited host stack to 65520 KiB'
+        type: boolean
+        required: false
+        default: false
       try_wow64_faults:
         description: 'Collect private bounded exception categories for x86 managed/native WoW64'
         type: boolean
@@ -97,6 +102,11 @@ on:
         default: false
       try_48_direct:
         description: 'Opt-in original signed Microsoft 4.8 offline upgrade after real 4.0, before 4.8.1'
+        type: boolean
+        required: false
+        default: false
+      wow64_host_stack64:
+        description: 'Opt-in 65520 KiB host stack for original x86 WoW64 tests only'
         type: boolean
         required: false
         default: false
@@ -904,8 +914,25 @@ jobs:
       - name: Diagnose new WoW64 x86 process startup versus original Microsoft managed activation
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_wow64_managed && inputs.try_wow64_faults
         shell: bash
+        env:
+          SWCOMPAT_X86_HOST_STACK64: ${{ inputs.wow64_host_stack64 }}
         run: |
           set -euo pipefail
+          if [[ "$SWCOMPAT_X86_HOST_STACK64" == "true" ]]; then
+            # Wine 32-bit Rosetta exception handlers need more signal-stack
+            # headroom on some macOS builds; this is an A/B, not a fix claim.
+            ulimit -s 65520
+            actual_stack="$(ulimit -s)"
+            if [[ "$actual_stack" != "65520" ]]; then
+              echo "WoW64 host stack control was not applied" >&2
+              exit 1
+            fi
+            echo "Native WoW64 x86 host stack control: 65520 KiB"
+            echo "native_microsoft_wow64_host_stack_kib: **65520**" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Native WoW64 x86 host stack control: DEFAULT"
+            echo "native_microsoft_wow64_host_stack_kib: **DEFAULT**" >> "$GITHUB_STEP_SUMMARY"
+          fi
           python3 - <<'PY'
           import json, os
           from pathlib import Path
@@ -927,8 +954,25 @@ jobs:
       - name: Verify native Microsoft CLR4 x86 managed execution under Wine WoW64
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_wow64_managed
         shell: bash
+        env:
+          SWCOMPAT_X86_HOST_STACK64: ${{ inputs.wow64_host_stack64 }}
         run: |
           set -euo pipefail
+          if [[ "$SWCOMPAT_X86_HOST_STACK64" == "true" ]]; then
+            # Wine 32-bit Rosetta exception handlers need more signal-stack
+            # headroom on some macOS builds; this is an A/B, not a fix claim.
+            ulimit -s 65520
+            actual_stack="$(ulimit -s)"
+            if [[ "$actual_stack" != "65520" ]]; then
+              echo "WoW64 host stack control was not applied" >&2
+              exit 1
+            fi
+            echo "Native WoW64 x86 host stack control: 65520 KiB"
+            echo "native_microsoft_wow64_host_stack_kib: **65520**" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Native WoW64 x86 host stack control: DEFAULT"
+            echo "native_microsoft_wow64_host_stack_kib: **DEFAULT**" >> "$GITHUB_STEP_SUMMARY"
+          fi
           python3 - <<'PY'
           import json, os
           from pathlib import Path
