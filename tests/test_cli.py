@@ -111,7 +111,8 @@ class CLITests(unittest.TestCase):
     def test_wineboot_timeout_can_be_120_or_240_only(self):
         self.assertEqual(self.invoke("init", "--timeout", "120")[0], 0)
         self.assertEqual(self.invoke("init", "--timeout", "240")[0], 0)
-        self.assertNotEqual(self.invoke("init", "--timeout", "25")[0], 0)
+        with self.assertRaises(SystemExit):
+            self.invoke("init", "--timeout", "25")
 
     def test_windows11_profile_command_isolated_prefix(self):
         self.assertEqual(self.invoke("set-winver", "win11")[0], 2)
