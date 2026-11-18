@@ -144,7 +144,8 @@ def validate(report: dict) -> bool:
 
 def launch(wine: Path, prefix: Path, setup: Path, fixture: Path,
            *, timeout: int = 245, fusion_builtin: bool = False,
-           setup_family: str = "NETFX481") -> dict:
+           setup_family: str = "NETFX481",
+           setup_flags: str = "logged") -> dict:
     from scripts.netfx481_trial import validate_prefix
     from swcompat.wine_paths import windows_media_path
 
@@ -155,6 +156,9 @@ def launch(wine: Path, prefix: Path, setup: Path, fixture: Path,
     }
     if setup_family not in allowed:
         raise ValueError("Unrecognized original Microsoft Framework setup family")
+    if setup_flags not in {"logged", "winetricks"} or (
+            setup_flags == "winetricks" and setup_family != "NETFX48"):
+        raise ValueError("Only original signed .NET 4.8 supports Winetricks argument mode")
     expected_fixture, expected_setup = allowed[setup_family]
     if (fixture.is_symlink() or not fixture.is_file()
             or fixture.name.casefold() != expected_fixture):
@@ -172,7 +176,9 @@ def launch(wine: Path, prefix: Path, setup: Path, fixture: Path,
     with tempfile.TemporaryFile() as stdout:
         try:
             run = subprocess.run(
-                [str(wine), str(fixture), win_path], cwd=fixture.parent,
+                [str(wine), str(fixture), win_path] +
+                (["--winetricks-args"] if setup_flags == "winetricks" else []),
+                cwd=fixture.parent,
                 env=env, stdin=subprocess.DEVNULL, stdout=stdout,
                 stderr=subprocess.DEVNULL, check=False, timeout=timeout,
             )

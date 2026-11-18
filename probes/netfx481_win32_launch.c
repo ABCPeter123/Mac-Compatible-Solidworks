@@ -174,11 +174,19 @@ int wmain(int argc, wchar_t **argv) {
 #else
     int extended_wait = 0;
 #endif
+#if defined(SWCOMPAT_NETFX48)
+    /* Fixed alternative from the upstream Winetricks/Bottles dotnet48 verb. */
+    int winetricks_args = (argc == 3 &&
+        wcscmp(argv[2], L"--winetricks-args") == 0);
+#else
+    int winetricks_args = 0;
+#endif
     const char *child_status;
     const char *child_lifecycle = "UNKNOWN";
     const char *child_exit = "NOT_VERIFIED";
 
-    if (!selftest && ((argc != 2 && !extended_wait) || !permitted_media(argv[1]))) {
+    if (!selftest && ((argc != 2 && !extended_wait && !winetricks_args) ||
+                      !permitted_media(argv[1]))) {
         report("INVALID_ARGUMENT", 0xFFFFFFFFu, "UNKNOWN", "UNKNOWN", "NOT_VERIFIED");
         return 1;
     }
@@ -203,6 +211,13 @@ int wmain(int argc, wchar_t **argv) {
         if (wcscpy_s(app, COMMAND_LIMIT, argv[1]) != 0 ||
             swprintf_s(command, COMMAND_LIMIT,
                 L"\"%ls\" /q /c:\"install.exe /q\"", app) < 0) {
+#elif defined(SWCOMPAT_NETFX48)
+        if (wcscpy_s(app, COMMAND_LIMIT, argv[1]) != 0 ||
+            (winetricks_args
+             ? swprintf_s(command, COMMAND_LIMIT,
+                 L"\"%ls\" /sfxlang:1027 /q /norestart", app)
+             : swprintf_s(command, COMMAND_LIMIT,
+                 L"\"%ls\" /q /norestart /log \"%ls\"", app, LOG_FILE)) < 0) {
 #else
         if (wcscpy_s(app, COMMAND_LIMIT, argv[1]) != 0 ||
             swprintf_s(command, COMMAND_LIMIT,

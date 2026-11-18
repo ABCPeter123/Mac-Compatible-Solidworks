@@ -48,6 +48,7 @@ from scripts.netfx481_win32_exit import (
 STATUSES = {"NOT_ELIGIBLE", "MEASURED"}
 PROFILES = {"NOT_RUN", "APPLIED", "FAILED"}
 SETUP_PROFILES = {"win7", "win10"}
+SETUP_ARG_MODES = {"logged", "winetricks"}
 RESTARTS = {"NOT_RUN", "COMPLETED", "TIMED_OUT", "START_FAILED",
             "EXIT_NONZERO", "SKIPPED_CHILD_UNVERIFIED"}
 SETUP_EVIDENCE = {"status": "NOT_REQUESTED", "phase": "UNKNOWN", "codes": []}
@@ -120,6 +121,7 @@ def blank() -> dict:
         "registry_preflight": blank_registrations(),
         "wine_mono_registration": "NOT_RUN",
         "setup_profile": "NOT_RUN", "setup_profile_applied": "NOT_RUN",
+        "setup_argument_mode": "NOT_RUN",
         "win7": "NOT_RUN", "win10": "NOT_RUN",
         "setup": blank_launch(), "setup_evidence": dict(SETUP_EVIDENCE),
         "secondary_evidence": None,
@@ -149,6 +151,7 @@ def validate(report: object) -> bool:
             or report["win7"] not in PROFILES or report["win10"] not in PROFILES
             or report["setup_profile"] not in {"NOT_RUN", "WIN7", "WIN10"}
             or report["setup_profile_applied"] not in PROFILES
+            or report["setup_argument_mode"] not in {"NOT_RUN", "LOGGED", "WINETRICKS"}
             or report["restart"] not in RESTARTS
             or report["release"] not in RELEASE
             or report["loader"] not in LOAD_STATES | {"NOT_VERIFIED"}
@@ -175,6 +178,7 @@ def validate(report: object) -> bool:
     if report["status"] == "NOT_ELIGIBLE":
         return report == blank()
     if (report["setup_profile"] == "NOT_RUN"
+            or report["setup_argument_mode"] == "NOT_RUN"
             or (report["setup_profile"] == "WIN10" and report["win7"] != "NOT_RUN")):
         return False
     exit_ok = (report["setup"]["status"] == "EXIT_CAPTURED"
@@ -230,9 +234,12 @@ def private_setup_log(prefix: Path) -> Path:
 def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
             launcher: Path, loader: Path, managed: Path, native40: dict,
             service_fixture: Path | None = None, *,
-            setup_profile: str = "win7") -> dict:
+            setup_profile: str = "win7",
+            setup_args: str = "logged") -> dict:
     if setup_profile not in SETUP_PROFILES:
         raise ValueError("Only supported original Microsoft 4.8 OS profiles allowed")
+    if setup_args not in SETUP_ARG_MODES:
+        raise ValueError("Original signed .NET 4.8 installer arguments not allowlisted")
     if os.name == "nt" or any(p.is_symlink() for p in (
             wine, prefix, installer, digest_file, launcher, loader, managed)):
         raise ValueError("Only explicit disposable Wine experiments allowed")
@@ -284,7 +291,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
             try:
                 setup = launch(wine, prefix, installer, launcher,
                                timeout=465, fusion_builtin=True,
-                               setup_family="NETFX48")
+                               setup_family="NETFX48", setup_flags=setup_args)
             finally:
                 # All three classifiers read the same private original setup
                 # log. Always erase it, including when classification fails.
@@ -323,6 +330,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest_file: Path,
         "wine_mono_registration": mono_registration,
         "setup_profile": setup_profile.upper(),
         "setup_profile_applied": profile_applied,
+        "setup_argument_mode": setup_args.upper(),
         "win7": win7, "win10": win10, "setup": setup,
         "setup_evidence": evidence, "secondary_evidence": secondary,
         "primary_prerequisite": primary, "blockif_trace": blockif_trace,
@@ -361,12 +369,14 @@ def main(argv: list[str] | None = None) -> int:
         ap.add_argument("--" + key, type=Path, required=True)
     ap.add_argument("--service-fixture", type=Path, required=True)
     ap.add_argument("--setup-profile", choices=sorted(SETUP_PROFILES), default="win7")
+    ap.add_argument("--setup-args", choices=sorted(SETUP_ARG_MODES), default="logged")
     ap.add_argument("--agree-disposable-prefix", action="store_true", required=True)
     args = ap.parse_args(argv)
     prior = json.loads(args.native40_report.read_text(encoding="ascii"))
     result = inspect(args.wine, args.prefix, args.installer, args.sha256_file,
                      args.launcher, args.loader, args.managed, prior,
-                     args.service_fixture, setup_profile=args.setup_profile)
+                     args.service_fixture, setup_profile=args.setup_profile,
+                     setup_args=args.setup_args)
     if not validate(result) or args.output.is_symlink():
         raise ValueError("Unverified original Microsoft .NET 4.8 outcome")
     args.output.parent.mkdir(parents=True, exist_ok=True)

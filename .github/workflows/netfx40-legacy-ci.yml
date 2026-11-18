@@ -23,6 +23,11 @@ on:
         type: string
         required: false
         default: win7
+      original_48_setup_args:
+        description: 'Use logged setup or exact upstream Winetricks/Bottles flags'
+        type: string
+        required: false
+        default: logged
       host_provenance_only:
         description: 'Authenticate genuine .NET 4.0 host; skip 4.8/4.8.1 installers'
         type: boolean
@@ -56,6 +61,12 @@ on:
         required: false
         default: win7
         options: [win7, win10]
+      original_48_setup_args:
+        description: 'Original signed 4.8 launch arguments'
+        type: choice
+        required: false
+        default: logged
+        options: [logged, winetricks]
       host_provenance_only:
         description: 'Authenticate Microsoft .NET 4.0 CLR hosting after msxml3; skip 4.8 and 4.8.1 installers'
         type: boolean
@@ -914,6 +925,7 @@ jobs:
             --launcher build/netfx48_win32_launch.exe \
             --service-fixture build/netfx48_scm_service_probe.exe \
             --setup-profile "${{ inputs.original_48_profile }}" \
+            --setup-args "${{ inputs.original_48_setup_args }}" \
             --loader build/netfx481_clr_load.exe \
             --managed build/netfx481_runtime_probe.exe \
             --native40-report build/netfx40-msxml3-restart.json \
@@ -1094,6 +1106,7 @@ jobs:
                   measured = json.loads(direct_path.read_text(encoding="ascii"))
                   assert valid_direct(measured)
                   for key in ("status", "setup_profile", "setup_profile_applied",
+                              "setup_argument_mode",
                               "win7", "win10", "restart", "clr64_changed",
                               "release", "loader", "runtime_family",
                               "native_only_managed", "native48_candidate",
