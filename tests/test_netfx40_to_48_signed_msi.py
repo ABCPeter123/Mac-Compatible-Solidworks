@@ -17,7 +17,7 @@ class OriginalSignedMSITests(TestCase):
             msi = root / p.MSI
             msp = root / p.MSP
             msi.write_bytes(b"MZ" * 4096)
-            self.assertEqual(p.verify_extracted_media(root), "FILES_MISSING")
+            self.assertEqual(p.verify_extracted_media(root), "INVALID_PACKAGE")
             msp.write_bytes(p.OLE_HEADER + b"x" * 8192)
             self.assertEqual(p.verify_extracted_media(root), "INVALID_PACKAGE")
             msi.write_bytes(p.OLE_HEADER + b"x" * 8192)
