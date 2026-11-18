@@ -46,7 +46,7 @@ class DirectNative48Tests(unittest.TestCase):
         return (paths[0], prefix, *paths[1:])
 
     def run_case(self, root, *, setup=None, changed=True, registry="NETFX48_RANGE",
-                 profile="win7"):
+                 profile="win7", setup_args="logged"):
         args = self.fixture(root)
         fake_setup = setup or self.setup()
         diff = {"changes": {"CLR64": "CHANGED" if changed else "UNCHANGED"}}
@@ -89,7 +89,7 @@ class DirectNative48Tests(unittest.TestCase):
             mock.patch.object(p, "launch", return_value=fake_setup) as started,
         ):
             result = p.inspect(*args, {"persistent_native_managed": True},
-                               setup_profile=profile)
+                               setup_profile=profile, setup_args=setup_args)
         self.assertTrue(p.validate(result))
         self.assertEqual([c.args[-1] for c in profile_switch.call_args_list],
                          [profile, "win10"])
@@ -97,6 +97,8 @@ class DirectNative48Tests(unittest.TestCase):
         self.assertEqual(result["setup_profile_applied"], "APPLIED")
         self.assertEqual(result["win7"], "APPLIED" if profile == "win7" else "NOT_RUN")
         self.assertEqual(started.call_args.kwargs["setup_family"], "NETFX48")
+        self.assertEqual(started.call_args.kwargs["setup_flags"], setup_args)
+        self.assertEqual(result["setup_argument_mode"], setup_args.upper())
         self.assertEqual(secondary_scan.call_args.kwargs["family"], "NETFX48")
         self.assertEqual(blockif_scan.call_count, 1)
         self.assertEqual(result["blockif_trace"]["true_count"], 1)
@@ -126,6 +128,7 @@ class DirectNative48Tests(unittest.TestCase):
             self.assertFalse(p.validate(dict(result, private_text="PRIVATE")))
             self.assertFalse(p.validate(dict(result, wine_mono_registration="PRIVATE")))
             self.assertFalse(p.validate(dict(result, scm_fixture_selftest="private text")))
+            self.assertFalse(p.validate(dict(result, setup_argument_mode="PRIVATE")))
             self.assertTrue(p.validate(dict(result, scm_fixture_selftest="PASS")))
             self.assertTrue(p.validate(dict(result, scm_fixture_selftest="NONZERO_EXIT")))
             self.assertFalse(p.validate(dict(result, blockif_trace={
@@ -147,6 +150,18 @@ class DirectNative48Tests(unittest.TestCase):
         with TemporaryDirectory() as td:
             result = self.run_case(Path(td), profile="win10", setup=self.setup(
                 "000013EC", "PREREQUISITE_BLOCK_5100"))
+            self.assertFalse(result["native48_candidate"])
+
+    @unittest.skipIf(os.name == "nt", "POSIX Wine experiment")
+    def test_winetricks_argument_mode_remains_authentic_and_fail_closed(self):
+        with TemporaryDirectory() as td:
+            result = self.run_case(Path(td), setup_args="winetricks")
+            self.assertEqual(result["setup_argument_mode"], "WINETRICKS")
+            self.assertTrue(result["native48_candidate"])
+            self.assertFalse(p.validate(dict(result, setup_argument_mode="PRIVATE")))
+        with TemporaryDirectory() as td:
+            result = self.run_case(Path(td), setup_args="winetricks",
+                                   setup=self.setup("000013EC", "PREREQUISITE_BLOCK_5100"))
             self.assertFalse(result["native48_candidate"])
 
     @unittest.skipIf(os.name == "nt", "POSIX Wine experiment")
