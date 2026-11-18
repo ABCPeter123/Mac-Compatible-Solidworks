@@ -283,7 +283,7 @@ class OriginalSignedMSITests(TestCase):
                           else Path(c[0][1]).name for c in calls]
             self.assertEqual(operations, [
                 "NDP48-x86-x64-AllOS-ENU.exe", "pause", "pause",
-                "msiexec.exe", "continue", "continue", "msiexec.exe"])
+                "msiexec.exe", "msiexec.exe", "continue", "continue"])
             self.assertEqual(len(calls), 7)
 
     def test_failed_original_ngen_pause_aborts_signed_msi_and_restores(self):
@@ -298,14 +298,14 @@ class OriginalSignedMSITests(TestCase):
             self.assertFalse(any("msiexec.exe" in c[0] for c in calls))
             self.assertTrue(p.validate(data))
 
-    def test_original_ngen_resume_failure_blocks_signed_msp(self):
+    def test_original_ngen_resume_failure_blocks_verified_runtime(self):
         with TemporaryDirectory() as td:
             data, calls = self.run_case(
                 self.fixture(Path(td)), pause_queue=True,
                 resume_failure="EXIT_NONZERO")
             self.assertEqual(data["install"], "SUCCESS")
             self.assertEqual(data["ngen_queue"]["status"], "INCOMPLETE")
-            self.assertEqual(data["patch"], "NOT_RUN")
+            self.assertEqual(data["patch"], "SUCCESS")
             self.assertFalse(data["native48_candidate"])
             self.assertTrue(p.validate(data))
             self.assertFalse(p.validate({**data, "native48_candidate": True}))
