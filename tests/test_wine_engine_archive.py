@@ -37,6 +37,41 @@ class PinnedWineRuntimeArchiveTests(TestCase):
                          server="./wiage/bin/wineserver")
             self.assertEqual(w.verify(path)["status"], "SAFE")
 
+    def test_accepts_tar_dot_root_directory_but_no_root_level_payload(self):
+        with TemporaryDirectory() as td:
+            path = Path(td) / "wiage-runtime.tar.gz"
+            with tarfile.open(path, "w:gz") as archive:
+                root = tarfile.TarInfo("./")
+                root.type = tarfile.DIRTYPE
+                archive.addfile(root)
+                for name in ("./wiage/bin/wine", "./wiage/bin/wineserver"):
+                    member = tarfile.TarInfo(name)
+                    member.size = 2
+                    member.mode = 0o755
+                    archive.addfile(member, io.BytesIO(b"MZ"))
+            self.assertEqual(w.verify(path), {"status": "SAFE", "files_checked": 3})
+            with tarfile.open(path, "w:gz") as archive:
+                root = tarfile.TarInfo("./")
+                root.size = 2
+                archive.addfile(root, io.BytesIO(b"MZ"))
+                for name in ("wiage/bin/wine", "wiage/bin/wineserver"):
+                    member = tarfile.TarInfo(name)
+                    member.size = 2
+                    archive.addfile(member, io.BytesIO(b"MZ"))
+            with self.assertRaises(ValueError):
+                w.verify(path)
+            with tarfile.open(path, "w:gz") as archive:
+                root = tarfile.TarInfo("./")
+                root.type = tarfile.SYMTYPE
+                root.linkname = "wiage"
+                archive.addfile(root)
+                for name in ("wiage/bin/wine", "wiage/bin/wineserver"):
+                    member = tarfile.TarInfo(name)
+                    member.size = 2
+                    archive.addfile(member, io.BytesIO(b"MZ"))
+            with self.assertRaises(ValueError):
+                w.verify(path)
+
     def test_rejects_traversal_absolute_special_and_escape_links(self):
         with TemporaryDirectory() as td:
             path = Path(td) / "wiage-runtime.tar.gz"
