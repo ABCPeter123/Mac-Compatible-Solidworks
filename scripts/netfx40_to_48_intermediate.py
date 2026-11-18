@@ -220,11 +220,11 @@ def mark_verified_native40(prefix: Path) -> str:
         return "LOG_UNSAFE"
     try:
         prior = log.read_bytes() if log.exists() else b""
-        if len(prior) > 65536 or b"\\x00" in prior:
+        if len(prior) > 65536 or b"\x00" in prior:
             return "LOG_UNSAFE"
         if b"dotnet40" in prior.splitlines():
             return "ALREADY_RECORDED"
-        line = (b"\\n" if prior and not prior.endswith(b"\\n") else b"") + b"dotnet40\\n"
+        line = (b"\n" if prior and not prior.endswith(b"\n") else b"") + b"dotnet40\n"
         flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
