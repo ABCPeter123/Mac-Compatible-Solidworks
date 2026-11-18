@@ -148,6 +148,22 @@ class SignedMSIGates(TestCase):
         self.assertIn("signed_msi_timeout_seconds:", legacy)
         self.assertIn('"msi_timeout_seconds"', legacy)
 
+    def test_signed_msi_can_finish_when_new_commit_queues_another_run(self):
+        # Critical: a callee's cancel-in-progress: true overrides the one-shot
+        # caller's false value and used to cancel genuine Mac MSI experiments.
+        source = LEGACY.read_text(encoding="utf-8")
+        self.assertIn("concurrency:", source)
+        self.assertIn("inputs.try_48_msi && github.sha || 'shared'", source)
+        self.assertIn("cancel-in-progress: ${{ !inputs.try_48_msi }}", source)
+        self.assertNotIn("cancel-in-progress: true", source)
+        for filename in ("netfx48-msi-ngen-evidence-once-ci.yml",
+                         "netfx48-msi-ngen-long-budget-once-ci.yml"):
+            caller = (ROOT / ".github/workflows" / filename).read_text(
+                encoding="utf-8")
+            self.assertIn("try_48_msi: true", caller)
+            self.assertIn("cancel-in-progress: false", caller)
+            self.assertIn("branches: [main]", caller)
+
     def test_reusable_only_allows_msi_when_signed_media_authenticated(self):
         workflow = LEGACY.read_text(encoding="utf-8")
         self.assertEqual(workflow.count("      try_48_msi:"), 2)
