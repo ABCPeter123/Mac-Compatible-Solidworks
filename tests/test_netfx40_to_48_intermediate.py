@@ -151,6 +151,10 @@ class Native40To48IntermediateTests(unittest.TestCase):
                 "SFXLANG_1027", "WINETRICKS_ABORTED", "WINVER_COMMAND",
                 "WINVER_COMMAND_FAILED", "WOW64_WARNING"])
         self.assertFalse(p.validate(dict(p.blank(), verb_stages=["PRIVATE"])))
+        self.assertFalse(p.validate(dict(p.blank(), verb_stages=[{"PRIVATE": 1}])))
+        self.assertFalse(p.validate(dict(p.blank(), verb_stages=[1])))
+        self.assertFalse(p.validate(dict(p.blank(), verb_stages=["DOTNET48_RECIPE"])))
+
         self.assertEqual(p.classify_progress(b"Executing load_dotnet48\n"),
                          "DOTNET48_VERB_SEEN")
         self.assertEqual(p.classify_progress(
