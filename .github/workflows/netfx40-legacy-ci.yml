@@ -901,6 +901,29 @@ jobs:
                   f.write("SWCOMPAT_NATIVE40_READY=yes\n")
           print("Original native .NET 4.0 prerequisites passed:", r["persistent_native_managed"])
           PY
+      - name: Diagnose new WoW64 x86 process startup versus original Microsoft managed activation
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_wow64_managed && inputs.try_wow64_faults
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx40_wow64_fault_triage import inspect, valid
+          wine = Path(os.environ["SWCOMPAT_WINE"])
+          prefix = Path(os.environ["RUNNER_TEMP"]) / "netfx40-msxml3-prefix"
+          native = Path("build/netfx40_wow64_native_smoke.exe").resolve()
+          managed = Path("build/netfx40_wow64_managed_probe.exe").resolve()
+          outcome = inspect(wine, prefix, native, managed)
+          assert valid(outcome)
+          if any(outcome[key] == "TIMED_OUT_CLEANUP_DENIED"
+                 for key in ("native_run", "managed_run")):
+              raise RuntimeError("Unsafe WoW64 process group cleanup; stop Wine trials")
+          Path("build/netfx40-wow64-faults.json").write_text(
+              json.dumps(outcome, sort_keys=True), encoding="ascii")
+          for key, value in outcome.items():
+              print("Native original CLR4 WoW64 x86 diagnostic", key, value)
+          PY
       - name: Verify native Microsoft CLR4 x86 managed execution under Wine WoW64
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_wow64_managed
         shell: bash
@@ -919,26 +942,6 @@ jobs:
               json.dumps(report, sort_keys=True), encoding="ascii")
           for key in ("status", "family", "managed"):
               print("Native Microsoft WoW64 x86", key, report[key])
-          PY
-      - name: Diagnose new WoW64 x86 process startup versus original Microsoft managed activation
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_wow64_managed && inputs.try_wow64_faults
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          from scripts.netfx40_wow64_fault_triage import inspect, valid
-          wine = Path(os.environ["SWCOMPAT_WINE"])
-          prefix = Path(os.environ["RUNNER_TEMP"]) / "netfx40-msxml3-prefix"
-          native = Path("build/netfx40_wow64_native_smoke.exe").resolve()
-          managed = Path("build/netfx40_wow64_managed_probe.exe").resolve()
-          outcome = inspect(wine, prefix, native, managed)
-          assert valid(outcome)
-          Path("build/netfx40-wow64-faults.json").write_text(
-              json.dumps(outcome, sort_keys=True), encoding="ascii")
-          for key, value in outcome.items():
-              print("Native original CLR4 WoW64 x86 diagnostic", key, value)
           PY
       - name: Capture genuine 4.0 Wine mscoree CLR native-loader provenance without vendor logs
         if: env.SWCOMPAT_NATIVE40_READY == 'yes'
