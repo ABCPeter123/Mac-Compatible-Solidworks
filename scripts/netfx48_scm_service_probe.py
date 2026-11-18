@@ -16,7 +16,8 @@ FIELDS = ("TRUSTEDINSTALLER", "MSISERVER", "WUAUSERV", "BITS")
 VALUES = {"NOT_RUN", "PRESENT", "ABSENT", "ACCESS_DENIED", "UNKNOWN"}
 STATUSES = {"NOT_RUN", "COMPLETE", "UNAVAILABLE", "MALFORMED", "TIMEOUT",
             "PROCESS_FAILED", "EMPTY_OUTPUT", "OVERSIZED_OUTPUT", "NONZERO_EXIT",
-            "NONASCII_OUTPUT", "UNEXPECTED_TEXT", "INVALID_FIELD", "INCOMPLETE_FIELDS"}
+            "NONASCII_OUTPUT", "UNEXPECTED_TEXT", "INVALID_FIELD", "INCOMPLETE_FIELDS",
+            "NONZERO_WITH_REPORT", "NONZERO_WITHOUT_REPORT"}
 MAX_BYTES = 512
 PREFIX = "SWCOMPAT_SCM_API_"
 
@@ -39,7 +40,8 @@ def valid(report: object) -> bool:
     if report["status"] in {"NOT_RUN", "MALFORMED", "TIMEOUT", "PROCESS_FAILED",
                             "EMPTY_OUTPUT", "OVERSIZED_OUTPUT", "NONZERO_EXIT",
                             "NONASCII_OUTPUT", "UNEXPECTED_TEXT", "INVALID_FIELD",
-                            "INCOMPLETE_FIELDS"}:
+                            "INCOMPLETE_FIELDS", "NONZERO_WITH_REPORT",
+                            "NONZERO_WITHOUT_REPORT"}:
         return report == blank(report["status"])
     if report["status"] == "UNAVAILABLE":
         return all(value == "UNKNOWN" for value in report["services"].values())
@@ -48,7 +50,11 @@ def valid(report: object) -> bool:
 
 def parse(raw: bytes, exit_code: int) -> dict:
     if exit_code != 0:
-        return blank("NONZERO_EXIT")
+        # A C fixture always returns zero when main() finishes. Distinguish
+        # a full packet from Wine child/startup failures without exporting it.
+        packet = parse(raw, 0) if raw else blank("EMPTY_OUTPUT")
+        return blank("NONZERO_WITH_REPORT" if packet["status"] in {
+            "COMPLETE", "UNAVAILABLE"} else "NONZERO_WITHOUT_REPORT")
     if not raw:
         return blank("EMPTY_OUTPUT")
     if len(raw) > MAX_BYTES:

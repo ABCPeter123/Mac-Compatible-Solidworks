@@ -115,6 +115,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx48_direct_workflow_shell.py' -v
           python -m unittest discover -s tests -p 'test_netfx48_registry_preflight.py' -v
           python -m unittest discover -s tests -p 'test_netfx48_scm_service_probe.py' -v
+          python -m unittest discover -s tests -p 'test_netfx48_blockif_trace.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_to_48_direct.py' -v
 
   authentic-netfx40-windows:
@@ -1112,6 +1113,11 @@ jobs:
                   out.write(f"original_direct_48_scm_api_status: **{measured['service_api']['status']}**\n\n")
                   for service in FIELDS:
                       out.write(f"original_direct_48_scm_api_{service}: **{measured['service_api']['services'][service]}**\n\n")
+                  trace = measured["blockif_trace"]
+                  for field in ("status", "true_count", "false_count", "incomplete_count"):
+                      out.write(f"original_direct_48_blockif_{field}: **{trace[field]}**\n\n")
+                  for field in ("true_cause_categories", "true_logic_signals"):
+                      out.write(f"original_direct_48_blockif_{field}: **{','.join(trace[field])}**\n\n")
                   prereq = measured["primary_prerequisite"]
                   for key in ("status", "5100_in_log"):
                       out.write(f"original_direct_48_prerequisite_{key}: **{prereq[key]}**\n\n")
