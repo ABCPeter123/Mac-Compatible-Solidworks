@@ -23,6 +23,11 @@ from scripts.netfx40_msi_evidence import (
     classify_msi_log, classify_action, _decode,
     ACTION_CLASSES, ERROR_CLASSES, MAX_FILE_BYTES,
 )
+from scripts.netfx48_msi_service_evidence import (
+    blank as blank_service_evidence,
+    classify as classify_service_evidence,
+    valid as valid_service_evidence,
+)
 from scripts.netfx481_clr_load import run as load_clr, STATUSES as LOAD_STATES
 from scripts.netfx481_payload_audit import snapshot
 from scripts.netfx481_trial import validate_prefix, probe, wineboot_restart
@@ -59,7 +64,8 @@ def last_started_action(raw: bytes) -> str:
 
 def blank_msi_log() -> dict:
     return {"status": "NOT_RUN", "failure": False, "action": "UNKNOWN",
-            "last_started_action": "UNKNOWN", "errors": []}
+            "last_started_action": "UNKNOWN", "errors": [],
+            **blank_service_evidence()}
 
 
 def classify_private_msi_log(root: Path) -> dict:
@@ -83,7 +89,7 @@ def classify_private_msi_log(root: Path) -> dict:
         return {"status": "CLASSIFIED", "failure": scan["failure"],
                 "action": scan["action"],
                 "last_started_action": last_started_action(raw),
-                "errors": scan["errors"]}
+                "errors": scan["errors"], **classify_service_evidence(raw)}
     except OSError:
         return {**blank_msi_log(), "status": "UNREADABLE"}
     finally:
@@ -96,6 +102,9 @@ def classify_private_msi_log(root: Path) -> dict:
 
 def valid_msi_log(report: object) -> bool:
     if type(report) is not dict or set(report) != set(blank_msi_log()):
+        return False
+    if not valid_service_evidence({
+            key: report[key] for key in blank_service_evidence()}):
         return False
     if (any(type(report[k]) is not str for k in
             ("status", "action", "last_started_action"))
