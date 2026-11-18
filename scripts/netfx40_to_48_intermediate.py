@@ -16,7 +16,7 @@ import tempfile
 
 from scripts.netfx40_msxml3_restart import validate as validate_native40
 from scripts.netfx481_clr_load import run as load_clr, STATUSES as LOADER_STATES
-from scripts.netfx481_payload_audit import snapshot
+from scripts.netfx481_payload_audit import snapshot, pe_type
 from scripts.netfx481_trial import validate_prefix, probe, wineboot_restart
 
 STATES = {"NOT_ELIGIBLE", "MEASURED"}
@@ -33,6 +33,10 @@ PROCESS_CATEGORIES = {
     "OTHER_PROCESS",
 }
 PROCESS_LIMIT = 262144
+MARKER_STATES = {
+    "NOT_RUN", "RECORDED", "ALREADY_RECORDED", "NGEN_ABSENT",
+    "NGEN_INVALID", "LOG_UNSAFE",
+}
 # All events are fixed enum values. Never export Winetricks text, paths, or
 # original Microsoft installer output outside the disposable run.
 WINETRICKS_STAGES = {
@@ -89,7 +93,7 @@ def blank() -> dict:
     return {"status": "NOT_ELIGIBLE", "native40_persistent": False,
             "verb": "NOT_RUN", "verb_progress": "NOT_RUN",
             "verb_stages": [], "verb_last_stage": "NOT_RUN",
-            "timeout_processes": [],
+            "timeout_processes": [], "native40_marker": "NOT_RUN",
             "win7": "NOT_RUN", "win10": "NOT_RUN",
             "restart": "NOT_RUN", "clr64_changed": False,
             "release": "UNAVAILABLE", "loader": "NOT_VERIFIED",
@@ -113,6 +117,7 @@ def validate(result: object) -> bool:
             or any(type(v) is not str or v not in PROCESS_CATEGORIES
                    for v in result["timeout_processes"])
             or result["timeout_processes"] != sorted(set(result["timeout_processes"]))
+            or result["native40_marker"] not in MARKER_STATES
             or (result["verb"] != "TIMED_OUT" and result["timeout_processes"])
             or result["restart"] not in BOOT
             or result["win7"] not in WINVER or result["win10"] not in WINVER
@@ -182,6 +187,55 @@ def _run(command: list[str], env: dict[str, str], cwd: Path,
         return "START_FAILED"
     return "SUCCESS" if child.returncode == 0 else "EXIT_NONZERO"
 
+
+
+def mark_verified_native40(prefix: Path) -> str:
+    """Tell Winetricks about *verified* existing .NET 4.0, without registry edits.
+
+    The pinned upstream Winetricks dotnet40 verb checks BOTH a line in
+    prefix/winetricks.log and the genuine 32-bit Framework ngen.exe.
+    Never assert installed if the expected original PE executable is absent.
+    This is only for the strict disposable, independently verified CLR4 host.
+    """
+    ngen = prefix / "drive_c/windows/Microsoft.NET/Framework/v4.0.30319/ngen.exe"
+    current = prefix
+    for component in ("drive_c", "windows", "Microsoft.NET", "Framework",
+                      "v4.0.30319", "ngen.exe"):
+        current = current / component
+        if current.is_symlink():
+            return "NGEN_INVALID"
+    if not ngen.is_file():
+        return "NGEN_ABSENT"
+    try:
+        if not 512 <= ngen.stat().st_size <= 80 * 1024 * 1024:
+            return "NGEN_INVALID"
+        with ngen.open("rb") as native:
+            if pe_type(native.read(8192)) != "PE_I386":
+                return "NGEN_INVALID"
+    except OSError:
+        return "NGEN_INVALID"
+
+    log = prefix / "winetricks.log"
+    if log.is_symlink() or (log.exists() and not log.is_file()):
+        return "LOG_UNSAFE"
+    try:
+        prior = log.read_bytes() if log.exists() else b""
+        if len(prior) > 65536 or b"\x00" in prior:
+            return "LOG_UNSAFE"
+        if b"dotnet40" in prior.splitlines():
+            return "ALREADY_RECORDED"
+        line = (b"\n" if prior and not prior.endswith(b"\n") else b"") + b"dotnet40\n"
+        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(log, flags, 0o600)
+        try:
+            os.write(descriptor, line)
+        finally:
+            os.close(descriptor)
+    except OSError:
+        return "LOG_UNSAFE"
+    return "RECORDED"
 
 
 def classify_progress(raw: bytes) -> str:
@@ -320,8 +374,10 @@ def _release(wine: Path, prefix: Path, env: dict[str, str]) -> str:
 
 
 def inspect(wine: Path, prefix: Path, winetricks: Path, loader: Path,
-            managed: Path, native40: dict, *, timeout: int = 840) -> dict:
-    if os.name == "nt" or not 120 <= timeout <= 900:
+            managed: Path, native40: dict, *, timeout: int = 840,
+            reuse_verified_native40: bool = False) -> dict:
+    if (os.name == "nt" or not 120 <= timeout <= 900
+            or type(reuse_verified_native40) is not bool):
         raise ValueError("Only bounded disposable Wine tests supported")
     if any(p.is_symlink() for p in (wine, prefix, winetricks, loader, managed)):
         raise ValueError("Linked experiment input")
@@ -342,6 +398,9 @@ def inspect(wine: Path, prefix: Path, winetricks: Path, loader: Path,
             or load_clr(wine, prefix, loader) != "LOADED"
             or probe(wine, prefix, managed, override="native_only")["managed"] != "PASS"):
         return blank()
+    native40_marker = (
+        mark_verified_native40(prefix) if reuse_verified_native40 else "NOT_RUN"
+    )
     env = _env(wine, prefix)
     win7 = _set_winver(wine, prefix, env, "win7")
     verb = "NOT_RUN"
@@ -363,6 +422,7 @@ def inspect(wine: Path, prefix: Path, winetricks: Path, loader: Path,
               "verb": verb, "verb_progress": verb_progress,
               "verb_stages": verb_stages, "verb_last_stage": verb_last_stage,
               "timeout_processes": timeout_processes,
+              "native40_marker": native40_marker,
               "win7": win7, "win10": win10,
               "restart": restart,
               "clr64_changed": (not same and after["CLR64"][0] == "PE_AMD64"),
@@ -390,11 +450,13 @@ def main(argv: list[str] | None = None) -> int:
                   "native40-report", "output"):
         p.add_argument("--" + field, type=Path, required=True)
     p.add_argument("--timeout", type=int, default=840)
+    p.add_argument("--reuse-verified-native40", action="store_true")
     p.add_argument("--agree-disposable-prefix", action="store_true", required=True)
     args = p.parse_args(argv)
     result = inspect(args.wine, args.prefix, args.winetricks, args.loader,
                      args.managed, json.loads(args.native40_report.read_text()),
-                     timeout=args.timeout)
+                     timeout=args.timeout,
+                     reuse_verified_native40=args.reuse_verified_native40)
     if args.output.is_symlink():
         raise ValueError("Linked result file")
     args.output.parent.mkdir(parents=True, exist_ok=True)

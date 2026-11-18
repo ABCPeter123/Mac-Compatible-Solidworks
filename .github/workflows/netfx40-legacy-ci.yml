@@ -43,6 +43,11 @@ on:
         type: boolean
         required: false
         default: false
+      reuse_verified_native40:
+        description: 'Experimental: record genuine Microsoft CLR4.0 only after checking Winetricks required 32-bit ngen PE'
+        type: boolean
+        required: false
+        default: false
       wine_baseline:
         description: 'Only authenticated SHA256-pinned Wine Staging baseline releases'
         type: string
@@ -85,6 +90,11 @@ on:
 
       use_macos26_runner:
         description: 'Select macOS 26 Apple Silicon runner; default remains macOS 15'
+        type: boolean
+        required: false
+        default: false
+      reuse_verified_native40:
+        description: 'Avoid duplicate original 4.0 Winetricks install only if independently verified'
         type: boolean
         required: false
         default: false
@@ -977,8 +987,14 @@ jobs:
       - name: Test pinned Winetricks dotnet48 on existing verified Microsoft 4.0 prefix
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && inputs.try_48_intermediate
         shell: bash
+        env:
+          SWCOMPAT_REUSE_NATIVE40: ${{ inputs.reuse_verified_native40 }}
         run: |
           set -euo pipefail
+          extra=()
+          if [ "$SWCOMPAT_REUSE_NATIVE40" = "true" ]; then
+            extra+=(--reuse-verified-native40)
+          fi
           python3 -m scripts.netfx40_to_48_intermediate \
             --wine "$SWCOMPAT_WINE" \
             --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
@@ -987,7 +1003,7 @@ jobs:
             --managed build/netfx481_runtime_probe.exe \
             --native40-report build/netfx40-msxml3-restart.json \
             --output build/netfx40-to-48-intermediate.json \
-            --timeout 840 --agree-disposable-prefix
+            --timeout 840 "${extra[@]}" --agree-disposable-prefix
       - name: Gate signed 4.8.1 upgrade on verified native 4.8 intermediate
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && inputs.try_48_intermediate
         shell: bash

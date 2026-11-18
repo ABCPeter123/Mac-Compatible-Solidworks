@@ -1,6 +1,7 @@
 """Native .NET 4.8 intermediate never confuses a Winetricks marker with CLR."""
 import os
 import signal
+import struct
 import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -44,7 +45,7 @@ class Native40To48IntermediateTests(unittest.TestCase):
 
     def _run_fixture(self, paths, winetricks="SUCCESS",
                      changed=True, release="NETFX48_RANGE",
-                     progress="DOTNET48_VERB_SEEN"):
+                     progress="DOTNET48_VERB_SEEN", reuse=False):
         hash_before = b"orig40"
         hash_after = b"orig48" if changed else hash_before
         before = {"CLR64": ("PE_AMD64", hash_before)}
@@ -68,11 +69,17 @@ class Native40To48IntermediateTests(unittest.TestCase):
               mock.patch.object(p, "load_clr", return_value="LOADED"),
               mock.patch.object(p, "probe", return_value={"managed": "PASS"}),
               mock.patch.object(p, "_set_winver", return_value="APPLIED") as profile,
+              mock.patch.object(p, "mark_verified_native40",
+                                return_value="RECORDED") as reused,
               mock.patch.object(p, "_run_winetricks", side_effect=runner),
               mock.patch.object(p, "wineboot_restart", return_value="COMPLETED"),
               mock.patch.object(p, "_release", return_value=release)):
-            outcome = p.inspect(*paths, {"persistent_native_managed": True})
+            outcome = p.inspect(*paths, {"persistent_native_managed": True},
+                                reuse_verified_native40=reuse)
         self.assertTrue(p.validate(outcome))
+        self.assertEqual(outcome["native40_marker"],
+                         "RECORDED" if reuse else "NOT_RUN")
+        self.assertEqual(reused.call_count, 1 if reuse else 0)
         self.assertEqual([x.args[3] for x in profile.call_args_list],
                          ["win7", "win10"])
         self.assertFalse(outcome["framework481_confirmed"])
@@ -106,6 +113,18 @@ class Native40To48IntermediateTests(unittest.TestCase):
             self.assertFalse(p.validate(dict(result, native48_candidate=False)))
 
     @unittest.skipIf(os.name == "nt", "POSIX-only Wine wrapper")
+    def test_opt_in_verified_native_40_marker_never_makes_48_ready(self):
+        with TemporaryDirectory() as td:
+            paths = self._fixture(Path(td))
+            ready = self._run_fixture(paths, reuse=True)
+            self.assertEqual(ready["native40_marker"], "RECORDED")
+            self.assertTrue(ready["native48_candidate"])
+            failed = self._run_fixture(paths, reuse=True, changed=False)
+            self.assertEqual(failed["native40_marker"], "RECORDED")
+            self.assertFalse(failed["native48_candidate"])
+            self.assertFalse(p.validate(dict(failed, native40_marker="PRIVATE")))
+
+    @unittest.skipIf(os.name == "nt", "POSIX-only Wine wrapper")
     def test_existing_native_40_must_be_verified_before_any_action(self):
         with TemporaryDirectory() as td:
             paths = self._fixture(Path(td))
@@ -116,6 +135,58 @@ class Native40To48IntermediateTests(unittest.TestCase):
             self.assertEqual(result, p.blank())
             runner.assert_not_called()
 
+
+    def test_only_existing_valid_32bit_ngen_can_register_verified_native40(self):
+        with TemporaryDirectory() as td:
+            prefix = Path(td)
+            ngen = prefix / "drive_c/windows/Microsoft.NET/Framework/v4.0.30319/ngen.exe"
+            ngen.parent.mkdir(parents=True)
+            log = prefix / "winetricks.log"
+            self.assertEqual(p.mark_verified_native40(prefix), "NGEN_ABSENT")
+            self.assertFalse(log.exists())
+            ngen.write_bytes(b"arbitrary text" * 64)
+            self.assertEqual(p.mark_verified_native40(prefix), "NGEN_INVALID")
+            self.assertFalse(log.exists())
+
+            pe = bytearray(8192)
+            pe[:2] = b"MZ"
+            struct.pack_into("<I", pe, 0x3C, 128)
+            pe[128:132] = b"PE\0\0"
+            struct.pack_into("<H", pe, 132, 0x14C)
+            struct.pack_into("<H", pe, 148, 224)
+            struct.pack_into("<H", pe, 152, 0x10B)
+            ngen.write_bytes(pe)
+            self.assertEqual(p.pe_type(bytes(pe)), "PE_I386")
+            log.write_bytes(b"msxml3\n")
+            self.assertEqual(p.mark_verified_native40(prefix), "RECORDED")
+            self.assertEqual(log.read_bytes(), b"msxml3\ndotnet40\n")
+            self.assertEqual(p.mark_verified_native40(prefix), "ALREADY_RECORDED")
+            self.assertEqual(log.read_bytes().count(b"dotnet40"), 1)
+            self.assertFalse((prefix / "user.reg").exists())
+
+            log.unlink()
+            log.symlink_to(prefix / "fake-privileged.log")
+            self.assertEqual(p.mark_verified_native40(prefix), "LOG_UNSAFE")
+            self.assertFalse((prefix / "fake-privileged.log").exists())
+            log.unlink()
+            ngen.unlink()
+            ngen.symlink_to(prefix / "outside-ngen.exe")
+            self.assertEqual(p.mark_verified_native40(prefix), "NGEN_INVALID")
+
+    def test_existing_log_is_preserved_and_poisoned_logs_refused(self):
+        with TemporaryDirectory() as td:
+            prefix = Path(td)
+            ngen = prefix / "drive_c/windows/Microsoft.NET/Framework/v4.0.30319/ngen.exe"
+            ngen.parent.mkdir(parents=True)
+            with mock.patch.object(p, "pe_type", return_value="PE_I386"):
+                ngen.write_bytes(b"Z" * 8192)
+                log = prefix / "winetricks.log"
+                log.write_bytes(b"msxml3")
+                self.assertEqual(p.mark_verified_native40(prefix), "RECORDED")
+                self.assertEqual(log.read_bytes(), b"msxml3\ndotnet40\n")
+                log.write_bytes(b"private\x00invalid")
+                self.assertEqual(p.mark_verified_native40(prefix), "LOG_UNSAFE")
+                self.assertEqual(log.read_bytes(), b"private\x00invalid")
 
     def test_binary_identity_overrides_poisoned_inherited_environment(self):
         with TemporaryDirectory() as td:
