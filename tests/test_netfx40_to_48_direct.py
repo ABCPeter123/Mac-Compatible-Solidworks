@@ -72,6 +72,12 @@ class DirectNative48Tests(unittest.TestCase):
             mock.patch.object(p, "classify_log", return_value={
                 "status": "CLASSIFIED", "phase": "UNKNOWN", "codes": []}),
             mock.patch.object(p, "discard_log"),
+            mock.patch.object(p, "classify_blockif", return_value={
+                "status": "CAPTURED", "true_count": 1,
+                "false_count": 2, "incomplete_count": 0,
+                "true_cause_categories": ["UNKNOWN_PREREQUISITE"],
+                "true_logic_signals": ["TRUSTEDINSTALLER_MISSING_1060"],
+            }) as blockif_scan,
             mock.patch.object(p, "classify_primary_prerequisite", return_value={
                 "status": "CLASSIFIED", "os_versions": ["BELOW_WINDOWS_10"],
                 "blockers": ["MISSING_UPDATE_BLOCK"],
@@ -91,6 +97,9 @@ class DirectNative48Tests(unittest.TestCase):
         self.assertEqual(result["win7"], "APPLIED" if profile == "win7" else "NOT_RUN")
         self.assertEqual(started.call_args.kwargs["setup_family"], "NETFX48")
         self.assertEqual(secondary_scan.call_args.kwargs["family"], "NETFX48")
+        self.assertEqual(blockif_scan.call_count, 1)
+        self.assertEqual(result["blockif_trace"]["true_count"], 1)
+        self.assertEqual(result["blockif_trace"]["false_count"], 2)
         self.assertEqual(primary_scan.call_count, 1)
         self.assertEqual(primary_scan.call_args.kwargs["family"], "NETFX48")
         self.assertEqual(result["primary_prerequisite"]["blockers"], ["MISSING_UPDATE_BLOCK"])
@@ -114,6 +123,8 @@ class DirectNative48Tests(unittest.TestCase):
             self.assertFalse(p.validate(dict(result, framework481_confirmed=True)))
             self.assertFalse(p.validate(dict(result, private_text="PRIVATE")))
             self.assertFalse(p.validate(dict(result, wine_mono_registration="PRIVATE")))
+            self.assertFalse(p.validate(dict(result, blockif_trace={
+                **result["blockif_trace"], "private_expression": "SECRET"})))
             self.assertTrue(p.validate(dict(result, wine_mono_registration="PRESENT")))
             self.assertTrue(p.validate(dict(result, wine_mono_registration="UNKNOWN")))
 
