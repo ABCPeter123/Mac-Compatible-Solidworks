@@ -255,6 +255,35 @@ class SignedMSIGates(TestCase):
         self.assertIn("MAX_CAPTURE = 1024 * 1024", diagnostic)
         self.assertNotIn("print(raw)", diagnostic)
 
+    def test_wow64_host_stack_64mb_requires_real_x86_only_and_no_original_msi(self):
+        one_shot = (ROOT / ".github/workflows/netfx40-wow64-hoststack64-once-ci.yml").read_text(
+            encoding="utf-8")
+        for expected in ("branches: [main]", "wow64_host_stack64: true",
+                         "try_wow64_managed: true", "try_wow64_faults: true",
+                         "host_provenance_only: true", "use_macos26_runner: true",
+                         "wine_baseline: '11.21'", "cancel-in-progress: false",
+                         "try_48_msi: false", "try_48_direct: false",
+                         "try_48_intermediate: false", "try_48_payload_host: false"):
+            self.assertIn(expected, one_shot)
+        self.assertNotIn("actions/upload-artifact", one_shot)
+        reusable = LEGACY.read_text(encoding="utf-8")
+        self.assertEqual(reusable.count("wow64_host_stack64:"), 2)
+        self.assertEqual(reusable.count("ulimit -s 65520"), 2)
+        self.assertEqual(reusable.count("SWCOMPAT_X86_HOST_STACK64:"), 2)
+        self.assertEqual(reusable.count('[[ "$actual_stack" != "65520" ]]'), 2)
+        self.assertIn("native_microsoft_wow64_host_stack_kib", reusable)
+        self.assertIn("default: false", reusable)
+        before = reusable.index("- name: Diagnose new WoW64 x86 process startup")
+        after = reusable.index("- name: Capture genuine 4.0 Wine mscoree")
+        self.assertGreater(after, before)
+        for step in reusable.split("      - name: "):
+            if "ulimit -s 65520" in step:
+                self.assertTrue(
+                    step.startswith("Diagnose new WoW64 x86 process startup")
+                    or step.startswith("Verify native Microsoft CLR4 x86 managed"))
+                self.assertIn('inputs.wow64_host_stack64', step)
+                self.assertIn("python3 - <<'PY'", step)
+
     def test_reusable_only_allows_msi_when_signed_media_authenticated(self):
         workflow = LEGACY.read_text(encoding="utf-8")
         self.assertEqual(workflow.count("      try_48_msi:"), 2)
