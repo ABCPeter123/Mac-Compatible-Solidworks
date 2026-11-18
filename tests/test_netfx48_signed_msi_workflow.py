@@ -322,6 +322,10 @@ class SignedMSIGates(TestCase):
         self.assertIn('[[ "$SWCOMPAT_WINE_BASELINE" == "wiage-11.13" ]]', reusable)
         self.assertIn("SWCOMPAT_HOST_ONLY:", reusable)
         self.assertIn("SWCOMPAT_MACOS26:", reusable)
+        for env_name in ("SWCOMPAT_WIAGE_TRY_MSI", "SWCOMPAT_WIAGE_TRY_DIRECT",
+                         "SWCOMPAT_WIAGE_TRY_INTERMEDIATE", "SWCOMPAT_WIAGE_TRY_PAYLOAD"):
+            self.assertIn(env_name + ":", reusable)
+            self.assertIn('"' + "$" + env_name + '" != "false"', reusable)
         self.assertIn("d0cea7ff492dd3801dfa26a2a7d5ed1331e60f65929318d17301a3ce9cbba56c",
                       reusable)
         self.assertIn("github.com/dttdrv/mage/releases/download/preview-2026-08-02",
