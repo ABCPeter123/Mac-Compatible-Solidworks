@@ -23,6 +23,11 @@ on:
         type: boolean
         required: false
         default: false
+      signed_msi_timeout_seconds:
+        description: 'Allowlisted genuine signed MSI NGen experiment timeout (seconds)'
+        type: number
+        required: false
+        default: 420
       prepare_48_assembly_cache:
         description: 'Only for signed x64 MSI, opt-in create missing Windows assembly cache in isolated prefix'
         type: boolean
@@ -85,6 +90,12 @@ on:
         type: boolean
         required: false
         default: false
+      signed_msi_timeout_seconds:
+        description: 'Original signed .NET 4.8 x64 MSI timeout (seconds)'
+        type: choice
+        required: false
+        default: '420'
+        options: ['420', '1200']
       original_48_profile:
         description: 'Original 4.8 profile for distinct Win7/Win10 compatibility trial'
         type: choice
@@ -693,7 +704,7 @@ jobs:
     name: Try genuine .NET 4.0 after msxml3 in a fresh Apple Silicon Wine prefix
     needs: [authentic-netfx40-windows, absolute-path-regressions]
     runs-on: ${{ inputs.use_macos26_runner && 'macos-26' || 'macos-15' }}
-    timeout-minutes: 35
+    timeout-minutes: ${{ inputs.try_48_msi && inputs.signed_msi_timeout_seconds == 1200 && 55 || 35 }}
     env:
       SWCOMPAT_TRY_48_INTERMEDIATE: ${{ inputs.try_48_intermediate }}
       SWCOMPAT_TRY_48_DIRECT: ${{ inputs.try_48_direct }}
@@ -1015,6 +1026,7 @@ jobs:
         shell: bash
         env:
           SWCOMPAT_PREPARE_ASSEMBLY_CACHE: ${{ inputs.prepare_48_assembly_cache }}
+          SWCOMPAT_SIGNED_MSI_TIMEOUT: ${{ inputs.signed_msi_timeout_seconds }}
         run: |
           set -euo pipefail
           cache_flags=()
@@ -1031,6 +1043,7 @@ jobs:
             --service-fixture build/netfx48_scm_service_probe.exe \
             --native40-report build/netfx40-msxml3-restart.json \
             --output build/netfx40-to-48-signed-msi.json \
+            --msi-timeout-seconds "$SWCOMPAT_SIGNED_MSI_TIMEOUT" \
             "${cache_flags[@]}" \
             --agree-disposable-prefix
       - name: Gate 4.8.1 on authenticated original MSI with real x64 .NET 4.8 execution
@@ -1219,7 +1232,7 @@ jobs:
                   from scripts.netfx40_to_48_signed_msi import validate as valid_msi
                   msi = json.loads(msi_path.read_text(encoding="ascii"))
                   assert valid_msi(msi)
-                  for key in ("status", "win7", "cache_policy", "cache_state", "extract", "media", "install",
+                  for key in ("status", "win7", "cache_policy", "cache_state", "msi_timeout_seconds", "extract", "media", "install",
                               "patch", "win10", "restart", "clr64_changed",
                               "release", "loader", "native_only_managed",
                               "native48_candidate"):
@@ -1234,7 +1247,7 @@ jobs:
                   assert valid_ngen(msi["ngen_log"])
                   for field in ("x64", "x86", "signals"):
                       out.write(f"signed_msi_48_ngen_{field}: **"
-                                f"{msi['ngen_log'][field]}**\\n\\n")
+                                f"{msi['ngen_log'][field]}**\n\n")
                   from scripts.netfx48_scm_service_probe import FIELDS as scm_fields
                   out.write(f"signed_msi_48_scm_startup: **{msi['scm_startup']}**\n\n")
                   out.write(f"signed_msi_48_scm_status: **{msi['scm_preflight']['status']}**\n\n")
