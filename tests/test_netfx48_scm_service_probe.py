@@ -119,6 +119,10 @@ class NativeSCMProbeTests(unittest.TestCase):
 
     def test_independent_selftest_has_no_service_claims(self):
         self.assertEqual(scm.parse_selftest(scm.SELFTEST_MARKER, 0), "PASS")
+        self.assertEqual(scm.parse_selftest(
+            scm.SELFTEST_MARKER[:-1] + b"\r\n", 0), "PASS")
+        self.assertEqual(scm.parse_selftest(
+            scm.SELFTEST_MARKER + b"PRIVATE", 0), "UNEXPECTED_OUTPUT")
         self.assertEqual(scm.parse_selftest(b"", 0), "EMPTY_OUTPUT")
         self.assertEqual(scm.parse_selftest(b"PRIVATE", 0), "UNEXPECTED_OUTPUT")
         self.assertEqual(scm.parse_selftest(scm.SELFTEST_MARKER, 53), "NONZERO_EXIT")
