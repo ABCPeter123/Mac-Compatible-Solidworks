@@ -1224,6 +1224,10 @@ jobs:
                   for service in scm_fields:
                       out.write(f"signed_msi_48_scm_{service}: **"
                                 f"{msi['scm_preflight']['services'][service]}**\n\n")
+                  out.write(f"signed_msi_48_scm_post_status: **{msi['scm_postflight']['status']}**\n\n")
+                  for service in scm_fields:
+                      out.write(f"signed_msi_48_scm_post_{service}: **"
+                                f"{msi['scm_postflight']['services'][service]}**\n\n")
               direct_path = Path("build/netfx40-to-48-direct.json")
               if direct_path.is_file():
                   from scripts.netfx40_to_48_direct import validate as valid_direct
