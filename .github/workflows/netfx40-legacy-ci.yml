@@ -830,21 +830,12 @@ jobs:
               "https://github.com/dttdrv/mage/releases/download/preview-2026-08-02/wiage-runtime.tar.gz"
             printf '%s  %s\n' "$EXPECTED_SHA" "$ARCHIVE" | shasum -a 256 -c -
             mkdir -p "$RUNNER_TEMP/msxml3-wine-build"
-            # The pinned runtime's documented root is wiage/bin/wine.
-            # Reject archive paths leaving the isolated extraction root.
-            tar -tzf "$ARCHIVE" | python3 -c '
-          import pathlib, sys
-          entries = [line.strip() for line in sys.stdin]
-          if not entries or any(
-              not line or line.startswith("/") or ".." in pathlib.PurePosixPath(line).parts
-              or pathlib.PurePosixPath(line).parts[0] != "wiage"
-              for line in entries
-          ):
-              raise SystemExit("Unsafe authenticated Wine runtime archive entries")
-          '
+            # Independently reject archive traversal, malformed metadata,
+            # untrusted special files and links before any bytes are extracted.
+            python3 -m scripts.wine_engine_archive --archive "$ARCHIVE"
             tar -xzf "$ARCHIVE" -C "$RUNNER_TEMP/msxml3-wine-build"
             WINE_BIN="$RUNNER_TEMP/msxml3-wine-build/wiage/bin/wine"
-            test -f "$WINE_BIN" && test -x "$WINE_BIN" && test ! -L "$WINE_BIN"
+            test -e "$WINE_BIN" && test -x "$WINE_BIN"
             test -x "$RUNNER_TEMP/msxml3-wine-build/wiage/bin/wineserver"
             echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
             echo "Authenticated separate Wiage Rosetta WoW64 experimental Wine 11.13 runtime"
