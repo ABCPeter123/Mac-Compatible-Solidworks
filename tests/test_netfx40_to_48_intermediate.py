@@ -151,15 +151,15 @@ class Native40To48IntermediateTests(unittest.TestCase):
             pe = bytearray(8192)
             pe[:2] = b"MZ"
             struct.pack_into("<I", pe, 0x3C, 128)
-            pe[128:132] = b"PE\\0\\0"
+            pe[128:132] = b"PE\0\0"
             struct.pack_into("<H", pe, 132, 0x14C)
             struct.pack_into("<H", pe, 148, 224)
             struct.pack_into("<H", pe, 152, 0x10B)
             ngen.write_bytes(pe)
             self.assertEqual(p.pe_type(bytes(pe)), "PE_I386")
-            log.write_bytes(b"msxml3\\n")
+            log.write_bytes(b"msxml3\n")
             self.assertEqual(p.mark_verified_native40(prefix), "RECORDED")
-            self.assertEqual(log.read_bytes(), b"msxml3\\ndotnet40\\n")
+            self.assertEqual(log.read_bytes(), b"msxml3\ndotnet40\n")
             self.assertEqual(p.mark_verified_native40(prefix), "ALREADY_RECORDED")
             self.assertEqual(log.read_bytes().count(b"dotnet40"), 1)
             self.assertFalse((prefix / "user.reg").exists())
@@ -183,10 +183,10 @@ class Native40To48IntermediateTests(unittest.TestCase):
                 log = prefix / "winetricks.log"
                 log.write_bytes(b"msxml3")
                 self.assertEqual(p.mark_verified_native40(prefix), "RECORDED")
-                self.assertEqual(log.read_bytes(), b"msxml3\\ndotnet40\\n")
-                log.write_bytes(b"private\\x00invalid")
+                self.assertEqual(log.read_bytes(), b"msxml3\ndotnet40\n")
+                log.write_bytes(b"private\x00invalid")
                 self.assertEqual(p.mark_verified_native40(prefix), "LOG_UNSAFE")
-                self.assertEqual(log.read_bytes(), b"private\\x00invalid")
+                self.assertEqual(log.read_bytes(), b"private\x00invalid")
 
     def test_binary_identity_overrides_poisoned_inherited_environment(self):
         with TemporaryDirectory() as td:
