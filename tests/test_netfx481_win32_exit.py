@@ -51,7 +51,7 @@ class FullExitTests(TestCase):
                 self.assertEqual(result["category"], "PREREQUISITE_BLOCK_5100")
                 self.assertEqual(observed[0][-1], "--winetricks-args")
                 self.assertEqual(len(observed[0]), 4)
-                self.assertEqual(Path(observed[0][1]), fixture.resolve())
+                self.assertEqual(Path(observed[0][1]).resolve(), fixture.resolve())
                 monitor.launch(root / "wine", root, installer, fixture,
                                setup_family="NETFX48", setup_flags="logged")
                 self.assertEqual(len(observed[1]), 3)
