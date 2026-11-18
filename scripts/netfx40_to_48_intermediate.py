@@ -82,9 +82,9 @@ def validate(result: object) -> bool:
     if (result["status"] not in STATES
             or result["verb"] not in VERB or result["verb_progress"] not in PROGRESS
             or type(result["verb_stages"]) is not list
-            or result["verb_stages"] != sorted(set(result["verb_stages"]))
             or any(type(v) is not str or v not in WINETRICKS_STAGES
                    for v in result["verb_stages"])
+            or result["verb_stages"] != sorted(set(result["verb_stages"]))
             or result["restart"] not in BOOT
             or result["win7"] not in WINVER or result["win10"] not in WINVER
             or result["release"] not in RELEASE
