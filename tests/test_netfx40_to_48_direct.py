@@ -46,7 +46,7 @@ class DirectNative48Tests(unittest.TestCase):
         return (paths[0], prefix, *paths[1:])
 
     def run_case(self, root, *, setup=None, changed=True, registry="NETFX48_RANGE",
-                 profile="win7", setup_args="logged"):
+                 profile="win7", setup_args="logged", no_log=False):
         args = self.fixture(root)
         fake_setup = setup or self.setup()
         diff = {"changes": {"CLR64": "CHANGED" if changed else "UNCHANGED"}}
@@ -69,20 +69,25 @@ class DirectNative48Tests(unittest.TestCase):
             mock.patch.object(p, "_set_winver", return_value="APPLIED") as profile_switch,
             mock.patch.object(p, "_release", return_value=registry),
             mock.patch.object(p, "private_setup_log", return_value=root / "private"),
-            mock.patch.object(p, "classify_log", return_value={
-                "status": "CLASSIFIED", "phase": "UNKNOWN", "codes": []}),
+            mock.patch.object(p, "classify_log", return_value=(
+                {"status": "NOT_FOUND", "phase": "UNKNOWN", "codes": []}
+                if no_log else
+                {"status": "CLASSIFIED", "phase": "UNKNOWN", "codes": []})),
             mock.patch.object(p, "discard_log"),
             mock.patch.object(p, "classify_blockif", return_value={
-                "status": "CAPTURED", "true_count": 1,
-                "false_count": 2, "incomplete_count": 0,
-                "true_cause_categories": ["UNKNOWN_PREREQUISITE"],
-                "true_logic_signals": ["TRUSTEDINSTALLER_MISSING_1060"],
-                "milestones": ["BLOCKIF_TEXT"], "log_line_band": "ONE_TO_100",
+                "status": "NOT_FOUND" if no_log else "CAPTURED",
+                "true_count": 0 if no_log else 1,
+                "false_count": 0 if no_log else 2, "incomplete_count": 0,
+                "true_cause_categories": [] if no_log else ["UNKNOWN_PREREQUISITE"],
+                "true_logic_signals": [] if no_log else ["TRUSTEDINSTALLER_MISSING_1060"],
+                "milestones": [] if no_log else ["BLOCKIF_TEXT"],
+                "log_line_band": "NOT_REPORTED" if no_log else "ONE_TO_100",
             }) as blockif_scan,
-            mock.patch.object(p, "classify_primary_prerequisite", return_value={
-                "status": "CLASSIFIED", "os_versions": ["BELOW_WINDOWS_10"],
-                "blockers": ["MISSING_UPDATE_BLOCK"],
-                "5100_in_log": True}) as primary_scan,
+            mock.patch.object(p, "classify_primary_prerequisite", return_value=(
+                empty_prerequisite("NOT_FOUND") if no_log else {
+                    "status": "CLASSIFIED", "os_versions": ["BELOW_WINDOWS_10"],
+                    "blockers": ["MISSING_UPDATE_BLOCK"], "5100_in_log": True
+                })) as primary_scan,
             mock.patch.object(p, "snapshot_secondary_logs", return_value={}),
             mock.patch.object(p, "scan_secondary_logs", return_value=self.secondary()) as secondary_scan,
             mock.patch.object(p, "wineboot_restart", return_value="COMPLETED"),
@@ -101,12 +106,13 @@ class DirectNative48Tests(unittest.TestCase):
         self.assertEqual(result["setup_argument_mode"], setup_args.upper())
         self.assertEqual(secondary_scan.call_args.kwargs["family"], "NETFX48")
         self.assertEqual(blockif_scan.call_count, 1)
-        self.assertEqual(result["blockif_trace"]["true_count"], 1)
-        self.assertEqual(result["blockif_trace"]["false_count"], 2)
+        self.assertEqual(result["blockif_trace"]["true_count"], 0 if no_log else 1)
+        self.assertEqual(result["blockif_trace"]["false_count"], 0 if no_log else 2)
         self.assertEqual(primary_scan.call_count, 1)
         self.assertEqual(primary_scan.call_args.kwargs["family"], "NETFX48")
-        self.assertEqual(result["primary_prerequisite"]["blockers"], ["MISSING_UPDATE_BLOCK"])
-        self.assertTrue(result["primary_prerequisite"]["5100_in_log"])
+        self.assertEqual(result["primary_prerequisite"]["blockers"],
+                         [] if no_log else ["MISSING_UPDATE_BLOCK"])
+        self.assertEqual(result["primary_prerequisite"]["5100_in_log"], not no_log)
         self.assertTrue(evidence.validate_secondary_report(result["secondary_evidence"]))
         self.assertEqual(result["service_prerequisites"]["TrustedInstaller"], "ABSENT")
         self.assertEqual(result["wine_mono_registration"], "ABSENT")
@@ -155,8 +161,11 @@ class DirectNative48Tests(unittest.TestCase):
     @unittest.skipIf(os.name == "nt", "POSIX Wine experiment")
     def test_winetricks_argument_mode_remains_authentic_and_fail_closed(self):
         with TemporaryDirectory() as td:
-            result = self.run_case(Path(td), setup_args="winetricks")
+            result = self.run_case(Path(td), setup_args="winetricks", no_log=True)
             self.assertEqual(result["setup_argument_mode"], "WINETRICKS")
+            self.assertEqual(result["setup_evidence"]["status"], "NOT_FOUND")
+            self.assertEqual(result["blockif_trace"]["status"], "NOT_FOUND")
+            self.assertEqual(result["primary_prerequisite"]["status"], "NOT_FOUND")
             self.assertTrue(result["native48_candidate"])
             self.assertFalse(p.validate(dict(result, setup_argument_mode="PRIVATE")))
         with TemporaryDirectory() as td:
