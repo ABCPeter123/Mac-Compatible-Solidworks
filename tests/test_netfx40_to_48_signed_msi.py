@@ -374,6 +374,22 @@ class OriginalSignedMSITests(TestCase):
             release.assert_not_called()
             restart.assert_not_called()
 
+    def test_private_run_samples_at_timeout_without_exposing_child_output(self):
+        with TemporaryDirectory() as td:
+            fake = mock.Mock()
+            fake.wait.side_effect = p.subprocess.TimeoutExpired("wine", 60)
+            callback = mock.Mock()
+            with (mock.patch.object(p.subprocess, "Popen", return_value=fake),
+                  mock.patch.object(p, "_terminate_group") as cleanup,
+                  mock.patch.object(p.time, "monotonic",
+                                    side_effect=[0, 0, 61])):
+                outcome = p.private_run(["wine"], {}, Path(td), 60,
+                                        progress=callback)
+            self.assertEqual(outcome, "TIMED_OUT")
+            self.assertEqual(callback.call_count, 1)
+            cleanup.assert_called_once_with(fake)
+            self.assertEqual(fake.wait.call_args.kwargs["timeout"], 60)
+
     def test_private_run_discards_all_original_output(self):
         with TemporaryDirectory() as td:
             fake = mock.Mock()
