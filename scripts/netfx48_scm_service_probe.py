@@ -111,6 +111,11 @@ def selftest(wine: Path, prefix: Path, fixture: Path) -> str:
             or not wine.is_file() or not fixture.is_file()
             or fixture.name.casefold() != "netfx48_scm_service_probe.exe"):
         raise ValueError("SCM startup control requires the independently built x64 fixture")
+    # The CI argument is build/<fixture>.exe, but cwd below is build/.
+    # Always hand Wine a fully resolved executable path, or it may look
+    # for build/build/<fixture>.exe and exit before the Win32 entry point.
+    wine = wine.resolve(strict=True)
+    fixture = fixture.resolve(strict=True)
     env = os.environ.copy()
     env.pop("WINEDLLOVERRIDES", None)
     env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64",
@@ -138,6 +143,8 @@ def measure(wine: Path, prefix: Path, fixture: Path) -> dict:
             or not wine.is_file() or not fixture.is_file()
             or fixture.name.casefold() != "netfx48_scm_service_probe.exe"):
         raise ValueError("SCM probe requires the independently built x64 fixture")
+    wine = wine.resolve(strict=True)
+    fixture = fixture.resolve(strict=True)
     env = os.environ.copy()
     env.pop("WINEDLLOVERRIDES", None)
     env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64",
