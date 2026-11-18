@@ -47,10 +47,25 @@ class OriginalSignedMSITests(TestCase):
                  patch="SUCCESS", changed=True, release="NETFX48_RANGE",
                  valid_media=True, verified_native40=True, scm=False,
                  post_scm=None, prepare_cache=False, ngen_bytes=None,
-                 msi_timeout_seconds=420):
+                 msi_timeout_seconds=420, pause_queue=False,
+                 pause_failure=None, resume_failure=None):
         calls = []
+        if pause_queue:
+            prefix = paths[1]
+            (prefix / ".swcompat-netfx481-disposable").touch()
+            (prefix / "system.reg").write_text("synthetic")
+            for arch in ("Framework64", "Framework"):
+                ngen = prefix / "drive_c" / "windows" / "Microsoft.NET" / arch / "v4.0.30319" / "ngen.exe"
+                ngen.parent.mkdir(parents=True, exist_ok=True)
+                ngen.write_bytes(b"MZ" + b"x" * 4998)
         def fake_run(cmd, env, cwd, timeout, *, progress=None):
             calls.append((cmd, timeout))
+            if len(cmd) >= 4 and cmd[2] == "queue":
+                if cmd[3] == "pause" and pause_failure is not None and "Framework/" in cmd[1]:
+                    return pause_failure
+                if cmd[3] == "continue" and resume_failure is not None and "Framework/" in cmd[1]:
+                    return resume_failure
+                return "SUCCESS"
             if cmd[1] != "msiexec.exe":
                 if extract == "SUCCESS" and valid_media:
                     root = paths[1] / "drive_c" / p.TARGET
@@ -99,7 +114,8 @@ class OriginalSignedMSITests(TestCase):
                 *paths, {"persistent_native_managed": verified_native40},
                 service_fixture=service_path if scm else None,
                 prepare_assembly_cache=prepare_cache,
-                msi_timeout_seconds=msi_timeout_seconds)
+                msi_timeout_seconds=msi_timeout_seconds,
+                pause_native_ngen_queue=pause_queue)
         self.assertTrue(p.validate(result))
         self.assertEqual(result["solidworks_compatibility"], "NOT_DEMONSTRATED")
         self.assertFalse(result["framework481_confirmed"])
@@ -256,6 +272,57 @@ class OriginalSignedMSITests(TestCase):
             self.assertNotIn("Original private assembly", str(result))
             self.assertFalse(p.validate(dict(result, ngen_progress={
                 **result["ngen_progress"], "x86_last": "PRIVATE"})))
+
+    def test_real_ngen_queue_pause_resumes_without_bypassing_signed_msi(self):
+        with TemporaryDirectory() as td:
+            data, calls = self.run_case(self.fixture(Path(td)), pause_queue=True)
+            self.assertEqual(data["ngen_queue_policy"], "PAUSE")
+            self.assertEqual(data["ngen_queue"]["status"], "COMPLETE")
+            self.assertTrue(data["native48_candidate"])
+            operations = [c[0][-1] if len(c[0]) >= 4 and c[0][2] == "queue"
+                          else c[0][1] for c in calls]
+            self.assertEqual(operations, [
+                "NDP48-x86-x64-AllOS-ENU.exe", "pause", "pause",
+                "msiexec.exe", "continue", "continue", "msiexec.exe"])
+            self.assertEqual(len(calls), 7)
+
+    def test_failed_original_ngen_pause_aborts_signed_msi_and_restores(self):
+        with TemporaryDirectory() as td:
+            data, calls = self.run_case(
+                self.fixture(Path(td)), pause_queue=True,
+                pause_failure="EXIT_NONZERO")
+            self.assertEqual(data["ngen_queue"]["status"], "INCOMPLETE")
+            self.assertEqual(data["install"], "NOT_RUN")
+            self.assertEqual(data["patch"], "NOT_RUN")
+            self.assertFalse(data["native48_candidate"])
+            self.assertFalse(any("msiexec.exe" in c[0] for c in calls))
+            self.assertTrue(p.validate(data))
+
+    def test_original_ngen_resume_failure_blocks_signed_msp(self):
+        with TemporaryDirectory() as td:
+            data, calls = self.run_case(
+                self.fixture(Path(td)), pause_queue=True,
+                resume_failure="EXIT_NONZERO")
+            self.assertEqual(data["install"], "SUCCESS")
+            self.assertEqual(data["ngen_queue"]["status"], "INCOMPLETE")
+            self.assertEqual(data["patch"], "NOT_RUN")
+            self.assertFalse(data["native48_candidate"])
+            self.assertTrue(p.validate(data))
+            self.assertFalse(p.validate({**data, "native48_candidate": True}))
+
+    def test_original_ngen_denied_cleanup_forbids_more_wine_commands(self):
+        with TemporaryDirectory() as td:
+            data, calls = self.run_case(
+                self.fixture(Path(td)), pause_queue=True,
+                install="TIMED_OUT_CLEANUP_DENIED")
+            self.assertEqual(data["ngen_queue"]["status"], "DIRTY")
+            self.assertEqual(data["win10"], "NOT_RUN")
+            self.assertEqual(data["patch"], "NOT_RUN")
+            self.assertFalse(data["native48_candidate"])
+            self.assertEqual(len([c for c in calls if c[0][1] == "msiexec.exe"]), 1)
+            self.assertFalse(any(len(c[0]) >= 4 and c[0][2] == "queue"
+                                 and c[0][3] == "continue" for c in calls))
+            self.assertTrue(p.validate(data))
 
     def test_failed_original_msi_and_patch_never_upgrade(self):
         for params, want_install, want_patch in (
