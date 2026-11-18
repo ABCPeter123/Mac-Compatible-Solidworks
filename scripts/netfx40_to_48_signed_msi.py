@@ -15,6 +15,8 @@ import re
 from pathlib import Path
 import subprocess
 import tempfile
+import time
+from collections.abc import Callable
 
 from scripts.netfx40_msxml3_restart import validate as valid_native40
 from scripts.netfx40_to_48_direct import verify_original_media
@@ -29,6 +31,10 @@ from scripts.netfx48_msi_service_evidence import (
     valid as valid_service_evidence,
 )
 from scripts.netfx48_assembly_cache import inspect_assembly_cache, STATES as CACHE_STATES
+from scripts.netfx48_ngen_progress import (
+    NgenProgress, blank as blank_progress,
+    valid as valid_progress, SAMPLE_INTERVAL,
+)
 from scripts.netfx48_ngen_log_evidence import (
     baseline as ngen_baseline, inspect as inspect_ngen,
     blank as blank_ngen, valid as valid_ngen,
@@ -155,6 +161,7 @@ def blank() -> dict:
         "win7": "NOT_RUN", "extract": "NOT_RUN", "media": "NOT_RUN",
         "install": "NOT_RUN", "patch": "NOT_RUN",
         "install_log": blank_msi_log(), "ngen_log": blank_ngen(),
+        "ngen_progress": blank_progress(),
         "scm_preflight": blank_scm(), "scm_postflight": blank_scm(),
         "scm_startup": "NOT_RUN",
         "cache_policy": "OBSERVE", "cache_state": "NOT_RUN",
@@ -177,6 +184,9 @@ def validate(result: object) -> bool:
             or result["media"] not in MEDIA or result["restart"] not in RESTART
             or not valid_msi_log(result["install_log"])
             or not valid_ngen(result["ngen_log"])
+            or not valid_progress(result["ngen_progress"])
+            or (result["install"] == "NOT_RUN"
+                and result["ngen_progress"] != blank_progress())
             or (result["install"] in {"NOT_RUN", "TIMED_OUT_CLEANUP_DENIED"}
                 and result["ngen_log"] != blank_ngen())
             or not valid_scm(result["scm_preflight"])
@@ -243,7 +253,7 @@ def verify_extracted_media(root: Path) -> str:
 
 
 def private_run(args: list[str], env: dict[str, str], cwd: Path,
-                timeout: int) -> str:
+                timeout: int, *, progress: Callable[[], None] | None = None) -> str:
     """No untrusted installer bytes, paths, exit text or original stdout in CI."""
     with tempfile.TemporaryFile() as sink:
         try:
@@ -254,7 +264,21 @@ def private_run(args: list[str], env: dict[str, str], cwd: Path,
         except OSError:
             return "START_FAILED"
         try:
-            code = child.wait(timeout=timeout)
+            if progress is None:
+                code = child.wait(timeout=timeout)
+            else:
+                deadline = time.monotonic() + timeout
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(args, timeout)
+                    try:
+                        code = child.wait(timeout=min(SAMPLE_INTERVAL, remaining))
+                        break
+                    except subprocess.TimeoutExpired:
+                        progress()  # fixed NGen metadata only, never text
+                        if time.monotonic() >= deadline:
+                            raise
         except subprocess.TimeoutExpired:
             # Original Wine installers can spawn grandchildren. Never leave
             # a detached still-running original MSI process *group* behind.
@@ -342,6 +366,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
     restart = "NOT_RUN"
     install_log = blank_msi_log()
     ngen_log = blank_ngen()
+    ngen_progress = blank_progress()
     scm_postflight = blank_scm()
     try:
         if win7 == "APPLIED":
@@ -357,12 +382,17 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                 # Only new NGen log bytes after original MSI startup can
                 # contribute bounded signals. Pre-existing CLR4 logs cannot.
                 ngen_start = ngen_baseline(prefix)
+                progress = NgenProgress(prefix)
                 installed = private_run(
                     [str(wine), "msiexec.exe", "/i",
                      "C:\\" + TARGET + "\\" + MSI, "/qn", "/norestart",
                      "/L*v", "C:\\" + TARGET + "\\" + PRIVATE_LOG],
                     env, prefix, msi_timeout_seconds,
+                    progress=progress.sample,
                 )
+                if installed != "TIMED_OUT_CLEANUP_DENIED":
+                    progress.sample()
+                ngen_progress = progress.snapshot()
                 install_log = classify_private_msi_log(root)
                 if installed != "TIMED_OUT_CLEANUP_DENIED":
                     ngen_log = inspect_ngen(prefix, ngen_start)
@@ -390,7 +420,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                   "native40_persistent": True, "win7": win7,
                   "extract": extracted, "media": media, "install": installed,
                   "patch": patched, "install_log": install_log,
-                  "ngen_log": ngen_log,
+                  "ngen_log": ngen_log, "ngen_progress": ngen_progress,
                   "scm_preflight": scm_preflight,
                   "scm_postflight": scm_postflight,
                   "scm_startup": scm_startup,
@@ -409,7 +439,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
         "msi_timeout_seconds": msi_timeout_seconds,
         "win7": win7, "extract": extracted, "media": media,
         "install": installed, "patch": patched, "install_log": install_log,
-        "ngen_log": ngen_log,
+        "ngen_log": ngen_log, "ngen_progress": ngen_progress,
         "scm_preflight": scm_preflight, "scm_postflight": scm_postflight,
         "scm_startup": scm_startup,
         "cache_policy": cache_policy, "cache_state": cache_state,

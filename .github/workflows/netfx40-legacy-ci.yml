@@ -1253,6 +1253,12 @@ jobs:
                   for field in ("x64", "x86", "signals"):
                       out.write(f"signed_msi_48_ngen_{field}: **"
                                 f"{msi['ngen_log'][field]}**\n\n")
+                  from scripts.netfx48_ngen_progress import valid as valid_progress
+                  assert valid_progress(msi["ngen_progress"])
+                  for field in ("status", "samples", "x86_growth_windows",
+                                "x64_growth_windows", "x86_last", "x64_last"):
+                      out.write(f"signed_msi_48_ngen_progress_{field}: **"
+                                f"{msi['ngen_progress'][field]}**\n\n")
                   from scripts.netfx48_scm_service_probe import FIELDS as scm_fields
                   out.write(f"signed_msi_48_scm_startup: **{msi['scm_startup']}**\n\n")
                   out.write(f"signed_msi_48_scm_status: **{msi['scm_preflight']['status']}**\n\n")
