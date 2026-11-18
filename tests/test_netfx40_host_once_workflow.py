@@ -32,7 +32,7 @@ class HostOnceWorkflowTests(unittest.TestCase):
         self.assertIn("if: github.event_name == 'workflow_dispatch' && !inputs.host_provenance_only", source)
         self.assertIn("SWCOMPAT_PROVENANCE_ONLY: ${{ inputs.host_provenance_only }}", source)
         self.assertIn('if [ "$SWCOMPAT_PROVENANCE_ONLY" != "true" ]; then', source)
-        self.assertIn("if: inputs.host_provenance_only && (inputs.try_48_intermediate || inputs.try_48_direct)", source)
+        self.assertIn("if: inputs.host_provenance_only && (inputs.try_48_intermediate || inputs.try_48_direct || inputs.try_48_msi)", source)
         self.assertIn("if: env.SWCOMPAT_NATIVE40_READY == 'yes'", source)
         self.assertIn("python3 -m scripts.netfx40_host_api_diagnostic", source)
         self.assertIn("AUTHENTIC_NETFX40_HOST_FIXTURE_WINDOWS_CONTROL", source)
