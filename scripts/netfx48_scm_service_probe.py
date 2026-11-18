@@ -20,6 +20,18 @@ STATUSES = {"NOT_RUN", "COMPLETE", "UNAVAILABLE", "MALFORMED", "TIMEOUT",
             "NONZERO_WITH_REPORT", "NONZERO_WITHOUT_REPORT"}
 MAX_BYTES = 512
 PREFIX = "SWCOMPAT_SCM_API_"
+SELFTEST_MARKER = b"SWCOMPAT_SCM_FIXTURE_SELFTEST=PASS\n"
+SELFTEST_STATUSES = {"NOT_RUN", "PASS", "NONZERO_EXIT", "EMPTY_OUTPUT",
+                     "UNEXPECTED_OUTPUT", "TIMEOUT", "PROCESS_FAILED"}
+
+
+def parse_selftest(raw: bytes, exit_code: int) -> str:
+    if exit_code != 0:
+        return "NONZERO_EXIT"
+    if not raw:
+        return "EMPTY_OUTPUT"
+    return ("PASS" if raw in {SELFTEST_MARKER, SELFTEST_MARKER[:-1] + b"\r\n"}
+            else "UNEXPECTED_OUTPUT")
 
 
 def blank(status: str = "NOT_RUN") -> dict:
@@ -86,6 +98,38 @@ def parse(raw: bytes, exit_code: int) -> dict:
     if not valid(report):
         return blank("MALFORMED")
     return report
+
+
+def selftest(wine: Path, prefix: Path, fixture: Path) -> str:
+    """Run one no-SCM native x64 startup control before service inspection.
+
+    A passing selftest establishes Windows process/CRT startup only, never
+    SCM correctness or the existence of any Windows service.
+    """
+    validate_prefix(prefix)
+    if (wine.is_symlink() or fixture.is_symlink()
+            or not wine.is_file() or not fixture.is_file()
+            or fixture.name.casefold() != "netfx48_scm_service_probe.exe"):
+        raise ValueError("SCM startup control requires the independently built x64 fixture")
+    env = os.environ.copy()
+    env.pop("WINEDLLOVERRIDES", None)
+    env.update({"WINEPREFIX": str(prefix), "WINEARCH": "win64",
+                "WINEDEBUG": "-all"})
+    with tempfile.TemporaryFile() as stream:
+        try:
+            result = subprocess.run(
+                [str(wine), str(fixture), "--selftest"], cwd=fixture.parent,
+                env=env, stdin=subprocess.DEVNULL, stdout=stream,
+                stderr=subprocess.DEVNULL, timeout=20, check=False)
+        except subprocess.TimeoutExpired:
+            return "TIMEOUT"
+        except OSError:
+            return "PROCESS_FAILED"
+        stream.seek(0)
+        output = stream.read(len(SELFTEST_MARKER) + 1)
+    status = parse_selftest(output, result.returncode)
+    assert status in SELFTEST_STATUSES
+    return status
 
 
 def measure(wine: Path, prefix: Path, fixture: Path) -> dict:

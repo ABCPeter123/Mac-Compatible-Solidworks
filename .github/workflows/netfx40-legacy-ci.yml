@@ -386,6 +386,11 @@ jobs:
           [System.IO.File]::WriteAllLines((Join-Path (Get-Location) 'build\compile-original-scm.cmd'), $lines, [System.Text.Encoding]::ASCII)
           & cmd.exe /d /c build\compile-original-scm.cmd
           if ($LASTEXITCODE -ne 0) { throw "Native SCM API probe compilation failed" }
+          $startupControl = & build\netfx48_scm_service_probe.exe --selftest
+          if ($LASTEXITCODE -ne 0 -or
+              $startupControl -notcontains 'SWCOMPAT_SCM_FIXTURE_SELFTEST=PASS') {
+            throw "Native SCM fixture startup selftest failed"
+          }
           $serviceControl = & build\netfx48_scm_service_probe.exe
           if ($LASTEXITCODE -ne 0 -or
               $serviceControl -notcontains 'SWCOMPAT_SCM_API_STATUS=COMPLETE' -or
@@ -1110,6 +1115,7 @@ jobs:
                   out.write(f"original_direct_48_wine_mono_registration: **{measured['wine_mono_registration']}**\n\n")
                   from scripts.netfx48_scm_service_probe import FIELDS, STATUSES
                   assert measured["service_api"]["status"] in STATUSES
+                  out.write(f"original_direct_48_scm_fixture_startup: **{measured['scm_fixture_selftest']}**\n\n")
                   out.write(f"original_direct_48_scm_api_status: **{measured['service_api']['status']}**\n\n")
                   for service in FIELDS:
                       out.write(f"original_direct_48_scm_api_{service}: **{measured['service_api']['services'][service]}**\n\n")

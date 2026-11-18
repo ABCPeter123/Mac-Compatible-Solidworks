@@ -117,6 +117,59 @@ class NativeSCMProbeTests(unittest.TestCase):
                     scm.measure(wine, prefix, root / "user-binary.exe")
                 run.assert_not_called()
 
+    def test_independent_selftest_has_no_service_claims(self):
+        self.assertEqual(scm.parse_selftest(scm.SELFTEST_MARKER, 0), "PASS")
+        self.assertEqual(scm.parse_selftest(
+            scm.SELFTEST_MARKER[:-1] + b"\r\n", 0), "PASS")
+        self.assertEqual(scm.parse_selftest(
+            scm.SELFTEST_MARKER + b"PRIVATE", 0), "UNEXPECTED_OUTPUT")
+        self.assertEqual(scm.parse_selftest(b"", 0), "EMPTY_OUTPUT")
+        self.assertEqual(scm.parse_selftest(b"PRIVATE", 0), "UNEXPECTED_OUTPUT")
+        self.assertEqual(scm.parse_selftest(scm.SELFTEST_MARKER, 53), "NONZERO_EXIT")
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            wine = root / "wine"
+            wine.write_bytes(b"wine")
+            prefix = root / "prefix"
+            prefix.mkdir()
+            fixture = root / "netfx48_scm_service_probe.exe"
+            fixture.write_bytes(b"fixture")
+
+            def execute(args, **kwargs):
+                self.assertEqual(args, [str(wine), str(fixture), "--selftest"])
+                self.assertEqual(kwargs["env"]["WINEPREFIX"], str(prefix))
+                self.assertNotIn("WINEDLLOVERRIDES", kwargs["env"])
+                self.assertIs(kwargs["stdin"], subprocess.DEVNULL)
+                self.assertEqual(kwargs["timeout"], 20)
+                kwargs["stdout"].write(scm.SELFTEST_MARKER)
+                return mock.Mock(returncode=0)
+
+            with mock.patch.object(scm, "validate_prefix"), \
+                 mock.patch.object(scm.subprocess, "run", side_effect=execute), \
+                 mock.patch.dict(scm.os.environ, {"WINEDLLOVERRIDES": "mscoree=b"}):
+                self.assertEqual(scm.selftest(wine, prefix, fixture), "PASS")
+
+    def test_independent_selftest_never_fabricates_success(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            wine = root / "wine"
+            wine.write_bytes(b"wine")
+            prefix = root / "prefix"
+            prefix.mkdir()
+            fixture = root / "netfx48_scm_service_probe.exe"
+            fixture.write_bytes(b"fixture")
+            with mock.patch.object(scm, "validate_prefix"), \
+                 mock.patch.object(scm.subprocess, "run",
+                                   side_effect=subprocess.TimeoutExpired("wine", 20)):
+                self.assertEqual(scm.selftest(wine, prefix, fixture), "TIMEOUT")
+            fixture.rename(root / "renamed.exe")
+            with mock.patch.object(scm, "validate_prefix"), \
+                 mock.patch.object(scm.subprocess, "run") as execute:
+                with self.assertRaises(ValueError):
+                    scm.selftest(wine, prefix, root / "renamed.exe")
+                execute.assert_not_called()
+
     def test_timeout_returns_unknown_not_missing_service(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
