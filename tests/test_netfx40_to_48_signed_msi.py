@@ -46,7 +46,8 @@ class OriginalSignedMSITests(TestCase):
     def run_case(self, paths, *, extract="SUCCESS", install="SUCCESS",
                  patch="SUCCESS", changed=True, release="NETFX48_RANGE",
                  valid_media=True, verified_native40=True, scm=False,
-                 post_scm=None, prepare_cache=False, ngen_bytes=None):
+                 post_scm=None, prepare_cache=False, ngen_bytes=None,
+                 msi_timeout_seconds=420):
         calls = []
         def fake_run(cmd, env, cwd, timeout):
             calls.append((cmd, timeout))
@@ -95,7 +96,8 @@ class OriginalSignedMSITests(TestCase):
             result = p.inspect(
                 *paths, {"persistent_native_managed": verified_native40},
                 service_fixture=service_path if scm else None,
-                prepare_assembly_cache=prepare_cache)
+                prepare_assembly_cache=prepare_cache,
+                msi_timeout_seconds=msi_timeout_seconds)
         self.assertTrue(p.validate(result))
         self.assertEqual(result["solidworks_compatibility"], "NOT_DEMONSTRATED")
         self.assertFalse(result["framework481_confirmed"])
@@ -212,6 +214,29 @@ class OriginalSignedMSITests(TestCase):
             self.assertNotIn("PRIVATE_PATH", str(result))
             self.assertFalse(p.validate(dict(result, ngen_log={
                 **result["ngen_log"], "signals": ["VENDOR_LOG"]})))
+
+    def test_long_ngen_budget_is_opt_in_and_never_proves_msi_completion(self):
+        with TemporaryDirectory() as td:
+            result, calls = self.run_case(
+                self.fixture(Path(td)), install="TIMED_OUT",
+                changed=True, release="NETFX48_RANGE",
+                msi_timeout_seconds=1200)
+            self.assertEqual(result["msi_timeout_seconds"], 1200)
+            self.assertEqual(calls[1][1], 1200)
+            self.assertEqual(result["install"], "TIMED_OUT")
+            self.assertFalse(result["native48_candidate"])
+            self.assertTrue(p.validate(result))
+            self.assertFalse(p.validate(dict(result, msi_timeout_seconds=1500)))
+            self.assertFalse(p.validate(dict(result, msi_timeout_seconds=True)))
+
+    def test_bad_original_msi_budgets_fail_before_media_or_wine(self):
+        with TemporaryDirectory() as td:
+            paths = self.fixture(Path(td))
+            for timeout in (60, 719, 1800, True, "1200"):
+                with self.subTest(timeout=timeout):
+                    with self.assertRaises(ValueError):
+                        p.inspect(*paths, {"persistent_native_managed": True},
+                                  msi_timeout_seconds=timeout)
 
     def test_failed_original_msi_and_patch_never_upgrade(self):
         for params, want_install, want_patch in (
