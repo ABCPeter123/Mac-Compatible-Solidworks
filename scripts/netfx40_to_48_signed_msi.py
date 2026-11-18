@@ -418,10 +418,6 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                     env, prefix, msi_timeout_seconds,
                     progress=progress.sample,
                 )
-                if pause_native_ngen_queue:
-                    queue_report = resume_queue(
-                        wine, prefix, env, queue_report, private_run,
-                        dirty=installed == "TIMED_OUT_CLEANUP_DENIED")
                 if installed != "TIMED_OUT_CLEANUP_DENIED":
                     progress.sample()
                 ngen_progress = progress.snapshot()
@@ -434,13 +430,20 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                 if (service_fixture is not None and scm_startup == "PASS"
                         and installed != "TIMED_OUT_CLEANUP_DENIED"):
                     scm_postflight = measure_scm(wine, prefix, service_fixture)
-                if installed == "SUCCESS" and (not pause_native_ngen_queue or queue_report["status"] == "COMPLETE"):
+                # Keep both signed framework packages in the same native
+                # queue-pause servicing window, per Microsoft's NGen guidance.
+                # The custom MSI and MSP operations remain unmodified.
+                if installed == "SUCCESS":
                     patched = private_run(
                         [str(wine), "msiexec.exe", "/p",
                          "C:\\" + TARGET + "\\" + MSP,
                          "/qn", "/norestart", "EXTUI=1"],
                         env, prefix, 420,
                     )
+                if pause_native_ngen_queue:
+                    queue_report = resume_queue(
+                        wine, prefix, env, queue_report, private_run,
+                        dirty=("TIMED_OUT_CLEANUP_DENIED" in (installed, patched)))
     finally:
         # A denied process-group cleanup can leave active Windows Installer
         # descendants. Do not issue *any* further Wine commands in that prefix.
