@@ -20,10 +20,10 @@ SERVER = "wiage/bin/wineserver"
 
 def _safe_name(name: str) -> bool:
     if (not name or name.startswith("/") or chr(92) in name
-            or ".." in parts or chr(0) in name or len(name) > 1024):
+            or chr(0) in name or len(name) > 1024):
         return False
-    pieces = name.split("/")
-    return (".." not in pieces
+    parts = name.split("/")
+    return (".." not in parts
             and posixpath.normpath(name).split("/")[0] == EXPECTED_ROOT)
 
 
@@ -31,16 +31,15 @@ MAX_APPLEDOUBLE = 1024 * 1024
 
 
 def _appledouble_sidecar(member: tarfile.TarInfo) -> bool:
-    """Recognize only regular AppleDouble sidecars for ignored extraction.
+    """Accept only small regular AppleDouble metadata that will be excluded.
 
-    A SHA256-pinned macOS-generated archive may include '._wiage' and
-    'wiage/.../._file' metadata. Never extract those members. They are
-    not executable content, Wine files, or acceptable symlink targets.
+    The SHA256-pinned macOS tar includes '._wiage' and nested sidecars.
+    Neither host metadata nor an unexpected symlink can be executable Wine.
     """
     name = member.name
     parts = name.split("/")
-    if (not name or name.startswith("/") or "\\\\" in name
-            or ".." in parts or "\\x00" in name or len(name) > 1024):
+    if (not name or name.startswith("/") or chr(92) in name
+            or ".." in parts or chr(0) in name or len(name) > 1024):
         return False
     normalized = posixpath.normpath(name)
     if normalized == "._wiage":
