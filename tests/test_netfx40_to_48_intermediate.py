@@ -186,13 +186,16 @@ class Native40To48IntermediateTests(unittest.TestCase):
     def test_winetricks_timeout_terminates_entire_process_group(self):
         with TemporaryDirectory() as td:
             command = ["/bin/sh", "-c", "sleep 30"]
-            status, milestone, stages, last_stage, processes = p._run_winetricks(
-                command, os.environ.copy(), Path(td), timeout=1)
+            with mock.patch.object(p, "snapshot_process_group",
+                                   return_value=["WINETRICKS_SHELL"]) as census:
+                status, milestone, stages, last_stage, processes = p._run_winetricks(
+                    command, os.environ.copy(), Path(td), timeout=1)
+            census.assert_called_once()
             self.assertEqual(status, "TIMED_OUT")
             self.assertEqual(milestone, "NO_OUTPUT")
             self.assertEqual(stages, [])
             self.assertEqual(last_stage, "NO_OUTPUT")
-            self.assertEqual(processes, [])
+            self.assertEqual(processes, ["WINETRICKS_SHELL"])
 
     def test_timeout_census_contains_only_allowlisted_group_names(self):
         raw = (b" 444 /tmp/private/winedbg.exe\n"
