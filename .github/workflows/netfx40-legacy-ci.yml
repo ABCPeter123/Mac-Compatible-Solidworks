@@ -833,15 +833,15 @@ jobs:
             # The pinned runtime's documented root is wiage/bin/wine.
             # Reject archive paths leaving the isolated extraction root.
             tar -tzf "$ARCHIVE" | python3 -c '
-import pathlib, sys
-entries = [line.strip() for line in sys.stdin]
-if not entries or any(
-    not line or line.startswith("/") or ".." in pathlib.PurePosixPath(line).parts
-    or pathlib.PurePosixPath(line).parts[0] != "wiage"
-    for line in entries
-):
-    raise SystemExit("Unsafe authenticated Wine runtime archive entries")
-'
+          import pathlib, sys
+          entries = [line.strip() for line in sys.stdin]
+          if not entries or any(
+              not line or line.startswith("/") or ".." in pathlib.PurePosixPath(line).parts
+              or pathlib.PurePosixPath(line).parts[0] != "wiage"
+              for line in entries
+          ):
+              raise SystemExit("Unsafe authenticated Wine runtime archive entries")
+          '
             tar -xzf "$ARCHIVE" -C "$RUNNER_TEMP/msxml3-wine-build"
             WINE_BIN="$RUNNER_TEMP/msxml3-wine-build/wiage/bin/wine"
             test -f "$WINE_BIN" && test -x "$WINE_BIN" && test ! -L "$WINE_BIN"
