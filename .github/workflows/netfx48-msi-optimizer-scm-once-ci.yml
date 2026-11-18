@@ -4,6 +4,8 @@ name: One-shot original .NET4.8 MSI with native CLR optimizer service presence
 # original Microsoft .NET4.0 prefix before launching authenticated 4.8 MSI.
 # Distinguishes actual absent / present / denied CLR optimization x64/x86,
 # TrustedInstaller and msiserver from mere references in private MSI logs.
+# Compare native CLR service presence before and immediately after the real
+# MSI attempt, including incomplete installs. No query after denied cleanup.
 # No fake service, NGen override, registry lie, binary shim, or skipped MSP.
 on:
   push:

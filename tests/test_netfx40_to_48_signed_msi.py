@@ -45,7 +45,8 @@ class OriginalSignedMSITests(TestCase):
 
     def run_case(self, paths, *, extract="SUCCESS", install="SUCCESS",
                  patch="SUCCESS", changed=True, release="NETFX48_RANGE",
-                 valid_media=True, verified_native40=True, scm=False):
+                 valid_media=True, verified_native40=True, scm=False,
+                 post_scm=None):
         calls = []
         def fake_run(cmd, env, cwd, timeout):
             calls.append((cmd, timeout))
@@ -62,6 +63,10 @@ class OriginalSignedMSITests(TestCase):
 
         before = {"CLR64": ("PE_AMD64", "original40")}
         after = {"CLR64": ("PE_AMD64", "original48" if changed else "original40")}
+        scm_before = {"status": "COMPLETE", "services": {
+            k: ("PRESENT" if k == "MSISERVER" else "ABSENT")
+            for k in p.blank_scm()["services"]}}
+        scm_after = post_scm if post_scm is not None else scm_before
         with (mock.patch.object(p, "validate_prefix"),
               mock.patch.object(p, "verify_original_media"),
               mock.patch.object(p, "valid_native40", return_value=True),
@@ -75,10 +80,8 @@ class OriginalSignedMSITests(TestCase):
               mock.patch.object(p, "wineboot_restart", return_value="COMPLETED"),
               mock.patch.object(p, "private_run", side_effect=fake_run),
               mock.patch.object(p, "selftest_scm", return_value="PASS"),
-              mock.patch.object(p, "measure_scm", return_value={
-                  "status": "COMPLETE",
-                  "services": {k: ("PRESENT" if k == "MSISERVER" else "ABSENT")
-                               for k in p.blank_scm()["services"]}})):
+              mock.patch.object(p, "measure_scm",
+                                side_effect=[scm_before, scm_after])):
             service_path = paths[0].parent / "netfx48_scm_service_probe.exe"
             if scm:
                 service_path.write_bytes(b"self authored original fixture")
@@ -118,9 +121,47 @@ class OriginalSignedMSITests(TestCase):
             self.assertEqual(data["scm_preflight"]["status"], "COMPLETE")
             self.assertEqual(data["scm_preflight"]["services"]["MSISERVER"], "PRESENT")
             self.assertEqual(data["scm_preflight"]["services"]["CLR_OPTIMIZATION_64"], "ABSENT")
+            self.assertEqual(data["scm_postflight"]["status"], "COMPLETE")
+            self.assertEqual(data["scm_postflight"]["services"]["CLR_OPTIMIZATION_64"], "ABSENT")
             self.assertFalse(data["native48_candidate"])
             self.assertFalse(p.validate(dict(data, scm_startup="PRIVATE")))
             self.assertFalse(p.validate(dict(data, scm_preflight={"service": "private"})))
+            self.assertFalse(p.validate(dict(data, scm_postflight={"service": "private"})))
+
+    def test_authentic_msi_service_transition_is_observed_not_install_success(self):
+        with TemporaryDirectory() as td:
+            services = {k: "ABSENT" for k in p.blank_scm()["services"]}
+            services["MSISERVER"] = "PRESENT"
+            services["CLR_OPTIMIZATION_64"] = "PRESENT"
+            after = {"status": "COMPLETE", "services": services}
+            result, _ = self.run_case(
+                self.fixture(Path(td)), scm=True, install="TIMED_OUT",
+                changed=True, release="NETFX48_RANGE", post_scm=after)
+            self.assertEqual(result["scm_preflight"]["services"]["CLR_OPTIMIZATION_64"], "ABSENT")
+            self.assertEqual(result["scm_postflight"]["services"]["CLR_OPTIMIZATION_64"], "PRESENT")
+            self.assertFalse(result["native48_candidate"])
+            self.assertTrue(p.validate(result))
+            self.assertFalse(p.validate(dict(result, scm_postflight={"status": "COMPLETE", "services": {"PRIVATE": "PRESENT"}})))
+
+    def test_denied_installer_cleanup_forbids_postflight_wine_probe(self):
+        with TemporaryDirectory() as td:
+            result, _ = self.run_case(
+                self.fixture(Path(td)), scm=True,
+                install="TIMED_OUT_CLEANUP_DENIED")
+            self.assertEqual(result["scm_preflight"]["status"], "COMPLETE")
+            self.assertEqual(result["scm_postflight"], p.blank_scm())
+            self.assertFalse(result["native48_candidate"])
+            self.assertFalse(p.validate(dict(result, scm_postflight=result["scm_preflight"])))
+
+    def test_patch_cleanup_denial_preserves_prior_msi_observation(self):
+        with TemporaryDirectory() as td:
+            result, _ = self.run_case(
+                self.fixture(Path(td)), scm=True,
+                patch="TIMED_OUT_CLEANUP_DENIED")
+            self.assertEqual(result["install"], "SUCCESS")
+            self.assertEqual(result["scm_postflight"]["status"], "COMPLETE")
+            self.assertFalse(result["native48_candidate"])
+            self.assertTrue(p.validate(result))
 
     def test_failed_original_msi_and_patch_never_upgrade(self):
         for params, want_install, want_patch in (
