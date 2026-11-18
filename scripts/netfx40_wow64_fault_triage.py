@@ -125,7 +125,7 @@ def inspect(wine: Path, prefix: Path, native: Path, managed: Path) -> dict:
     # The signed Windows job already independently compiles and runs the 32-bit
     # native exe, and verifies the managed 32BITREQUIRED PE32 metadata.
     n_run, n_seh, n_raw = _capture(wine, prefix, native, 25, managed=False)
-    native_control = (n_run == "EXIT_ZERO"
+    native_control = (n_run == "EXIT_ZERO" and n_seh != "TOO_LARGE"
                       and all(m in n_raw.splitlines() for m in NATIVE_MARKERS))
     result = blank()
     result.update(native_run=n_run, native_seh=n_seh,
@@ -138,7 +138,8 @@ def inspect(wine: Path, prefix: Path, native: Path, managed: Path) -> dict:
     # fixed SWCOMPAT_NETFX481_ records before the existing strict parser.
     markers = [line for line in m_raw.splitlines()
                if line.startswith(b"SWCOMPAT_NETFX481_") and len(line) <= 128]
-    parsed = parse_probe(b"\n".join(markers), 0 if m_run == "EXIT_ZERO"
+    parsed = parse_probe(b"\n".join(markers) if m_seh != "TOO_LARGE" else b"",
+                         0 if m_run == "EXIT_ZERO"
                          else 1 if m_run == "EXIT_NONZERO" else 124)
     result.update(managed_run=m_run, managed_seh=m_seh,
                   managed_family=parsed["clr_family"],
