@@ -63,7 +63,38 @@ def is_original_x86_cli_image(path: Path) -> bool:
     if struct.unpack_from("<I", header, optional+92)[0] < 15:
         return False  # No CLR directory entry
     cli_rva, cli_size = struct.unpack_from("<II", header, optional+96+14*8)
-    return bool(cli_rva and cli_size >= 0x48)
+    if not cli_rva or cli_size < 0x48:
+        return False
+    # .NET PE32 AnyCPU can still execute as a 64-bit process. Require
+    # IMAGE_COR20_HEADER flags 32BITREQUIRED to independently establish
+    # x86 managed execution rather than mislabeling AnyCPU as x86.
+    sections = struct.unpack_from("<H", header, offset+6)[0]
+    optional_size = struct.unpack_from("<H", header, offset+20)[0]
+    if not 1 <= sections <= 64 or optional_size < 224:
+        return False
+    table = optional + optional_size
+    for index in range(sections):
+        at = table + index * 40
+        if at + 40 > len(header):
+            return False
+        virtual_size, virtual_addr, raw_size, raw_ptr = struct.unpack_from(
+            "<IIII", header, at + 8)
+        if virtual_addr <= cli_rva < virtual_addr + max(virtual_size, raw_size):
+            file_offset = raw_ptr + cli_rva - virtual_addr
+            if file_offset + 20 > size:
+                return False
+            try:
+                with path.open("rb") as file:
+                    file.seek(file_offset)
+                    cor20 = file.read(20)
+            except OSError:
+                return False
+            if len(cor20) != 20:
+                return False
+            length = struct.unpack_from("<I", cor20, 0)[0]
+            flags = struct.unpack_from("<I", cor20, 16)[0]
+            return length >= 0x48 and bool(flags & 0x2)
+    return False
 
 
 def inspect(wine: Path, prefix: Path, fixture: Path) -> dict:
