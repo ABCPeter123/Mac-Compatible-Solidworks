@@ -18,7 +18,9 @@ static const SERVICE_TARGET targets[] = {
     {L"TrustedInstaller", "TRUSTEDINSTALLER"},
     {L"msiserver", "MSISERVER"},
     {L"wuauserv", "WUAUSERV"},
-    {L"BITS", "BITS"}
+    {L"BITS", "BITS"},
+    {L"clr_optimization_v4.0.30319_64", "CLR_OPTIMIZATION_64"},
+    {L"clr_optimization_v4.0.30319_32", "CLR_OPTIMIZATION_32"}
 };
 
 static const char *service_presence(SC_HANDLE manager, const wchar_t *name) {

@@ -10,7 +10,8 @@ from scripts import netfx48_scm_service_probe as scm
 
 
 def packet(*, status="COMPLETE", trusted="ABSENT", msi="PRESENT",
-           update="PRESENT", bits="PRESENT") -> bytes:
+           update="PRESENT", bits="PRESENT",
+           opt64="ABSENT", opt32="ABSENT") -> bytes:
     return ("\n".join([
         "SWCOMPAT_SCM_API_SCHEMA=1",
         "SWCOMPAT_SCM_API_STATUS=" + status,
@@ -18,6 +19,8 @@ def packet(*, status="COMPLETE", trusted="ABSENT", msi="PRESENT",
         "SWCOMPAT_SCM_API_MSISERVER=" + msi,
         "SWCOMPAT_SCM_API_WUAUSERV=" + update,
         "SWCOMPAT_SCM_API_BITS=" + bits,
+        "SWCOMPAT_SCM_API_CLR_OPTIMIZATION_64=" + opt64,
+        "SWCOMPAT_SCM_API_CLR_OPTIMIZATION_32=" + opt32,
     ]) + "\n").encode("ascii")
 
 
@@ -28,6 +31,8 @@ class NativeSCMProbeTests(unittest.TestCase):
         self.assertEqual(r["status"], "COMPLETE")
         self.assertEqual(r["services"]["TRUSTEDINSTALLER"], "ABSENT")
         self.assertEqual(r["services"]["MSISERVER"], "PRESENT")
+        self.assertEqual(r["services"]["CLR_OPTIMIZATION_64"], "ABSENT")
+        self.assertEqual(r["services"]["CLR_OPTIMIZATION_32"], "ABSENT")
         self.assertNotIn("service path", str(r))
         denied = scm.parse(packet(trusted="ACCESS_DENIED"), 0)
         self.assertEqual(denied["services"]["TRUSTEDINSTALLER"], "ACCESS_DENIED")
@@ -43,6 +48,8 @@ class NativeSCMProbeTests(unittest.TestCase):
             (packet().replace(b"MSISERVER=", b"OTHERSERVICE="), "INVALID_FIELD"),
             (packet().replace(b"SWCOMPAT_SCM_API_BITS=PRESENT\n", b""),
              "INCOMPLETE_FIELDS"),
+            (packet().replace(b"SWCOMPAT_SCM_API_CLR_OPTIMIZATION_64=ABSENT\n", b""),
+             "INCOMPLETE_FIELDS"),
             (packet() + b"\x00", "MALFORMED"),
             (b"\xff" + packet(), "NONASCII_OUTPUT"),
         )
@@ -54,7 +61,7 @@ class NativeSCMProbeTests(unittest.TestCase):
         self.assertEqual(scm.parse(b"WINE FAILED", 53),
                          scm.blank("NONZERO_WITHOUT_REPORT"))
         self.assertEqual(scm.parse(b"", 0), scm.blank("EMPTY_OUTPUT"))
-        self.assertEqual(scm.parse(packet() + b"x" * 513, 0),
+        self.assertEqual(scm.parse(packet() + b"x" * (scm.MAX_BYTES + 1), 0),
                          scm.blank("OVERSIZED_OUTPUT"))
         self.assertFalse(scm.valid(dict(scm.blank(), original_log="secret")))
         self.assertFalse(scm.valid(dict(scm.blank(), services={
@@ -77,7 +84,8 @@ class NativeSCMProbeTests(unittest.TestCase):
     def test_unavailable_manager_never_invents_present(self):
         unavailable = scm.parse(packet(
             status="UNAVAILABLE", trusted="UNKNOWN", msi="UNKNOWN",
-            update="UNKNOWN", bits="UNKNOWN"), 0)
+            update="UNKNOWN", bits="UNKNOWN",
+            opt64="UNKNOWN", opt32="UNKNOWN"), 0)
         self.assertTrue(scm.valid(unavailable))
         self.assertEqual(unavailable["status"], "UNAVAILABLE")
         self.assertFalse(scm.valid(dict(

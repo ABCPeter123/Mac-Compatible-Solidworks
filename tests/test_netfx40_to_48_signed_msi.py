@@ -45,7 +45,7 @@ class OriginalSignedMSITests(TestCase):
 
     def run_case(self, paths, *, extract="SUCCESS", install="SUCCESS",
                  patch="SUCCESS", changed=True, release="NETFX48_RANGE",
-                 valid_media=True, verified_native40=True):
+                 valid_media=True, verified_native40=True, scm=False):
         calls = []
         def fake_run(cmd, env, cwd, timeout):
             calls.append((cmd, timeout))
@@ -73,8 +73,18 @@ class OriginalSignedMSITests(TestCase):
               mock.patch.object(p, "_set_winver", return_value="APPLIED"),
               mock.patch.object(p, "_release", return_value=release),
               mock.patch.object(p, "wineboot_restart", return_value="COMPLETED"),
-              mock.patch.object(p, "private_run", side_effect=fake_run)):
-            result = p.inspect(*paths, {"persistent_native_managed": verified_native40})
+              mock.patch.object(p, "private_run", side_effect=fake_run),
+              mock.patch.object(p, "selftest_scm", return_value="PASS"),
+              mock.patch.object(p, "measure_scm", return_value={
+                  "status": "COMPLETE",
+                  "services": {k: ("PRESENT" if k == "MSISERVER" else "ABSENT")
+                               for k in p.blank_scm()["services"]}})):
+            service_path = paths[0].parent / "netfx48_scm_service_probe.exe"
+            if scm:
+                service_path.write_bytes(b"self authored original fixture")
+            result = p.inspect(
+                *paths, {"persistent_native_managed": verified_native40},
+                service_fixture=service_path if scm else None)
         self.assertTrue(p.validate(result))
         self.assertEqual(result["solidworks_compatibility"], "NOT_DEMONSTRATED")
         self.assertFalse(result["framework481_confirmed"])
@@ -97,6 +107,20 @@ class OriginalSignedMSITests(TestCase):
             self.assertEqual(calls[2][1], 420)
             self.assertFalse(p.validate(dict(result, native48_candidate=False)))
             self.assertFalse(p.validate(dict(result, private_vendor_log="forbidden")))
+
+    def test_native_original_scm_measurement_cannot_fabricate_48_success(self):
+        with TemporaryDirectory() as td:
+            data, _ = self.run_case(
+                self.fixture(Path(td)), scm=True, install="TIMED_OUT",
+                changed=True, release="NETFX48_RANGE")
+            self.assertTrue(p.validate(data))
+            self.assertEqual(data["scm_startup"], "PASS")
+            self.assertEqual(data["scm_preflight"]["status"], "COMPLETE")
+            self.assertEqual(data["scm_preflight"]["services"]["MSISERVER"], "PRESENT")
+            self.assertEqual(data["scm_preflight"]["services"]["CLR_OPTIMIZATION_64"], "ABSENT")
+            self.assertFalse(data["native48_candidate"])
+            self.assertFalse(p.validate(dict(data, scm_startup="PRIVATE")))
+            self.assertFalse(p.validate(dict(data, scm_preflight={"service": "private"})))
 
     def test_failed_original_msi_and_patch_never_upgrade(self):
         for params, want_install, want_patch in (
