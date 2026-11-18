@@ -1,0 +1,33 @@
+name: One-shot Rosetta WoW64 original CLR4 x86 with 64 MiB host stack
+
+# Test only one documented host stack workaround for Wine's macOS WoW64
+# exception/unwinding regression. Original signed Microsoft CLR4 is proven
+# before x86 probes. No .NET4.8 MSI/MSP, 4.8.1, or SOLIDWORKS is installed.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netfx40-wow64-hoststack64-once-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: authentic-wow64-hoststack64-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  original-clr4-x86-stack64:
+    name: Compare genuine native and managed x86 execution with 65520 KiB host stack
+    uses: ./.github/workflows/netfx40-legacy-ci.yml
+    with:
+      wine_baseline: '11.21'
+      use_macos26_runner: true
+      host_provenance_only: true
+      try_wow64_managed: true
+      try_wow64_faults: true
+      wow64_host_stack64: true
+      try_48_msi: false
+      try_48_direct: false
+      try_48_intermediate: false
+      try_48_payload_host: false
