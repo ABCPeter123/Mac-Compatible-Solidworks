@@ -29,6 +29,10 @@ from scripts.netfx48_msi_service_evidence import (
     valid as valid_service_evidence,
 )
 from scripts.netfx481_clr_load import run as load_clr, STATUSES as LOAD_STATES
+from scripts.netfx48_scm_service_probe import (
+    measure as measure_scm, selftest as selftest_scm,
+    valid as valid_scm, blank as blank_scm, SELFTEST_STATUSES,
+)
 from scripts.netfx481_payload_audit import snapshot
 from scripts.netfx481_trial import validate_prefix, probe, wineboot_restart
 
@@ -143,6 +147,7 @@ def blank() -> dict:
         "win7": "NOT_RUN", "extract": "NOT_RUN", "media": "NOT_RUN",
         "install": "NOT_RUN", "patch": "NOT_RUN",
         "install_log": blank_msi_log(),
+        "scm_preflight": blank_scm(), "scm_startup": "NOT_RUN",
         "win10": "NOT_RUN", "restart": "NOT_RUN",
         "clr64_changed": False, "release": "UNAVAILABLE",
         "loader": "NOT_VERIFIED", "native_only_managed": "NOT_VERIFIED",
@@ -159,6 +164,10 @@ def validate(result: object) -> bool:
             or any(result[k] not in STEPS for k in ("extract", "install", "patch"))
             or result["media"] not in MEDIA or result["restart"] not in RESTART
             or not valid_msi_log(result["install_log"])
+            or not valid_scm(result["scm_preflight"])
+            or result["scm_startup"] not in SELFTEST_STATUSES
+            or (result["scm_startup"] != "PASS"
+                and result["scm_preflight"] != blank_scm())
             or (result["install"] == "NOT_RUN"
                 and result["install_log"] != blank_msi_log())
             or (result["install"] != "NOT_RUN"
@@ -241,7 +250,8 @@ def private_run(args: list[str], env: dict[str, str], cwd: Path,
 
 
 def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
-            loader: Path, managed: Path, native40: dict) -> dict:
+            loader: Path, managed: Path, native40: dict, *,
+            service_fixture: Path | None = None) -> dict:
     if os.name == "nt" or any(p.is_symlink() for p in (
             wine, prefix, installer, digest, loader, managed)):
         raise ValueError("Only isolated native Microsoft 4.0 Wine tests permitted")
@@ -264,6 +274,16 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
             or initial["clr_family"] != "MICROSOFT_CLR_CANDIDATE"
             or initial["managed"] != "PASS"):
         return blank()
+
+    scm_startup = "NOT_RUN"
+    scm_preflight = blank_scm()
+    if service_fixture is not None:
+        if service_fixture.is_symlink() or service_fixture.name != "netfx48_scm_service_probe.exe":
+            raise ValueError("Unrecognized native read-only SCM executable")
+        service_fixture = service_fixture.resolve(strict=True)
+        scm_startup = selftest_scm(wine, prefix, service_fixture)
+        if scm_startup == "PASS":
+            scm_preflight = measure_scm(wine, prefix, service_fixture)
 
     root = prefix / "drive_c" / TARGET
     if root.is_symlink() or root.exists():
@@ -308,7 +328,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
         result = {**blank(), "status": "MEASURED",
                   "native40_persistent": True, "win7": win7,
                   "extract": extracted, "media": media, "install": installed,
-                  "patch": patched, "install_log": install_log}
+                  "patch": patched, "install_log": install_log,
+                  "scm_preflight": scm_preflight, "scm_startup": scm_startup}
         if not validate(result):
             raise ValueError("Invalid fail-closed signed MSI timeout report")
         return result
@@ -321,6 +342,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
         "status": "MEASURED", "native40_persistent": True,
         "win7": win7, "extract": extracted, "media": media,
         "install": installed, "patch": patched, "install_log": install_log,
+        "scm_preflight": scm_preflight, "scm_startup": scm_startup,
         "win10": win10, "restart": restart,
         "clr64_changed": (before["CLR64"][1] != after["CLR64"][1]
                           and after["CLR64"][0] == "PE_AMD64"),
@@ -348,11 +370,13 @@ def main(argv: list[str] | None = None) -> int:
     for key in ("wine", "prefix", "installer", "sha256-file", "loader",
                 "managed", "native40-report", "output"):
         parser.add_argument("--" + key, required=True, type=Path)
+    parser.add_argument("--service-fixture", type=Path)
     parser.add_argument("--agree-disposable-prefix", action="store_true", required=True)
     a = parser.parse_args(argv)
     result = inspect(a.wine, a.prefix, a.installer, a.sha256_file,
                      a.loader, a.managed,
-                     json.loads(a.native40_report.read_text(encoding="utf-8")))
+                     json.loads(a.native40_report.read_text(encoding="utf-8")),
+                     service_fixture=a.service_fixture)
     if a.output.is_symlink():
         raise ValueError("Linked experiment report")
     a.output.parent.mkdir(parents=True, exist_ok=True)
