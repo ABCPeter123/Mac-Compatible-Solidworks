@@ -128,15 +128,19 @@ class OriginalSignedMSITests(TestCase):
 
     def test_private_run_discards_all_original_output(self):
         with TemporaryDirectory() as td:
-            with mock.patch.object(p.subprocess, "run",
-                                   return_value=mock.Mock(returncode=1603)) as call:
+            fake = mock.Mock()
+            fake.wait.return_value = 1603
+            with mock.patch.object(p.subprocess, "Popen", return_value=fake) as open_proc:
                 self.assertEqual(p.private_run(["wine", "msiexec.exe"],
                                                 {}, Path(td), 20), "EXIT_NONZERO")
-                self.assertEqual(call.call_args.kwargs["timeout"], 20)
-                self.assertEqual(call.call_args.kwargs["stdin"], p.subprocess.DEVNULL)
-                self.assertNotEqual(call.call_args.kwargs["stdout"], p.subprocess.PIPE)
-            with mock.patch.object(p.subprocess, "run",
-                                   side_effect=p.subprocess.TimeoutExpired("wine", 1)):
+                self.assertEqual(fake.wait.call_args.kwargs["timeout"], 20)
+                self.assertEqual(open_proc.call_args.kwargs["stdin"], p.subprocess.DEVNULL)
+                self.assertTrue(open_proc.call_args.kwargs["start_new_session"])
+                self.assertNotEqual(open_proc.call_args.kwargs["stdout"], p.subprocess.PIPE)
+            fake.wait.side_effect = p.subprocess.TimeoutExpired("wine", 1)
+            with (mock.patch.object(p.subprocess, "Popen", return_value=fake),
+                  mock.patch.object(p, "_terminate_group") as cleanup):
                 self.assertEqual(p.private_run(["wine"], {}, Path(td), 5), "TIMED_OUT")
-            with mock.patch.object(p.subprocess, "run", side_effect=OSError):
+                cleanup.assert_called_once_with(fake)
+            with mock.patch.object(p.subprocess, "Popen", side_effect=OSError):
                 self.assertEqual(p.private_run(["wine"], {}, Path(td), 5), "START_FAILED")
