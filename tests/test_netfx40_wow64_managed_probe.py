@@ -87,3 +87,5 @@ class NativeWow64ManagedTests(TestCase):
         self.assertFalse(x86.valid({**valid, "status": []}))
         self.assertFalse(x86.valid({**valid, "family": "MONO"}))
         self.assertFalse(x86.valid({**x86.blank(), "managed": "PASS"}))
+        self.assertFalse(x86.valid({"status": "MANAGED_X86_FAIL",
+                                    "family": "NOT_RUN", "managed": "NOT_RUN"}))
