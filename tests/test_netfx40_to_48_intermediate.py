@@ -136,6 +136,58 @@ class Native40To48IntermediateTests(unittest.TestCase):
             runner.assert_not_called()
 
 
+    def test_only_existing_valid_32bit_ngen_can_register_verified_native40(self):
+        with TemporaryDirectory() as td:
+            prefix = Path(td)
+            ngen = prefix / "drive_c/windows/Microsoft.NET/Framework/v4.0.30319/ngen.exe"
+            ngen.parent.mkdir(parents=True)
+            log = prefix / "winetricks.log"
+            self.assertEqual(p.mark_verified_native40(prefix), "NGEN_ABSENT")
+            self.assertFalse(log.exists())
+            ngen.write_bytes(b"arbitrary text" * 64)
+            self.assertEqual(p.mark_verified_native40(prefix), "NGEN_INVALID")
+            self.assertFalse(log.exists())
+
+            pe = bytearray(8192)
+            pe[:2] = b"MZ"
+            struct.pack_into("<I", pe, 0x3C, 128)
+            pe[128:132] = b"PE\\0\\0"
+            struct.pack_into("<H", pe, 132, 0x14C)
+            struct.pack_into("<H", pe, 148, 224)
+            struct.pack_into("<H", pe, 152, 0x10B)
+            ngen.write_bytes(pe)
+            self.assertEqual(p.pe_type(bytes(pe)), "PE_I386")
+            log.write_bytes(b"msxml3\\n")
+            self.assertEqual(p.mark_verified_native40(prefix), "RECORDED")
+            self.assertEqual(log.read_bytes(), b"msxml3\\ndotnet40\\n")
+            self.assertEqual(p.mark_verified_native40(prefix), "ALREADY_RECORDED")
+            self.assertEqual(log.read_bytes().count(b"dotnet40"), 1)
+            self.assertFalse((prefix / "user.reg").exists())
+
+            log.unlink()
+            log.symlink_to(prefix / "fake-privileged.log")
+            self.assertEqual(p.mark_verified_native40(prefix), "LOG_UNSAFE")
+            self.assertFalse((prefix / "fake-privileged.log").exists())
+            log.unlink()
+            ngen.unlink()
+            ngen.symlink_to(prefix / "outside-ngen.exe")
+            self.assertEqual(p.mark_verified_native40(prefix), "NGEN_INVALID")
+
+    def test_existing_log_is_preserved_and_poisoned_logs_refused(self):
+        with TemporaryDirectory() as td:
+            prefix = Path(td)
+            ngen = prefix / "drive_c/windows/Microsoft.NET/Framework/v4.0.30319/ngen.exe"
+            ngen.parent.mkdir(parents=True)
+            with mock.patch.object(p, "pe_type", return_value="PE_I386"):
+                ngen.write_bytes(b"Z" * 8192)
+                log = prefix / "winetricks.log"
+                log.write_bytes(b"msxml3")
+                self.assertEqual(p.mark_verified_native40(prefix), "RECORDED")
+                self.assertEqual(log.read_bytes(), b"msxml3\\ndotnet40\\n")
+                log.write_bytes(b"private\\x00invalid")
+                self.assertEqual(p.mark_verified_native40(prefix), "LOG_UNSAFE")
+                self.assertEqual(log.read_bytes(), b"private\\x00invalid")
+
     def test_binary_identity_overrides_poisoned_inherited_environment(self):
         with TemporaryDirectory() as td:
             wine, prefix, *_ = self._fixture(Path(td))
