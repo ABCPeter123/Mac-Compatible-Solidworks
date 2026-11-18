@@ -205,9 +205,9 @@ class Native40To48IntermediateTests(unittest.TestCase):
                b" 444 /bin/bash\n"
                b" 555 /tmp/secret-regedit.exe\n"
                b" 444 /tmp/private-other-command\n")
-        self.assertEqual(p.classify_process_group(raw, 444), [
+        self.assertEqual(p.classify_process_group(raw, 444), sorted([
             "MSI_EXEC", "NETFX48_BOOTSTRAPPER", "OTHER_PROCESS",
-            "WINE_DEBUGGER", "WINE_SERVER", "WINETRICKS_SHELL"])
+            "WINE_DEBUGGER", "WINE_SERVER", "WINETRICKS_SHELL"]))
         self.assertNotIn("private", str(p.classify_process_group(raw, 444)))
         self.assertEqual(p.classify_process_group(b"secret", 444), [])
         self.assertEqual(p.classify_process_group(raw, -1), [])
