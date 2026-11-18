@@ -59,7 +59,7 @@ class Native40To48IntermediateTests(unittest.TestCase):
             self.assertEqual(env["WINEARCH"], "win64")
             self.assertEqual(env["WINEDEBUG"], "-all")
             self.assertNotIn("WINEDLLOVERRIDES", env)
-            return winetricks, progress
+            return winetricks, progress, ["DOTNET48_RECIPE"] if progress != "NOT_RUN" else []
         with (mock.patch.object(p, "validate_prefix"),
               mock.patch.object(p, "validate_native40", return_value=True),
               mock.patch.object(p, "snapshot", side_effect=[before, after]),
@@ -75,6 +75,8 @@ class Native40To48IntermediateTests(unittest.TestCase):
                          ["win7", "win10"])
         self.assertFalse(outcome["framework481_confirmed"])
         self.assertEqual(outcome["verb_progress"], progress)
+        self.assertEqual(outcome["verb_stages"],
+                         ["DOTNET48_RECIPE"] if progress != "NOT_RUN" else [])
         self.assertEqual(outcome["solidworks_compatibility"], "NOT_DEMONSTRATED")
         return outcome
 
@@ -133,6 +135,22 @@ class Native40To48IntermediateTests(unittest.TestCase):
 
     def test_private_progress_never_contains_installer_output(self):
         self.assertEqual(p.classify_progress(b""), "NO_OUTPUT")
+        self.assertEqual(p.classify_stages(b""), [])
+        self.assertEqual(p.classify_stages(b"x" * (p.MAX_PRIVATE_OUTPUT + 1)), [])
+        self.assertEqual(p.classify_stages(
+            b"Executing load_dotnet48\nExecuting load_dotnet40\n"
+            b"Executing winecfg -v win7\n"
+            b"winecfg -v winxp64 returned status 1. Aborting.\n"
+            b"wine C:\\windows\\syswow64\\regedit.exe returned status 53. Aborting.\n"
+            b"Run NDP48-x86-x64-AllOS-ENU.exe /sfxlang:1027\n"
+            b"Microsoft setup returned status 5100\n"
+            b"warning: new wow64 mode\n"
+            b"C:\\private\\full-user-name\n"), [
+                "BOOTSTRAPPER_5100", "DOTNET40_RECIPE", "DOTNET48_MEDIA",
+                "DOTNET48_RECIPE", "REGEDIT_COMMAND", "REGEDIT_COMMAND_FAILED",
+                "SFXLANG_1027", "WINETRICKS_ABORTED", "WINVER_COMMAND",
+                "WINVER_COMMAND_FAILED", "WOW64_WARNING"])
+        self.assertFalse(p.validate(dict(p.blank(), verb_stages=["PRIVATE"])))
         self.assertEqual(p.classify_progress(b"Executing load_dotnet48\n"),
                          "DOTNET48_VERB_SEEN")
         self.assertEqual(p.classify_progress(
@@ -149,10 +167,11 @@ class Native40To48IntermediateTests(unittest.TestCase):
     def test_winetricks_timeout_terminates_entire_process_group(self):
         with TemporaryDirectory() as td:
             command = ["/bin/sh", "-c", "sleep 30"]
-            status, milestone = p._run_winetricks(
+            status, milestone, stages = p._run_winetricks(
                 command, os.environ.copy(), Path(td), timeout=1)
             self.assertEqual(status, "TIMED_OUT")
             self.assertEqual(milestone, "NO_OUTPUT")
+            self.assertEqual(stages, [])
 
     def test_group_cleanup_terminates_even_if_parent_exits_early(self):
         proc = mock.Mock()
