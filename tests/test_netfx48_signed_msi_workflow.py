@@ -33,6 +33,24 @@ class SignedMSIGates(TestCase):
             self.assertIn(key, source)
         self.assertNotIn("actions/upload-artifact", source)
 
+    def test_missing_service_rootcause_caller_is_main_only_and_read_only(self):
+        root = ROOT / ".github/workflows/netfx48-msi-service-rootcause-once-ci.yml"
+        source = root.read_text(encoding="utf-8")
+        self.assertIn("branches: [main]", source)
+        self.assertIn(
+            "      - '.github/workflows/netfx48-msi-service-rootcause-once-ci.yml'",
+            source)
+        self.assertIn("      try_48_msi: true", source)
+        for expected in (
+            "host_provenance_only: false", "try_48_direct: false",
+            "try_48_intermediate: false", "try_48_payload_host: false",
+            "wine_baseline: '11.21'", "use_macos26_runner: true",
+            "uses: ./.github/workflows/netfx40-legacy-ci.yml",
+        ):
+            self.assertIn(expected, source)
+        self.assertNotIn("actions/upload-artifact", source)
+        self.assertNotIn("sc.exe create", source)
+
     def test_reusable_only_allows_msi_when_signed_media_authenticated(self):
         workflow = LEGACY.read_text(encoding="utf-8")
         self.assertEqual(workflow.count("      try_48_msi:"), 2)
