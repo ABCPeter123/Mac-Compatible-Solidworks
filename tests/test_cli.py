@@ -140,7 +140,7 @@ class CLITests(unittest.TestCase):
         self.assertEqual(
             ordinary.call_args.kwargs["env"]["WINEDLLOVERRIDES"],
             "mscoree=n;clr=n")
-        self.assertNotIn("WINEDLLOVERRIDES", __import__("os").environ)
+        self.assertEqual(boot_env["WINEDLLOVERRIDES"], "mscoree,mshtml=d")
 
     def test_mono_gecko_suppression_cannot_be_used_for_managed_probe(self):
         with self.assertRaises(ValueError):
