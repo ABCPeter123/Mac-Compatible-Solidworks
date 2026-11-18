@@ -71,7 +71,7 @@ class NativeSCMProbeTests(unittest.TestCase):
             packet(states={"MSISERVER": "PRIVATE"}), 0
         ), scm.blank("MALFORMED"))
         self.assertEqual(scm.parse(
-            packet().replace(b"SWCOMPAT_SCM_STATE_MSDTC=NOT_APPLICABLE\\n", b""), 0
+            packet().replace(b"SWCOMPAT_SCM_STATE_MSDTC=NOT_APPLICABLE\n", b""), 0
         ), scm.blank("INCOMPLETE_FIELDS"))
 
     def test_exact_schema_and_private_text_fail_closed(self):
