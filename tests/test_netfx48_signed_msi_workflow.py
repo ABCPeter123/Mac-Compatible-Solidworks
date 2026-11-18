@@ -284,6 +284,29 @@ class SignedMSIGates(TestCase):
                 self.assertIn('inputs.wow64_host_stack64', step)
                 self.assertIn("python3 - <<'PY'", step)
 
+    def test_original_wow64_macos15_version_ab_keeps_exact_native_clr_only(self):
+        original = (ROOT / ".github/workflows/netfx40-wow64-hoststack64-once-ci.yml").read_text(
+            encoding="utf-8")
+        comparison = (ROOT / ".github/workflows/netfx40-wow64-hoststack64-macos15-once-ci.yml").read_text(
+            encoding="utf-8")
+        for token in ("branches: [main]", "host_provenance_only: true",
+                      "try_wow64_managed: true", "try_wow64_faults: true",
+                      "wow64_host_stack64: true", "wine_baseline: '11.21'",
+                      "cancel-in-progress: false", "try_48_msi: false",
+                      "try_48_direct: false", "try_48_intermediate: false",
+                      "try_48_payload_host: false"):
+            self.assertIn(token, original)
+            self.assertIn(token, comparison)
+        self.assertIn("use_macos26_runner: true", original)
+        self.assertIn("use_macos26_runner: false", comparison)
+        self.assertNotIn("actions/upload-artifact", comparison)
+        self.assertNotIn("try_48_msi: true", comparison)
+        self.assertNotIn("try_48_direct: true", comparison)
+        self.assertNotIn("host_provenance_only: false", comparison)
+        self.assertIn(
+            "- '.github/workflows/netfx40-wow64-hoststack64-macos15-once-ci.yml'",
+            comparison)
+
     def test_reusable_only_allows_msi_when_signed_media_authenticated(self):
         workflow = LEGACY.read_text(encoding="utf-8")
         self.assertEqual(workflow.count("      try_48_msi:"), 2)
