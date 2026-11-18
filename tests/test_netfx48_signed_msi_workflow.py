@@ -392,6 +392,9 @@ class SignedMSIGates(TestCase):
         self.assertIn('export WINEMSYNC=1', step)
         self.assertIn('echo "WINEMSYNC=1" >> "$GITHUB_ENV"', step)
         self.assertIn('BOOT_TIMEOUT=120', step)
+        self.assertIn('BOOTSTRAP_OVERRIDE=(--skip-bootstrap-mono-gecko)', step)
+        self.assertIn('BOOTSTRAP_OVERRIDE=()', step)
+        self.assertIn('"${BOOTSTRAP_OVERRIDE[@]}"', step)
         self.assertIn('BOOT_TIMEOUT=240', step)
         self.assertIn('init --timeout "$BOOT_TIMEOUT"', step)
         self.assertIn('touch "$RUNNER_TEMP/netfx40-msxml3-prefix/.swcompat-netfx481-disposable"',
@@ -413,6 +416,7 @@ class SignedMSIGates(TestCase):
                       "MAGE_BACKGROUND_EXE: 'rundll32.exe:services.exe:explorer.exe:conhost.exe'",
                       "init --timeout 120", "probe-win32"):
             self.assertIn(token, control)
+        self.assertIn("--skip-bootstrap-mono-gecko", control)
         for forbidden in ("netfx40-legacy-ci.yml", "dotNetFx40", "dotnet48",
                           "try_48_msi: true", "SOLIDWORKS installer",
                           "actions/upload-artifact", "workflow_dispatch"):
