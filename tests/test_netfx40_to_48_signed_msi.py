@@ -142,7 +142,8 @@ class OriginalSignedMSITests(TestCase):
             self.assertEqual(result, {"status": "CLASSIFIED", "failure": True,
                                       "action": "SERVICE",
                                       "last_started_action": "UNKNOWN",
-                                      "errors": ["EXTERNAL_ACTION_FAILURE"]})
+                                      "errors": ["EXTERNAL_ACTION_FAILURE"],
+                                      **p.blank_service_evidence()})
             self.assertTrue(p.valid_msi_log(result))
             self.assertFalse(log.exists())
             self.assertNotIn("private installation path", str(result))
