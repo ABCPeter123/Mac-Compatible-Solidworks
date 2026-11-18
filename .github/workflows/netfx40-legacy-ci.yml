@@ -1230,6 +1230,11 @@ jobs:
                               "custom_action_detail"):
                       out.write(f"signed_msi_48_install_log_{key}: **"
                                 f"{msi['install_log'][key]}**\n\n")
+                  from scripts.netfx48_ngen_log_evidence import valid as valid_ngen
+                  assert valid_ngen(msi["ngen_log"])
+                  for field in ("x64", "x86", "signals"):
+                      out.write(f"signed_msi_48_ngen_{field}: **"
+                                f"{msi['ngen_log'][field]}**\\n\\n")
                   from scripts.netfx48_scm_service_probe import FIELDS as scm_fields
                   out.write(f"signed_msi_48_scm_startup: **{msi['scm_startup']}**\n\n")
                   out.write(f"signed_msi_48_scm_status: **{msi['scm_preflight']['status']}**\n\n")

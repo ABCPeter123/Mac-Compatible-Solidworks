@@ -84,6 +84,26 @@ class SignedMSIGates(TestCase):
         self.assertIn('"cache_state"', reusable)
         self.assertIn('"${cache_flags[@]}"', reusable)
 
+    def test_ngen_log_msdtc_caller_is_main_only_and_read_only(self):
+        source = (ROOT / ".github/workflows/netfx48-msi-ngen-evidence-once-ci.yml").read_text(encoding="utf-8")
+        self.assertIn("branches: [main]", source)
+        self.assertIn("      - '.github/workflows/netfx48-msi-ngen-evidence-once-ci.yml'", source)
+        for item in ("try_48_msi: true", "try_48_direct: false",
+                     "try_48_intermediate: false", "try_48_payload_host: false",
+                     "prepare_48_assembly_cache: true", "use_macos26_runner: true",
+                     "wine_baseline: '11.21'"):
+            self.assertIn(item, source)
+        self.assertNotIn("actions/upload-artifact", source)
+        self.assertNotIn("sc.exe create", source)
+        workflow = LEGACY.read_text(encoding="utf-8")
+        self.assertIn('msi["ngen_log"]', workflow)
+        self.assertIn('msi[\'ngen_log\'][field]', workflow)
+        self.assertIn("signed_msi_48_ngen_{field}", workflow)
+        fixture = (ROOT / "probes/netfx48_scm_service_probe.c").read_text(encoding="utf-8")
+        self.assertIn('{L"MSDTC", "MSDTC"}', fixture)
+        self.assertNotIn("CreateServiceW", fixture)
+        self.assertNotIn("StartServiceW", fixture)
+
     def test_reusable_only_allows_msi_when_signed_media_authenticated(self):
         workflow = LEGACY.read_text(encoding="utf-8")
         self.assertEqual(workflow.count("      try_48_msi:"), 2)
