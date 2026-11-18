@@ -124,6 +124,13 @@ class SignedMSIGates(TestCase):
         self.assertIn("prepare_48_assembly_cache: true", source)
         self.assertNotIn("actions/upload-artifact", source)
 
+    def test_signed_ngen_summary_uses_actual_line_breaks(self):
+        # A double-escaped newline prints literal backslash-n into the CI
+        # summary and merges independent NGen fields into one unreadable line.
+        source = LEGACY.read_text(encoding="utf-8")
+        self.assertIn(r"""f"{msi['ngen_log'][field]}**\n\n")""", source)
+        self.assertNotIn(r"""f"{msi['ngen_log'][field]}**\\n\\n")""", source)
+
     def test_reusable_only_allows_msi_when_signed_media_authenticated(self):
         workflow = LEGACY.read_text(encoding="utf-8")
         self.assertEqual(workflow.count("      try_48_msi:"), 2)
