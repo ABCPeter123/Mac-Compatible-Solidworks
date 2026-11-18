@@ -280,7 +280,7 @@ class OriginalSignedMSITests(TestCase):
             self.assertEqual(data["ngen_queue"]["status"], "COMPLETE")
             self.assertTrue(data["native48_candidate"])
             operations = [c[0][-1] if len(c[0]) >= 4 and c[0][2] == "queue"
-                          else c[0][1] for c in calls]
+                          else Path(c[0][1]).name for c in calls]
             self.assertEqual(operations, [
                 "NDP48-x86-x64-AllOS-ENU.exe", "pause", "pause",
                 "msiexec.exe", "continue", "continue", "msiexec.exe"])
