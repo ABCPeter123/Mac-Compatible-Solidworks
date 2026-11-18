@@ -899,12 +899,14 @@ jobs:
             echo "MAGE_BACKGROUND_EXE=$MAGE_BACKGROUND_EXE" >> "$GITHUB_ENV"
             echo "WINEMSYNC=1" >> "$GITHUB_ENV"
             BOOT_TIMEOUT=120
-            echo "Original CLR4 Wiage Wineboot environment: BACKGROUND_HELPERS_AND_MSYNC"
+            BOOTSTRAP_OVERRIDE=(--skip-bootstrap-mono-gecko)
+            echo "Original CLR4 Wiage Wineboot environment: BACKGROUND_HELPERS_MSYNC_SKIP_MONO_GECKO"
           else
             BOOT_TIMEOUT=240
+            BOOTSTRAP_OVERRIDE=()
             echo "Original CLR4 Wineboot environment: DEFAULT"
           fi
-          python3 -m swcompat --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" --logs-dir "$RUNNER_TEMP/netfx40-msxml3-logs" init --timeout "$BOOT_TIMEOUT"
+          python3 -m swcompat --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" --logs-dir "$RUNNER_TEMP/netfx40-msxml3-logs" init --timeout "$BOOT_TIMEOUT" "${BOOTSTRAP_OVERRIDE[@]}"
           touch "$RUNNER_TEMP/netfx40-msxml3-prefix/.swcompat-netfx481-disposable"
       - name: Install native msxml3 through original Winetricks verb
         shell: bash
