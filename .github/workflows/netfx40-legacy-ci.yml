@@ -43,6 +43,11 @@ on:
         type: boolean
         required: false
         default: false
+      wine_baseline:
+        description: 'Only authenticated SHA256-pinned Wine Staging baseline releases'
+        type: string
+        required: false
+        default: '11.21'
   workflow_dispatch:
     inputs:
       try_48_intermediate:
@@ -83,6 +88,12 @@ on:
         type: boolean
         required: false
         default: false
+      wine_baseline:
+        description: 'Select hash-pinned Wine Staging environment'
+        type: choice
+        required: false
+        default: '11.21'
+        options: ['11.21', '11.10']
 
 permissions:
   contents: read
@@ -690,14 +701,28 @@ jobs:
           command -v winetricks >/dev/null
           winetricks --version | grep -F '20260125'
           echo "SWCOMPAT_WINETRICKS=$(realpath "$(command -v winetricks)")" >> "$GITHUB_ENV"
-      - name: Download the same hash-pinned Wine Staging 11.21 baseline
+      - name: Download and authenticate allowlisted Wine Staging environment
         shell: bash
+        env:
+          SWCOMPAT_WINE_BASELINE: ${{ inputs.wine_baseline }}
         run: |
           set -euo pipefail
-          ARCHIVE="$RUNNER_TEMP/wine-staging-11.21-osx64.tar.xz"
+          case "$SWCOMPAT_WINE_BASELINE" in
+            '11.21')
+              EXPECTED_SHA=d7bcd5abf4df27aae397a7898aef074fea4a2e0b51e0a55aa9659517bbf9d452
+              ;;
+            '11.10')
+              EXPECTED_SHA=940bdd1a177872020be01c5c33917cb8eecc1cc3193ad554914fb6efd90d7889
+              ;;
+            *)
+              echo "Unsupported Wine baseline" >&2
+              exit 1
+              ;;
+          esac
+          ARCHIVE="$RUNNER_TEMP/wine-staging-${SWCOMPAT_WINE_BASELINE}-osx64.tar.xz"
           curl --fail --location --retry 3 --output "$ARCHIVE" \
-            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.21/wine-staging-11.21-osx64.tar.xz"
-          echo "d7bcd5abf4df27aae397a7898aef074fea4a2e0b51e0a55aa9659517bbf9d452  $ARCHIVE" | shasum -a 256 -c -
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/${SWCOMPAT_WINE_BASELINE}/wine-staging-${SWCOMPAT_WINE_BASELINE}-osx64.tar.xz"
+          printf '%s  %s\n' "$EXPECTED_SHA" "$ARCHIVE" | shasum -a 256 -c -
           mkdir -p "$RUNNER_TEMP/msxml3-wine-build"
           tar -xJf "$ARCHIVE" -C "$RUNNER_TEMP/msxml3-wine-build"
           WINE_BIN="$(find "$RUNNER_TEMP/msxml3-wine-build" -path '*/bin/wine' -print -quit)"
