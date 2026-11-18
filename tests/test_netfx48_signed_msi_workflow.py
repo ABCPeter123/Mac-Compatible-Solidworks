@@ -381,6 +381,26 @@ class SignedMSIGates(TestCase):
         self.assertNotIn("subprocess.Popen(", step)
         self.assertNotIn("os.system(", step)
 
+    def test_wiage_startup_uses_patched_helper_background_and_msync_only(self):
+        workflow = LEGACY.read_text(encoding="utf-8")
+        step = workflow.split(
+            "      - name: Initialize new marked Wine x64 prefix for msxml3 fix",
+            1)[1].split("      - name: Install native msxml3", 1)[0]
+        self.assertIn('SWCOMPAT_WINE_BASELINE: ${{ inputs.wine_baseline }}', step)
+        self.assertIn('[[ "$SWCOMPAT_WINE_BASELINE" == "wiage-11.13" ]]', step)
+        self.assertIn('export MAGE_BACKGROUND_EXE=rundll32.exe:services.exe:', step)
+        self.assertIn('export WINEMSYNC=1', step)
+        self.assertIn('echo "WINEMSYNC=1" >> "$GITHUB_ENV"', step)
+        self.assertIn('BOOT_TIMEOUT=120', step)
+        self.assertIn('BOOT_TIMEOUT=240', step)
+        self.assertIn('init --timeout "$BOOT_TIMEOUT"', step)
+        self.assertIn('touch "$RUNNER_TEMP/netfx40-msxml3-prefix/.swcompat-netfx481-disposable"',
+                      step)
+        self.assertNotIn('try_48_msi: true', workflow.split(
+            "      - name: Initialize new marked Wine x64 prefix for msxml3 fix",
+            1)[1].split("      - name: Install native msxml3", 1)[0])
+        self.assertIn('EXPECTED_SHA=d0cea7ff492dd3801dfa26a2a7d5ed1331e60f65929318d17301a3ce9cbba56c', workflow)
+
     def test_reusable_only_allows_msi_when_signed_media_authenticated(self):
         workflow = LEGACY.read_text(encoding="utf-8")
         self.assertEqual(workflow.count("      try_48_msi:"), 2)
