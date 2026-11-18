@@ -231,6 +231,30 @@ class SignedMSIGates(TestCase):
         self.assertNotIn("StartServiceW", module)
         self.assertNotIn("ChangeServiceConfigW", module)
 
+    def test_native_wow64_rossetta_fault_triage_isolated_from_signed_msi(self):
+        caller = (ROOT / ".github/workflows/netfx40-wow64-fault-triage-once-ci.yml").read_text(
+            encoding="utf-8")
+        for token in ("branches: [main]", "try_wow64_faults: true",
+                      "try_wow64_managed: true", "host_provenance_only: true",
+                      "try_48_msi: false", "try_48_direct: false",
+                      "try_48_intermediate: false", "try_48_payload_host: false",
+                      "wine_baseline: '11.21'", "cancel-in-progress: false"):
+            self.assertIn(token, caller)
+        self.assertNotIn("actions/upload-artifact", caller)
+        reused = LEGACY.read_text(encoding="utf-8")
+        self.assertIn("try_wow64_faults:", reused)
+        self.assertIn("netfx40_wow64_native_smoke.c", reused)
+        self.assertIn("vcvars32.bat", reused)
+        self.assertIn("build/netfx40_wow64_native_smoke.exe", reused)
+        self.assertIn("scripts.netfx40_wow64_fault_triage", reused)
+        self.assertIn("native_microsoft_wow64_fault_{key}", reused)
+        diagnostic = (ROOT / "scripts/netfx40_wow64_fault_triage.py").read_text(
+            encoding="utf-8")
+        self.assertIn('"WINEDEBUG": "+seh"', diagnostic)
+        self.assertIn('"mscoree=n;clr=n"', diagnostic)
+        self.assertIn("MAX_CAPTURE = 1024 * 1024", diagnostic)
+        self.assertNotIn("print(raw)", diagnostic)
+
     def test_reusable_only_allows_msi_when_signed_media_authenticated(self):
         workflow = LEGACY.read_text(encoding="utf-8")
         self.assertEqual(workflow.count("      try_48_msi:"), 2)
