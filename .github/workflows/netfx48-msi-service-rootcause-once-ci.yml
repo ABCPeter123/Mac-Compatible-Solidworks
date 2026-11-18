@@ -1,0 +1,36 @@
+name: One-shot genuine .NET4.8 MSI missing service and custom action
+
+# Original signed Microsoft 4.8 x64 MSI on Wine11.21 reached genuine
+# x64 CLR updates, original Release value, and x64 managed execution.
+# MSI timed out after 420s; its *private* verbose log showed a missing
+# service HRESULT and the last recognized custom action, while patch
+# was NOT run and .NET4.8 is NOT verified.
+# This one-shot identifies only allowlisted Windows service-name hints
+# and coarse custom-action types (NGen, assembly, service, registration).
+# It never invents Windows services, alters original .NET4.8 runtime
+# provenance, uploads vendor payload/log text or skips the 4.8.1 gate.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netfx48-msi-service-rootcause-once-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: original-netfx48-msi-service-rootcause-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  original-microsoft-48-msi-services:
+    name: Authenticate original .NET4.0, measure original .NET4.8 MSI service/custom action
+    uses: ./.github/workflows/netfx40-legacy-ci.yml
+    with:
+      wine_baseline: '11.21'
+      use_macos26_runner: true
+      host_provenance_only: false
+      try_48_payload_host: false
+      try_48_direct: false
+      try_48_intermediate: false
+      try_48_msi: true
