@@ -78,6 +78,11 @@ on:
         type: boolean
         required: false
         default: false
+      win7_setup:
+        description: 'Opt-in Windows 7 reported version for original Microsoft .NET 4.0 after msxml3'
+        type: boolean
+        required: false
+        default: false
       reuse_verified_native40:
         description: 'Experimental: record genuine Microsoft CLR4.0 only after checking Winetricks required 32-bit ngen PE'
         type: boolean
@@ -931,8 +936,14 @@ jobs:
       - name: Retry genuine original Microsoft .NET 4.0 following msxml3
         if: env.SWCOMPAT_MSXML3_READY == 'yes'
         shell: bash
+        env:
+          SWCOMPAT_WIN7_SETUP: ${{ inputs.win7_setup }}
         run: |
           set -euo pipefail
+          SETUP_PROFILE_ARGS=()
+          if [[ "${SWCOMPAT_WIN7_SETUP:-false}" == "true" ]]; then
+            SETUP_PROFILE_ARGS+=(--experiment-win7-setup)
+          fi
           python3 -m scripts.netfx40_legacy \
             --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
             --installer build/dotNetFx40_Full_x86_x64.exe \
@@ -945,7 +956,9 @@ jobs:
             --experiment-enable-verbose-msi \
             --experiment-restart-after-mono \
             --experiment-trace-custom-action-type \
-            --experiment-inventory-retained-msi
+            --experiment-inventory-retained-msi \
+            --experiment-private-original-action \
+            "${SETUP_PROFILE_ARGS[@]}"
       - name: Restart isolated Wine to verify the real CLR persists after setup
         if: env.SWCOMPAT_MSXML3_READY == 'yes'
         shell: bash
@@ -958,6 +971,30 @@ jobs:
             --managed build/netfx481_runtime_probe.exe \
             --original build/netfx40-msxml3-runtime.json \
             --output build/netfx40-msxml3-restart.json \
+            --agree-disposable-prefix
+      - name: Extract unchanged signed .NET 4.0 MSI for private failure attribution
+        if: env.SWCOMPAT_MSXML3_READY == 'yes'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx40_offline_extract \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --installer build/dotNetFx40_Full_x86_x64.exe \
+            --output build/netfx40-msxml3-original-extract.json \
+            --timeout 120 --agree-disposable-prefix
+      - name: Privately correlate original Microsoft MSI failure action and imports
+        if: env.SWCOMPAT_MSXML3_READY == 'yes'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx40_original_msi_table \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --helper build/msi_custom_action_table_probe.exe \
+            --binary-helper build/msi_original_binary_imports.exe \
+            --installer build/dotNetFx40_Full_x86_x64.exe \
+            --output build/netfx40-msxml3-original-table.json \
             --agree-disposable-prefix
       - name: Gate original 4.8.1 upgrade on restarted native Microsoft 4.0
         if: env.SWCOMPAT_MSXML3_READY == 'yes'
@@ -1419,12 +1456,27 @@ jobs:
               else:
                   r = json.loads(path.read_text())
                   assert valid_runtime(r)
-                  for k in ("status", "installer_status", "installer_exit",
+                  for k in ("status", "setup_profile", "installer_status", "installer_exit",
                             "installer_child_seen", "installer_child_exit",
                             "clr64_after", "mscorlib64_after", "native_loader",
                             "runtime_family", "managed_functionality",
                             "candidate_native40", "solidworks_compatibility"):
                       out.write(f"msxml3_trial_{k}: **{r[k]}**\n\n")
+              extracted = Path("build/netfx40-msxml3-original-extract.json")
+              if extracted.is_file():
+                  from scripts.netfx40_offline_extract import validate as check_extract
+                  data = json.loads(extracted.read_text())
+                  assert check_extract(data)
+                  for k in ("status", "process", "msi_entries", "ole_msi_candidates"):
+                      out.write(f"original40_extract_{k}: **{data[k]}**\n\n")
+              table_path = Path("build/netfx40-msxml3-original-table.json")
+              if table_path.is_file():
+                  from scripts.netfx40_original_msi_table import validate as check_table
+                  data = json.loads(table_path.read_text())
+                  assert check_table(data)
+                  for k in ("status", "msis_queried", "action_matches", "family",
+                            "base_type", "execution", "impersonation", "asynchronous", "ts_aware"):
+                      out.write(f"original40_action_{k}: **{data[k]}**\n\n")
               intermediate = Path("build/netfx40-to-48-intermediate.json")
               if intermediate.is_file():
                   from scripts.netfx40_to_48_intermediate import validate as valid_intermediate
@@ -1610,6 +1662,8 @@ jobs:
             build/netfx40-msxml3-prerequisite.json
             build/netfx40-msxml3-runtime.json
             build/netfx40-msxml3-restart.json
+            build/netfx40-msxml3-original-extract.json
+            build/netfx40-msxml3-original-table.json
             build/netfx40-mscoree-provenance.json
             build/netfx40-public-host-api.json
             build/netfx48-core-host-categories.json
