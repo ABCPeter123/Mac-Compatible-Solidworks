@@ -80,11 +80,13 @@ def _env(prefix: Path, *, installation: bool = False) -> dict[str, str]:
     return env
 
 
-def set_legacy_winver(wine: Path, prefix: Path) -> str:
+def set_legacy_winver(wine: Path, prefix: Path, *, profile: str = "winxp") -> str:
+    if profile not in {"winxp", "win7"}:
+        raise ValueError("Unsupported original .NET 4.0 experiment profile")
     validate_prefix(prefix)
     try:
         done = subprocess.run(
-            [str(wine), "winecfg.exe", "-v", "winxp"],
+            [str(wine), "winecfg.exe", "-v", profile],
             env=_env(prefix), cwd=prefix,
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, timeout=45, check=False,
@@ -257,11 +259,14 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
             enable_custom_action_type: bool = False,
             enable_msi_inventory: bool = False,
             enable_private_action: bool = False,
-            enable_extended_setup_wait: bool = False) -> dict:
+            enable_extended_setup_wait: bool = False,
+            enable_win7_setup: bool = False) -> dict:
     if os.name == "nt":
         raise ValueError("Wine experiment cannot modify native Windows")
     if enable_extended_setup_wait and timeout < 330:
         raise ValueError("Extended Win32 wait needs matching outer timeout")
+    if type(enable_win7_setup) is not bool:
+        raise ValueError("Windows 7 setup selection must be boolean")
     if any(p.is_symlink() for p in (wine, prefix, installer, launcher, loader, managed)):
         raise ValueError("Refuse linked experiment media")
     # Prevent relative "build/build/foo.exe" errors from changing cwd.
@@ -278,6 +283,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
     report = {
         "schema": 1, "scope": "ORIGINAL_NETFX40_LEGACY_WINE",
         "status": "MEASURED", "winver": "NOT_RUN",
+        "setup_profile": "win7" if enable_win7_setup else "winxp",
         "registry64": "NOT_RUN", "registry32": "NOT_RUN",
         "mono": "NOT_RUN", "selftest": "NOT_RUN",
         "installer_status": "NOT_RUN", "installer_exit": "NOT_AVAILABLE",
@@ -305,7 +311,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
     if disk_before["CLR64"][0] != "ABSENT":
         report["status"] = "ALREADY_NATIVE"
         return report
-    report["winver"] = set_legacy_winver(wine, prefix)
+    report["winver"] = set_legacy_winver(wine, prefix, profile=report["setup_profile"])
     if report["winver"] != "APPLIED":
         report["status"] = "BLOCKED_WINVER"
         return report
@@ -413,7 +419,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
 def validate(r: dict) -> bool:
     return (
         type(r) is dict
-        and set(r) == {"schema", "scope", "status", "winver", "registry64", "registry32",
+        and set(r) == {"schema", "scope", "status", "winver", "setup_profile", "registry64", "registry32",
                        "mono", "selftest", "installer_status", "installer_exit",
                        "installer_exit_hex", "installer_child_seen",
                        "installer_child_lifecycle", "installer_child_exit", "inner_msi", "msi_inventory",
@@ -425,6 +431,7 @@ def validate(r: dict) -> bool:
         and r["schema"] == 1 and r["scope"] == "ORIGINAL_NETFX40_LEGACY_WINE"
         and r["status"] in STAGES
         and r["winver"] in {"NOT_RUN", "APPLIED", "FAILED"}
+        and r["setup_profile"] in {"winxp", "win7"}
         and r["registry64"] in REG_STATES and r["registry32"] in REG_STATES
         and r["mono"] in MONO_STATES and r["selftest"] in SELF_STATES
         and r["installer_status"] in STATES_START
@@ -481,6 +488,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--experiment-inventory-retained-msi", action="store_true")
     p.add_argument("--experiment-private-original-action", action="store_true")
     p.add_argument("--experiment-extended-setup-wait", action="store_true")
+    p.add_argument("--experiment-win7-setup", action="store_true")
     args = p.parse_args(argv)
     if not 60 <= args.timeout <= 360:
         p.error("Invalid bounded runtime")
@@ -497,14 +505,15 @@ def main(argv: list[str] | None = None) -> int:
                          enable_custom_action_type=args.experiment_trace_custom_action_type,
                          enable_msi_inventory=args.experiment_inventory_retained_msi,
                          enable_private_action=args.experiment_private_original_action,
-                         enable_extended_setup_wait=args.experiment_extended_setup_wait)
+                         enable_extended_setup_wait=args.experiment_extended_setup_wait,
+                         enable_win7_setup=args.experiment_win7_setup)
         if not validate(report):
             raise ValueError("Privacy-safe report invalid")
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="ascii")
     except (ValueError, OSError):
         p.error("Original signed Microsoft .NET 4.0 disposable-prefix experiment refused")
-    for key in ("status", "winver", "mono", "selftest", "installer_status",
+    for key in ("status", "winver", "setup_profile", "mono", "selftest", "installer_status",
                 "installer_exit", "installer_child_seen",
                 "installer_child_lifecycle", "installer_child_exit",
                 "reboot", "clr64_before", "clr64_after",
