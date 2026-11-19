@@ -153,8 +153,8 @@ class SignedMSIGates(TestCase):
         # caller's false value and used to cancel genuine Mac MSI experiments.
         source = LEGACY.read_text(encoding="utf-8")
         self.assertIn("concurrency:", source)
-        self.assertIn("inputs.try_48_msi && github.sha || 'shared'", source)
-        self.assertIn("cancel-in-progress: ${{ !inputs.try_48_msi && !inputs.try_wow64_managed }}", source)
+        self.assertIn("(inputs.try_48_msi || inputs.try_48_direct || inputs.try_48_intermediate) && github.sha || 'shared'", source)
+        self.assertIn("cancel-in-progress: ${{ !inputs.try_48_msi && !inputs.try_48_direct && !inputs.try_48_intermediate && !inputs.try_wow64_managed }}", source)
         self.assertIn("inputs.try_wow64_managed && format('wow64-{0}-{1}-{2}-{3}', github.sha, inputs.wine_baseline, inputs.use_macos26_runner, inputs.wow64_host_stack64)", source)
         self.assertNotIn("cancel-in-progress: true", source)
         for filename in ("netfx48-msi-ngen-evidence-once-ci.yml",
