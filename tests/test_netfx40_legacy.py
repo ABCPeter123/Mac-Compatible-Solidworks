@@ -46,6 +46,18 @@ class Netfx40LegacyTests(unittest.TestCase):
                 self.assertNotIn("WINEDLLOVERRIDES",
                                  run.call_args.kwargs["env"])
 
+    def test_win7_profile_is_opt_in_and_unsupported_profiles_are_rejected(self):
+        with mock.patch.object(legacy, "validate_prefix"):
+            with mock.patch.object(legacy.subprocess, "run",
+                                   return_value=mock.Mock(returncode=0)) as run:
+                self.assertEqual(legacy.set_legacy_winver(
+                    Path("/wine"), Path("/prefix"), profile="win7"), "APPLIED")
+                self.assertEqual(run.call_args.args[0][1:],
+                                 ["winecfg.exe", "-v", "win7"])
+                with self.assertRaises(ValueError):
+                    legacy.set_legacy_winver(Path("/wine"), Path("/prefix"), profile="win11")
+                self.assertEqual(run.call_count, 1)
+
     def test_monitor_setup_scopes_fusion_and_resolves_media(self):
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Path(tmp) / "netfx40_win32_launch.exe"
@@ -113,6 +125,8 @@ class Netfx40LegacyTests(unittest.TestCase):
             self.assertEqual(result["pre_setup_scm_restart"], "COMPLETED")
             self.assertTrue(legacy.validate(result))
             self.assertEqual(result["installer_exit"], "SUCCESS")
+            self.assertEqual(result["setup_profile"], "winxp")
+            self.assertFalse(legacy.validate(dict(result, setup_profile="win11")))
             self.assertEqual(result["installer_child_seen"], "OBSERVED")
             self.assertEqual(result["installer_child_lifecycle"], "ALL_EXITED")
             self.assertEqual(result["installer_child_exit"], "NONZERO")
@@ -194,6 +208,11 @@ class Netfx40LegacyTests(unittest.TestCase):
             True, dict(partial, lines=legacy.MAX_RETAINED_LINES), result))
         self.assertFalse(legacy._may_store_incomplete_action(
             True, dict(partial, lines=True), result))
+
+    def test_win7_flag_must_be_real_bool(self):
+        with self.assertRaises(ValueError):
+            legacy.inspect(*(Path("/unused") for _ in range(6)),
+                           enable_win7_setup=1)
 
     def test_rejects_unmarked_prefix(self):
         with tempfile.TemporaryDirectory() as temp:
