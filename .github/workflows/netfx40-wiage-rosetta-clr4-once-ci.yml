@@ -3,6 +3,7 @@ name: One-shot Wiage Rosetta-patched Wine original Microsoft x86 CLR4
 # Reattempt after authentic release metadata preflight verifies AppleDouble sidecar exclusion.
 # Retest genuine CLR after suppressing interactive Wine Mono/Gecko downloads in Wineboot child only.
 # Windows 7 A/B failed earlier with original bootstrapper exit 1 and no MSI action.
+# Rerun after fixing macOS Bash 3.2 nounset on an empty optional Win7 argument.
 # Reuse the XP profile, which reached genuine MSI 1603, with new private
 # first-failed-action metadata capture and unchanged offline MSI extraction.
 # Independent Wine 11.13 Rosetta WoW64 engine A/B, pinned to the exact
