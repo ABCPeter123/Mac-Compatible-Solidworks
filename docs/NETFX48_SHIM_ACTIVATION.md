@@ -151,3 +151,12 @@ run is required to determine whether this accounts for the incomplete
 staging. Neither the prior run nor this code change demonstrates
 genuine .NET 4.8 managed execution, an installed 4.8/4.8.1 runtime,
 or SOLIDWORKS usability.
+
+## November 19: verified Wiage/Rosetta original Microsoft x86 and x64 CLR4
+
+[Authenticated GitHub Actions run 44442151805](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/44442151805) used the SHA256-pinned Wiage Rosetta-patched Wine 11.13 engine on hosted macOS 26. Winetricks `msxml3` completed in a new marked prefix. The **original Microsoft .NET Framework 4.0 installer process timed out**, so the installer transaction is not confirmed complete. Nevertheless, before installation the native x64 CLR was absent; afterwards genuine original x64 `clr.dll`, x86 `clr.dll`, and x64 `mscorlib.dll` were present and checked for their Windows PE architecture. The original CLR loaded, managed execution passed, and a subsequent Wine restart preserved native-only original Microsoft managed execution.
+
+The independent x86 WoW64 managed probe returned `MANAGED_X86_PASS` with no observed exception using the default host stack, and the original Microsoft x64 public `CLRCreateInstance` hosting path returned `MANAGED_ORIGINAL_PASS`. The Wine builtin `mscoree=b` negative control returned `HOST_INTERFACE_FAILED`. Do not mistake that **builtin** result for a failure of the original Microsoft native-hosting path.
+
+These results establish native original Microsoft CLR4 **execution and hosting**, not .NET Framework 4.8 or 4.8.1 installation. The follow-up [authenticated Wiage signed 4.8 direct workflow](../.github/workflows/netfx48-wiage-direct-once-ci.yml) can run the unchanged, original signed Microsoft 4.8 installer only after independent persistent CLR4 confirmation. It uses a separate one-shot caller, rejects alternate MSI/Winetricks 4.8 paths, and guards any subsequent original 4.8.1 upgrade with verified real 4.8 managed execution. Installer success is not inferred from a green GitHub Actions status.
+
