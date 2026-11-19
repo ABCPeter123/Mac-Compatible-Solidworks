@@ -2,8 +2,9 @@ name: One-shot Wiage Rosetta-patched Wine original Microsoft x86 CLR4
 
 # Reattempt after authentic release metadata preflight verifies AppleDouble sidecar exclusion.
 # Retest genuine CLR after suppressing interactive Wine Mono/Gecko downloads in Wineboot child only.
-# The previous Wiage macOS 26 run ended with 1603 and no native CLR. A/B Windows 7
-# against the prior XP profile; capture private original MSI failure metadata.
+# Windows 7 A/B failed earlier with original bootstrapper exit 1 and no MSI action.
+# Reuse the XP profile, which reached genuine MSI 1603, with new private
+# first-failed-action metadata capture and unchanged offline MSI extraction.
 # Independent Wine 11.13 Rosetta WoW64 engine A/B, pinned to the exact
 # SHA256 GitHub release runtime. Native Microsoft CLR4 only, never 4.8 MSI.
 # Requires macOS 26. Do not upload originals or private exception traces.
@@ -28,7 +29,7 @@ jobs:
     with:
       wine_baseline: 'wiage-11.13'
       use_macos26_runner: true
-      win7_setup: true
+      win7_setup: false
       host_provenance_only: true
       try_wow64_managed: true
       try_wow64_faults: true
