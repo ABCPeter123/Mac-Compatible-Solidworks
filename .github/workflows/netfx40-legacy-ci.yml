@@ -199,8 +199,8 @@ concurrency:
   # Keep experiments from distinct commits separated, even when the reusable
   # workflow is called on the same branch and shares the workflow name.
   # Preserve existing cancellation behavior for ordinary non-experiment CI.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.try_wow64_managed && format('wow64-{0}-{1}-{2}-{3}', github.sha, inputs.wine_baseline, inputs.use_macos26_runner, inputs.wow64_host_stack64) || inputs.try_48_msi && github.sha || 'shared' }}
-  cancel-in-progress: ${{ !inputs.try_48_msi && !inputs.try_wow64_managed }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.try_wow64_managed && format('wow64-{0}-{1}-{2}-{3}', github.sha, inputs.wine_baseline, inputs.use_macos26_runner, inputs.wow64_host_stack64) || (inputs.try_48_msi || inputs.try_48_direct || inputs.try_48_intermediate) && github.sha || 'shared' }}
+  cancel-in-progress: ${{ !inputs.try_48_msi && !inputs.try_48_direct && !inputs.try_48_intermediate && !inputs.try_wow64_managed }}
 
 jobs:
   absolute-path-regressions:
@@ -831,15 +831,20 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$SWCOMPAT_WINE_BASELINE" == "wiage-11.13" ]]; then
-            # Wiage's open-source Rosetta WoW64 fixes must only be trialled
-            # in the separate macOS26 authenticated CLR4, no-MSI one-shot.
-            if [[ "$SWCOMPAT_HOST_ONLY" != "true" ||
-                  "$SWCOMPAT_MACOS26" != "true" ||
+            # Two isolated, authenticated macOS 26 Wiage trials only:
+            # (1) native Microsoft CLR4 hosting, with no later installers;
+            # (2) original signed Microsoft .NET 4.8 direct after an
+            # independently verified persistent CLR4. Other 4.8 paths stay
+            # prohibited. A valid CLR4 result is never treated as 4.8-ready.
+            if [[ "$SWCOMPAT_MACOS26" != "true" ||
                   "$SWCOMPAT_WIAGE_TRY_MSI" != "false" ||
-                  "$SWCOMPAT_WIAGE_TRY_DIRECT" != "false" ||
                   "$SWCOMPAT_WIAGE_TRY_INTERMEDIATE" != "false" ||
                   "$SWCOMPAT_WIAGE_TRY_PAYLOAD" != "false" ]]; then
-              echo "Pinned Wiage experiment requires macOS26 and host-only native CLR4 trial" >&2
+              echo "Pinned Wiage requires macOS26 with MSI, Winetricks48 and payload arms disabled" >&2
+              exit 1
+            fi
+            if [[ "$SWCOMPAT_HOST_ONLY" == "$SWCOMPAT_WIAGE_TRY_DIRECT" ]]; then
+              echo "Wiage must select exactly one of CLR4-host-only or signed direct 4.8" >&2
               exit 1
             fi
             EXPECTED_SHA=d0cea7ff492dd3801dfa26a2a7d5ed1331e60f65929318d17301a3ce9cbba56c
