@@ -214,7 +214,7 @@ class SignedMSIGates(TestCase):
             "inputs.try_wow64_managed && format('wow64-{0}-{1}-{2}-{3}', github.sha, inputs.wine_baseline, inputs.use_macos26_runner, inputs.wow64_host_stack64)",
             source)
         self.assertIn(
-            "cancel-in-progress: ${{ !inputs.try_48_msi && !inputs.try_wow64_managed }}",
+            "cancel-in-progress: ${{ !inputs.try_48_msi && !inputs.try_48_direct && !inputs.try_48_intermediate && !inputs.try_wow64_managed }}",
             source)
         for filename in (
             "netfx40-wow64-x86-once-ci.yml",
@@ -331,7 +331,7 @@ class SignedMSIGates(TestCase):
             "- '.github/workflows/netfx40-wow64-hoststack64-macos15-once-ci.yml'",
             comparison)
 
-    def test_pinned_wiage_engine_cannot_enter_original_48_installer_pipeline(self):
+    def test_pinned_wiage_engine_only_allows_signed_direct_48(self):
         caller = (ROOT / ".github/workflows/netfx40-wiage-rosetta-clr4-once-ci.yml").read_text(
             encoding="utf-8")
         for token in ("branches: [main]", "wine_baseline: 'wiage-11.13'",
@@ -346,7 +346,7 @@ class SignedMSIGates(TestCase):
         self.assertIn('[[ "$SWCOMPAT_WINE_BASELINE" == "wiage-11.13" ]]', reusable)
         self.assertIn("SWCOMPAT_HOST_ONLY:", reusable)
         self.assertIn("SWCOMPAT_MACOS26:", reusable)
-        for env_name in ("SWCOMPAT_WIAGE_TRY_MSI", "SWCOMPAT_WIAGE_TRY_DIRECT",
+        for env_name in ("SWCOMPAT_WIAGE_TRY_MSI",
                          "SWCOMPAT_WIAGE_TRY_INTERMEDIATE", "SWCOMPAT_WIAGE_TRY_PAYLOAD"):
             self.assertIn(env_name + ":", reusable)
             self.assertIn('"' + "$" + env_name + '" != "false"', reusable)
@@ -357,7 +357,15 @@ class SignedMSIGates(TestCase):
         self.assertIn("python3 -m scripts.wine_engine_archive", reusable)
         self.assertIn("wiage/bin/wine", reusable)
         self.assertIn("wiage/bin/wineserver", reusable)
-        self.assertIn("macOS26 and host-only native CLR4 trial", reusable)
+        self.assertIn("SWCOMPAT_WIAGE_TRY_DIRECT:", reusable)
+        self.assertIn('"$SWCOMPAT_HOST_ONLY" == "$SWCOMPAT_WIAGE_TRY_DIRECT"', reusable)
+        self.assertIn("Wiage must select exactly one of CLR4-host-only or signed direct 4.8", reusable)
+        direct = (ROOT / ".github/workflows/netfx48-wiage-direct-once-ci.yml").read_text(
+            encoding="utf-8")
+        for value in ("host_provenance_only: false", "try_48_direct: true",
+                      "try_48_msi: false", "try_48_intermediate: false",
+                      "try_48_payload_host: false", "wine_baseline: 'wiage-11.13'"):
+            self.assertIn(value, direct)
         self.assertIn("Unsupported Wine baseline", reusable)
         self.assertIn("d7bcd5abf4df27aae397a7898aef074fea4a2e0b51e0a55aa9659517bbf9d452",
                       reusable)
