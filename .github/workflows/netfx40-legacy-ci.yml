@@ -940,11 +940,10 @@ jobs:
           SWCOMPAT_WIN7_SETUP: ${{ inputs.win7_setup }}
         run: |
           set -euo pipefail
-          SETUP_PROFILE_ARGS=()
-          if [[ "${SWCOMPAT_WIN7_SETUP:-false}" == "true" ]]; then
-            SETUP_PROFILE_ARGS+=(--experiment-win7-setup)
-          fi
-          python3 -m scripts.netfx40_legacy \
+          # macOS ships Bash 3.2. With nounset, expanding an empty array
+          # raises "unbound variable" and skips the original Microsoft setup.
+          # Use the always-defined positional argument list instead.
+          set -- python3 -m scripts.netfx40_legacy \
             --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
             --installer build/dotNetFx40_Full_x86_x64.exe \
             --managed build/netfx481_runtime_probe.exe \
@@ -957,8 +956,11 @@ jobs:
             --experiment-restart-after-mono \
             --experiment-trace-custom-action-type \
             --experiment-inventory-retained-msi \
-            --experiment-private-original-action \
-            "${SETUP_PROFILE_ARGS[@]}"
+            --experiment-private-original-action
+          if [[ "${SWCOMPAT_WIN7_SETUP:-false}" == "true" ]]; then
+            set -- "$@" --experiment-win7-setup
+          fi
+          "$@"
       - name: Restart isolated Wine to verify the real CLR persists after setup
         if: env.SWCOMPAT_MSXML3_READY == 'yes'
         shell: bash
