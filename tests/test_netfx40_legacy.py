@@ -190,6 +190,38 @@ class Netfx40LegacyTests(unittest.TestCase):
             self.assertFalse(legacy.validate(dict(r, pre_setup_scm_restart="FORGED")))
             self.assertFalse(legacy.validate(dict(r, installer_status="EXIT_CAPTURED")))
 
+    @unittest.skipIf(os.name == "nt", "Windows must not run isolated Wine setup")
+    def test_win7_setup_is_recorded_even_when_winver_application_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            prefix = root / "prefix"
+            (prefix / "drive_c").mkdir(parents=True)
+            (prefix / "system.reg").touch()
+            (prefix / ".swcompat-netfx481-disposable").touch()
+            wine = root / "wine"
+            wine.write_bytes(b"fixture")
+            wine.chmod(0o700)
+            names = ("dotNetFx40_Full_x86_x64.exe", "netfx40_win32_launch.exe",
+                     "netfx481_clr_load.exe", "netfx481_runtime_probe.exe")
+            paths = [root / name for name in names]
+            for p in paths:
+                p.write_bytes(b"fixture")
+            absent = {key: ("ABSENT", None) for key in ITEMS}
+            with (
+                mock.patch.object(legacy, "verify_media"),
+                mock.patch.object(legacy, "snapshot", return_value=absent),
+                mock.patch.object(legacy, "set_legacy_winver", return_value="FAILED") as setver,
+                mock.patch.object(legacy, "_run") as launch,
+            ):
+                result = legacy.inspect(wine, prefix, *paths, enable_win7_setup=True)
+            setver.assert_called_once_with(wine.resolve(), prefix.resolve(), profile="win7")
+            launch.assert_not_called()
+            self.assertEqual(result["setup_profile"], "win7")
+            self.assertEqual(result["status"], "BLOCKED_WINVER")
+            self.assertEqual(result["installer_status"], "NOT_RUN")
+            self.assertTrue(legacy.validate(result))
+            self.assertFalse(legacy.validate(dict(result, setup_profile="win11")))
+
     def test_incomplete_trace_candidate_requires_exact_reader_unfinished(self):
         result = {"status": "EXIT_CAPTURED", "category": "MSI_FATAL_ERROR"}
         good = {"overflow": False, "lines": 2, "reason": "NONE"}
