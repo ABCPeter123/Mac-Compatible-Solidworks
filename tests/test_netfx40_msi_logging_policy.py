@@ -25,6 +25,7 @@ class VerboseMsiLoggingTests(unittest.TestCase):
                       "managed_functionality", "candidate_native40")
             report = {field: "NOT_RUN" for field in fields}
             report.update({
+                "setup_profile": "winxp",
                 "inner_msi": evidence.empty(),
                 "msi_inventory": __import__(
                     "scripts.netfx40_msi_inventory", fromlist=["empty"]).empty(),
@@ -50,6 +51,13 @@ class VerboseMsiLoggingTests(unittest.TestCase):
                     self.assertEqual(rc, 0)
                     self.assertEqual(inspect.call_args.kwargs["enable_verbose_msi"],
                                      enabled)
+                    self.assertFalse(inspect.call_args.kwargs["enable_win7_setup"])
+            with (
+                mock.patch.object(legacy, "inspect", return_value=report) as inspect,
+                mock.patch.object(legacy, "validate", return_value=True),
+            ):
+                self.assertEqual(legacy.main(args + ["--experiment-win7-setup"]), 0)
+                self.assertTrue(inspect.call_args.kwargs["enable_win7_setup"])
 
     def test_policy_matches_microsoft_documented_value(self):
         self.assertEqual(policy.VALUE, "voicewarmupx")
