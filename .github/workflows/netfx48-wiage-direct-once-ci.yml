@@ -1,0 +1,39 @@
+name: One-shot Wiage original signed Microsoft .NET 4.8 after real CLR4
+
+# The pinned Wiage Rosetta fork demonstrated persistent native Microsoft
+# x64 and x86 .NET 4.0 managed execution on macOS 26 in run 44442151805.
+# This is a distinct, original Microsoft-signed .NET 4.8 installer experiment,
+# not a repeat of the older Wine Staging 11.21 direct trial.
+# Never upload original Microsoft executables, DLLs, or raw installer logs.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netfx48-wiage-direct-once-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: original-netfx48-wiage-direct-once-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  signed-direct-after-real-native40:
+    name: Original signed Microsoft .NET 4.8 on proven Wiage CLR4
+    uses: ./.github/workflows/netfx40-legacy-ci.yml
+    with:
+      wine_baseline: 'wiage-11.13'
+      use_macos26_runner: true
+      host_provenance_only: false
+      win7_setup: false
+      try_wow64_managed: false
+      try_wow64_faults: false
+      try_48_direct: true
+      original_48_profile: win7
+      original_48_setup_args: logged
+      try_48_msi: false
+      try_48_intermediate: false
+      try_48_payload_host: false
+      reuse_verified_native40: false
+      settle_wineserver: false
