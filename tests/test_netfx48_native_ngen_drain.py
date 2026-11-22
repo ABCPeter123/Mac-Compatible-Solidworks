@@ -58,10 +58,12 @@ class OriginalNGenPreflightTests(unittest.TestCase):
         self.assertTrue(ngen.valid({
             "status": "READY", "x64": "SUCCESS", "x86": "SUCCESS",
             "ready": True, "wine_trace": {"x64": ngen.trace_blank(), "x86": ngen.trace_blank()},
+            "ngen_progress": ngen.progress_blank(),
         }))
         self.assertFalse(ngen.valid({
             "status": "READY", "x64": "SUCCESS", "x86": "NOT_RUN",
             "ready": True, "wine_trace": {"x64": ngen.trace_blank(), "x86": ngen.trace_blank()},
+            "ngen_progress": ngen.progress_blank(),
         }))
         self.assertFalse(ngen.valid(dict(ngen.blank(), vendor_log="private")))
         self.assertFalse(ngen.valid(dict(ngen.blank(), ready=1)))
@@ -141,6 +143,55 @@ class OriginalNGenPreflightTests(unittest.TestCase):
                 terminate.assert_called_once_with(child)
             self.assertEqual(report["x64"], "TIMED_OUT")
             self.assertEqual(report["x86"], "NOT_RUN")
+            self.assertFalse(report["ready"])
+
+    def test_real_ngen_queue_log_progress_is_metadata_only(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            wine, prefix, native40 = self.fixture(root)
+            self.make_ngen(prefix, "x64")
+            self.make_ngen(prefix, "x86")
+            log_dir = prefix / "drive_c/windows/Microsoft.NET/Framework64/v4.0.30319"
+            calls = []
+            def launch(cmd, **kwargs):
+                calls.append(cmd)
+                def wait(*, timeout):
+                    if len(calls) == 1:
+                        (log_dir / "ngen.log").write_bytes(b"SECRET managed assembly name")
+                    return 0
+                return mock.Mock(wait=mock.Mock(side_effect=wait))
+            with (mock.patch.dict(os.environ, {"RUNNER_TEMP": td}),
+                  mock.patch.object(ngen, "valid_restart", return_value=True),
+                  mock.patch.object(ngen.subprocess, "Popen", side_effect=launch)):
+                report = ngen.inspect(wine, prefix, native40)
+            self.assertEqual(report["status"], "READY")
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(report["ngen_progress"]["status"], "OBSERVED")
+            self.assertGreaterEqual(report["ngen_progress"]["x64_growth_windows"], 1)
+            self.assertTrue(ngen.valid_progress(report["ngen_progress"]))
+            self.assertNotIn("SECRET", str(report))
+
+    def test_timeout_budget_remains_fixed_with_sampling(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            wine, prefix, native40 = self.fixture(root)
+            self.make_ngen(prefix, "x64")
+            calls = []
+            def launch(cmd, **kwargs):
+                def wait(*, timeout):
+                    calls.append(timeout)
+                    raise subprocess.TimeoutExpired("ngen", timeout)
+                return mock.Mock(wait=mock.Mock(side_effect=wait))
+            with (mock.patch.dict(os.environ, {"RUNNER_TEMP": td}),
+                  mock.patch.object(ngen, "valid_restart", return_value=True),
+                  mock.patch.object(ngen.subprocess, "Popen", side_effect=launch),
+                  mock.patch.object(ngen, "_terminate_group")):
+                report = ngen.inspect(wine, prefix, native40)
+            self.assertEqual(calls, [60, 60, 60])
+            self.assertEqual(report["x64"], "TIMED_OUT")
+            self.assertEqual(report["ngen_progress"]["status"], "OBSERVED")
+            self.assertEqual(report["ngen_progress"]["samples"], 4)
+            self.assertTrue(ngen.valid(report))
             self.assertFalse(report["ready"])
 
     def test_private_wine_seh_trace_on_timed_out_x64_is_safe_enum_only(self):
