@@ -43,6 +43,11 @@ on:
         type: boolean
         required: false
         default: false
+      try_40_core_msi_recovery:
+        description: 'Original extracted .NET4 Core x64 MSI after genuine 1603, Wiage-only'
+        type: boolean
+        required: false
+        default: false
       drain_native40_ngen:
         description: 'Bounded authentic x64 and x86 CLR4 NGen queue drain before signed 4.8 MSI, Wiage-only'
         type: boolean
@@ -145,6 +150,11 @@ on:
         type: boolean
         required: false
         default: false
+      try_40_core_msi_recovery:
+        description: 'Try original .NET4 Core x64 MSI after original bootstrapper 1603'
+        type: boolean
+        required: false
+        default: false
       drain_native40_ngen:
         description: 'Opt-in Microsoft x86 and x64 NGen queue drain before signed MSI on Wiage'
         type: boolean
@@ -238,6 +248,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx40_launcher_timeout.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_prerequisite.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_prefix_readiness.py' -v
+          python -m unittest discover -s tests -p 'test_netfx40_original_core_msi_recovery.py' -v
           python -m unittest discover -s tests -p 'test_netfx48_native_ngen_drain.py' -v
           python -m unittest discover -s tests -p 'test_netfx48_ngen_wine_trace.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_restart.py' -v
@@ -816,6 +827,12 @@ jobs:
         run: |
           echo "Original .NET 4.8 payload-host trial requires host-only and forbids all installer trials."
           exit 1
+      - name: Reject original CLR4 x64 MSI recovery outside isolated Wiage 4.0-only experiment
+        if: inputs.try_40_core_msi_recovery && (!inputs.host_provenance_only || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner || inputs.try_48_msi || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_payload_host || inputs.drain_native40_ngen || inputs.pause_native_ngen_queue)
+        shell: bash
+        run: |
+          echo "Original 4.0 core MSI recovery needs a standalone pinned Wiage CLR4 trial."
+          exit 1
       - name: Reject NGen stack diagnostic outside isolated Wiage signed MSI preflight
         if: inputs.ngen_host_stack64 && (!inputs.drain_native40_ngen || !inputs.try_48_msi || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner || inputs.pause_native_ngen_queue || inputs.host_provenance_only)
         shell: bash
@@ -1055,6 +1072,22 @@ jobs:
             --binary-helper build/msi_original_binary_imports.exe \
             --installer build/dotNetFx40_Full_x86_x64.exe \
             --output build/netfx40-msxml3-original-table.json \
+            --agree-disposable-prefix
+      - name: Test authentic original .NET4 Core x64 MSI after baseline setup 1603
+        if: env.SWCOMPAT_MSXML3_READY == 'yes' && inputs.try_40_core_msi_recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx40_original_core_msi_recovery \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --original build/dotNetFx40_Full_x86_x64.exe \
+            --original-extract build/netfx40-msxml3-original-extract.json \
+            --original-setup build/netfx40-msxml3-runtime.json \
+            --original-restart build/netfx40-msxml3-restart.json \
+            --managed build/netfx481_runtime_probe.exe \
+            --loader build/netfx481_clr_load.exe \
+            --output build/netfx40-original-core-msi-recovery.json \
             --agree-disposable-prefix
       - name: Gate original 4.8.1 upgrade on restarted native Microsoft 4.0
         if: env.SWCOMPAT_MSXML3_READY == 'yes'
@@ -1570,6 +1603,15 @@ jobs:
                   for k in ("status", "msis_queried", "action_matches", "family",
                             "base_type", "execution", "impersonation", "asynchronous", "ts_aware"):
                       out.write(f"original40_action_{k}: **{data[k]}**\n\n")
+              core_path = Path("build/netfx40-original-core-msi-recovery.json")
+              if core_path.is_file():
+                  from scripts.netfx40_original_core_msi_recovery import valid as valid_core
+                  original_core = json.loads(core_path.read_text(encoding="ascii"))
+                  assert valid_core(original_core)
+                  for key in ("status", "media", "install", "restart",
+                              "clr64_added", "loader", "native_only_managed",
+                              "core_msi_candidate", "framework40_installed"):
+                      out.write(f"original40_core_msi_{key}: **{original_core[key]}**\n\n")
               intermediate = Path("build/netfx40-to-48-intermediate.json")
               if intermediate.is_file():
                   from scripts.netfx40_to_48_intermediate import validate as valid_intermediate
@@ -1778,6 +1820,7 @@ jobs:
             build/netfx40-msxml3-restart.json
             build/netfx40-msxml3-original-extract.json
             build/netfx40-msxml3-original-table.json
+            build/netfx40-original-core-msi-recovery.json
             build/netfx40-mscoree-provenance.json
             build/netfx40-public-host-api.json
             build/netfx48-core-host-categories.json
@@ -1795,6 +1838,7 @@ jobs:
           SWCOMPAT_PROVENANCE_ONLY: ${{ inputs.host_provenance_only }}
           SWCOMPAT_PAYLOAD_48: ${{ inputs.try_48_payload_host }}
           SWCOMPAT_DRAIN_NGEN: ${{ inputs.drain_native40_ngen }}
+          SWCOMPAT_TRY_40_CORE: ${{ inputs.try_40_core_msi_recovery }}
         shell: bash
         run: |
           python3 - <<'PY'
@@ -1847,6 +1891,18 @@ jobs:
                       assert payload_valid(payload) and payload["original48_sha256_verified"]
                       assert payload["framework48_installed"] is False
                       assert payload["framework481_installed"] is False
+                  core_requested = os.environ.get("SWCOMPAT_TRY_40_CORE") == "true"
+                  core_path = Path("build/netfx40-original-core-msi-recovery.json")
+                  assert core_path.is_file() == core_requested, (
+                      "Requested authentic original .NET4 core MSI recovery not measured")
+                  if core_path.is_file():
+                      assert os.environ.get("SWCOMPAT_PROVENANCE_ONLY") == "true"
+                      from scripts.netfx40_original_core_msi_recovery import valid as valid_core
+                      core = json.loads(core_path.read_text(encoding="ascii"))
+                      assert valid_core(core)
+                      assert core["status"] != "NOT_RUN"
+                      assert core["framework40_installed"] is False
+                      assert core["framework48_installed"] is False
                   host_only = os.environ.get("SWCOMPAT_PROVENANCE_ONLY") == "true"
                   from scripts.netfx40_to_481_upgrade import validate as upgrade_valid
                   intermediate_path = Path("build/netfx40-to-48-intermediate.json")
