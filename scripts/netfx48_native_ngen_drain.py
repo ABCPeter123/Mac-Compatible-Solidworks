@@ -14,7 +14,6 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
-import time
 from collections.abc import Callable
 
 from scripts.netfx48_ngen_progress import (
@@ -128,17 +127,16 @@ def _execute(wine: Path, prefix: Path, executable: Path, *,
             if progress is None:
                 code = process.wait(timeout=TIMEOUT)
             else:
-                deadline = time.monotonic() + TIMEOUT
-                while True:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise subprocess.TimeoutExpired(str(executable), TIMEOUT)
+                remaining = TIMEOUT
+                while remaining > 0:
+                    interval = min(SAMPLE_INTERVAL, remaining)
                     try:
-                        code = process.wait(timeout=min(SAMPLE_INTERVAL, remaining))
+                        code = process.wait(timeout=interval)
                         break
                     except subprocess.TimeoutExpired:
+                        remaining -= interval
                         progress()  # NGen log sizes only; original text is private
-                        if time.monotonic() >= deadline:
+                        if remaining <= 0:
                             raise
             status = "SUCCESS" if code == 0 else "EXIT_NONZERO"
         except subprocess.TimeoutExpired:
