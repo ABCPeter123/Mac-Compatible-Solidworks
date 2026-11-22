@@ -126,6 +126,22 @@ class WinePrefixReadinessTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     ready.inspect(wine, other)
 
+    def test_authentic_wiage_msi_workflow_checks_registry_before_msxml3(self):
+        workflow = (Path(__file__).resolve().parents[1] /
+                    ".github/workflows/netfx40-legacy-ci.yml").read_text()
+        init = workflow.index("- name: Initialize new marked Wine x64 prefix for msxml3 fix")
+        verify = workflow.index("- name: Verify genuine Wiage Wineboot registry flush")
+        install = workflow.index("- name: Install native msxml3 through original Winetricks verb")
+        self.assertLess(init, verify)
+        self.assertLess(verify, install)
+        guarded_step = workflow[verify:install]
+        self.assertIn("if: inputs.wine_baseline == 'wiage-11.13'", guarded_step)
+        self.assertIn("python3 -m scripts.netfx40_prefix_readiness", guarded_step)
+        self.assertIn("--agree-disposable-prefix", guarded_step)
+        self.assertNotIn("touch ", guarded_step)
+        self.assertNotIn("echo WINE REGISTRY", guarded_step)
+        self.assertIn("build/netfx40-prefix-readiness.json", workflow)
+
     def test_report_cannot_contain_paths_or_false_ready(self):
         self.assertFalse(ready.valid({**ready.blank("MISSING_REGISTRY", "PREFIX_INCOMPLETE",
                                                   "MISSING_REGISTRY", "EXIT_ZERO"),
