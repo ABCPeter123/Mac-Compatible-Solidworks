@@ -17,6 +17,9 @@ from pathlib import Path
 
 from scripts.netfx40_legacy import verify_media, validate as valid_legacy
 from scripts.netfx40_msxml3_restart import validate as valid_restart
+from scripts.netfx40_msi_evidence import (
+    classify_msi_log, ACTION_CLASSES, ERROR_CLASSES, MAX_FILE_BYTES,
+)
 from scripts.netfx40_offline_extract import (
     EXTRACT_FOLDER, OLE_SIGNATURE, validate as valid_extract,
 )
@@ -41,11 +44,61 @@ MAX_DIRS = 30
 MAX_FILES = 160
 MAX_DEPTH = 5
 MAX_MSI = 200 * 1024 * 1024
+LOG_NAME = "msi0c0e.log"
+LOG_WINDOWS = r"C:\swcompat-netfx40-original-extract\msi0c0e.log"
+LOG_STATES = {"NOT_RUN", "NO_LOG", "SCANNED", "TRUNCATED", "UNREADABLE", "UNSAFE"}
+
+
+def blank_log() -> dict:
+    return {"status": "NOT_RUN", "action": "UNKNOWN", "errors": []}
+
+
+def valid_log(value: object) -> bool:
+    return (
+        type(value) is dict and set(value) == {"status", "action", "errors"}
+        and value["status"] in LOG_STATES and value["action"] in ACTION_CLASSES
+        and type(value["errors"]) is list
+        and value["errors"] == sorted(set(value["errors"]))
+        and all(type(x) is str and x in ERROR_CLASSES for x in value["errors"])
+        and (value["status"] == "SCANNED"
+             or value["action"] == "UNKNOWN" and value["errors"] == [])
+    )
+
+
+def private_log(prefix: Path) -> dict:
+    """Original MSI log never appears outside local disposable Wine prefix."""
+    root = prefix / "drive_c" / EXTRACT_FOLDER
+    path = root / LOG_NAME
+    if root.is_symlink() or path.is_symlink():
+        return blank_log() | {"status": "UNSAFE"}
+    if not path.exists():
+        return blank_log() | {"status": "NO_LOG"}
+    if not path.is_file():
+        return blank_log() | {"status": "UNSAFE"}
+    try:
+        size = path.stat().st_size
+        if size > MAX_FILE_BYTES:
+            return blank_log() | {"status": "TRUNCATED"}
+        with path.open("rb") as inp:
+            raw = inp.read(MAX_FILE_BYTES + 1)
+        if len(raw) > MAX_FILE_BYTES:
+            return blank_log() | {"status": "TRUNCATED"}
+        evidence = classify_msi_log(raw)
+    except OSError:
+        return blank_log() | {"status": "UNREADABLE"}
+    if not evidence["readable"]:
+        return blank_log() | {"status": "UNREADABLE"}
+    result = {"status": "SCANNED", "action": evidence["action"],
+              "errors": evidence["errors"]}
+    assert valid_log(result)
+    return result
+
 
 
 def blank() -> dict:
     return {
         "status": "NOT_RUN", "media": "NOT_RUN", "install": "NOT_RUN",
+        "msi_log": blank_log(),
         "restart": "NOT_RUN", "clr64_added": False, "loader": "NOT_RUN",
         "native_only_managed": "NOT_RUN", "core_msi_candidate": False,
         "framework40_installed": False, "framework48_installed": False,
@@ -56,7 +109,8 @@ def blank() -> dict:
 def valid(r: object) -> bool:
     if type(r) is not dict or set(r) != set(blank()):
         return False
-    if (r["status"] not in STATES or r["media"] not in MEDIA
+    if (not valid_log(r["msi_log"])
+            or r["status"] not in STATES or r["media"] not in MEDIA
             or r["install"] not in INSTALL or r["restart"] not in RESTART
             or r["loader"] not in LOADER
             or r["native_only_managed"] not in MANAGED
@@ -69,7 +123,8 @@ def valid(r: object) -> bool:
     if r["status"] == "NOT_RUN":
         return r == blank()
     if r["status"] != "MEASURED":
-        return (r["install"] == r["restart"] == "NOT_RUN"
+        return (r["msi_log"] == blank_log()
+                and r["install"] == r["restart"] == "NOT_RUN"
                 and r["loader"] == r["native_only_managed"] == "NOT_RUN"
                 and not r["clr64_added"] and not r["core_msi_candidate"]
                 and (r["media"] == "NOT_RUN" if r["status"] in {
@@ -78,7 +133,8 @@ def valid(r: object) -> bool:
     if r["media"] != "VERIFIED_EXTRACTED_CORE" or r["install"] == "NOT_RUN":
         return False
     if r["install"] == "TIMED_OUT_CLEANUP_DENIED":
-        return (r["restart"] == r["loader"] == r["native_only_managed"] == "NOT_RUN"
+        return (r["msi_log"] == blank_log()
+                and r["restart"] == r["loader"] == r["native_only_managed"] == "NOT_RUN"
                 and not r["clr64_added"] and not r["core_msi_candidate"])
     expected = (
         r["install"] == "SUCCESS" and r["restart"] == "COMPLETED"
@@ -205,7 +261,7 @@ def inspect(wine: Path, prefix: Path, original: Path, core_extract: dict,
     # output file and all original logs stay inside the runner's prefix.
     install = private_run(
         [str(wine), "msiexec.exe", "/i", windows_core,
-         "/qn", "/norestart", "EXTUI=1"],
+         "/qn", "/norestart", "EXTUI=1", "/L*v", LOG_WINDOWS],
         env, prefix, TIMEOUT,
     )
     result = {**blank(), "status": "MEASURED",
@@ -213,6 +269,7 @@ def inspect(wine: Path, prefix: Path, original: Path, core_extract: dict,
     if install == "TIMED_OUT_CLEANUP_DENIED":
         assert valid(result)
         return result
+    result["msi_log"] = private_log(prefix)
     after = snapshot(prefix)
     result["clr64_added"] = (before["CLR64"][0] == "ABSENT"
                              and after["CLR64"][0] == "PE_AMD64")
