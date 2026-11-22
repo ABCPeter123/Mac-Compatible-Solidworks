@@ -1059,6 +1059,8 @@ jobs:
       - name: Gate original 4.8.1 upgrade on restarted native Microsoft 4.0
         if: env.SWCOMPAT_MSXML3_READY == 'yes'
         shell: bash
+        env:
+          SWCOMPAT_REQUIRE_NATIVE40_FOR_NGEN: ${{ inputs.drain_native40_ngen }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -1073,6 +1075,12 @@ jobs:
               with open(os.environ["GITHUB_ENV"], "a") as f:
                   f.write("SWCOMPAT_NATIVE40_READY=yes\n")
           print("Original native .NET 4.0 prerequisites passed:", r["persistent_native_managed"])
+          # The ordinary diagnostic allows native40 to fail. An explicitly
+          # selected original NGen A/B must NEVER become green after skipping
+          # its actual test because the authentic CLR4 baseline was missing.
+          if os.environ.get("SWCOMPAT_REQUIRE_NATIVE40_FOR_NGEN") == "true":
+              assert r["persistent_native_managed"] and r["native_only_managed"] == "PASS", (
+                  "Original Microsoft CLR4 prerequisite failed; NGen experiment not run")
           PY
       - name: Diagnose new WoW64 x86 process startup versus original Microsoft managed activation
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_wow64_managed && inputs.try_wow64_faults
@@ -1870,10 +1878,16 @@ jobs:
                   assert not drain_requested or msi_required, (
                       "Native NGen preflight requires signed MSI trial")
                   drain_path = Path("build/netfx40-native-ngen-drain.json")
-                  assert drain_path.is_file() == drain_requested, (
-                      "Requested original CLR4 NGen preflight was not measured")
-                  drain_ready = True
-                  if drain_requested:
+                  native40_ready = (
+                      rr["persistent_native_managed"]
+                      and rr["native_only_managed"] == "PASS")
+                  assert drain_path.is_file() == (drain_requested and native40_ready), (
+                      "Original CLR4 NGen evidence missing after verified native baseline "
+                      "or NGen ran without an authenticated working CLR4")
+                  drain_ready = not drain_requested
+                  if drain_requested and not native40_ready:
+                      print("Original Microsoft CLR4 NGen trial not eligible: CLR4 prerequisite failed")
+                  if drain_path.is_file():
                       from scripts.netfx48_native_ngen_drain import valid as valid_drain
                       drain = json.loads(drain_path.read_text(encoding="ascii"))
                       assert valid_drain(drain)

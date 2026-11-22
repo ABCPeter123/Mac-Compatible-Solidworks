@@ -12,13 +12,29 @@ REUSABLE = ROOT / ".github/workflows/netfx40-legacy-ci.yml"
 
 
 class SignedNgenMSIGateTests(unittest.TestCase):
+    def test_explicit_ngen_trial_requires_real_native40_baseline(self):
+        source = REUSABLE.read_text(encoding="utf-8")
+        anchor = source.index("- name: Gate original 4.8.1 upgrade on restarted native Microsoft 4.0")
+        end = source.index("- name: Diagnose new WoW64 x86 process startup", anchor)
+        gate = source[anchor:end]
+        self.assertIn("SWCOMPAT_REQUIRE_NATIVE40_FOR_NGEN: ${{ inputs.drain_native40_ngen }}",
+                      gate)
+        self.assertIn('os.environ.get("SWCOMPAT_REQUIRE_NATIVE40_FOR_NGEN") == "true"',
+                      gate)
+        self.assertIn('assert r["persistent_native_managed"] and r["native_only_managed"] == "PASS"',
+                      gate)
+        self.assertIn("NGen experiment not run", gate)
+        self.assertIn('SWCOMPAT_NATIVE40_READY=yes', gate)
+        # Other host-only or MSI trials never need the original NGen preflight.
+        self.assertIn("if os.environ.get(", gate)
+
     def test_validation_step_understands_expected_original_ngen_abort(self):
         source = REUSABLE.read_text(encoding="utf-8")
         step = source.split("- name: Validate that msxml3 cannot fabricate a CLR install", 1)[1]
         for key in (
             "SWCOMPAT_DRAIN_NGEN: ${{ inputs.drain_native40_ngen }}",
             'drain_requested = os.environ.get("SWCOMPAT_DRAIN_NGEN") == "true"',
-            "drain_path.is_file() == drain_requested",
+            "drain_path.is_file() == (drain_requested and native40_ready)",
             "from scripts.netfx48_native_ngen_drain import valid as valid_drain",
             'assert valid_drain(drain)',
             'assert drain["status"] in {"BLOCKED", "READY"}',
