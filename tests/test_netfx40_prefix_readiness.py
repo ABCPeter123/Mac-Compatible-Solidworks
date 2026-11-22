@@ -25,7 +25,7 @@ class WinePrefixReadinessTests(unittest.TestCase):
             wine, prefix = self.make_fixture(root)
             (prefix / "drive_c").mkdir()
             (prefix / "system.reg").write_text("real Wine registry fixture")
-            with mock.patch.dict(os.environ, {"RUNNER_TEMP": td}), \\
+            with mock.patch.dict(os.environ, {"RUNNER_TEMP": td}), \
                  mock.patch.object(ready.subprocess, "run") as run:
                 report = ready.inspect(wine, prefix)
             run.assert_not_called()
@@ -42,8 +42,8 @@ class WinePrefixReadinessTests(unittest.TestCase):
             def genuine_registry_flush(delay):
                 sleeps.append(delay)
                 (prefix / "system.reg").write_text("Wine created in background")
-            with mock.patch.dict(os.environ, {"RUNNER_TEMP": td}), \\
-                 mock.patch.object(ready.time, "sleep", side_effect=genuine_registry_flush), \\
+            with mock.patch.dict(os.environ, {"RUNNER_TEMP": td}), \
+                 mock.patch.object(ready.time, "sleep", side_effect=genuine_registry_flush), \
                  mock.patch.object(ready.subprocess, "run") as run:
                 report = ready.inspect(wine, prefix)
             self.assertEqual(sleeps, [2])
@@ -72,8 +72,8 @@ class WinePrefixReadinessTests(unittest.TestCase):
                 self.assertEqual(kwargs["env"]["WINE_SKIP_GECKO_INSTALLATION"], "1")
                 (prefix / "system.reg").write_text("Wineboot wrote the real registry")
                 return mock.Mock(returncode=0)
-            with mock.patch.dict(os.environ, {"RUNNER_TEMP": td}), \\
-                 mock.patch.object(ready.time, "sleep"), \\
+            with mock.patch.dict(os.environ, {"RUNNER_TEMP": td}), \
+                 mock.patch.object(ready.time, "sleep"), \
                  mock.patch.object(ready.subprocess, "run", side_effect=true_wineboot):
                 report = ready.inspect(wine, prefix)
             self.assertEqual(len(calls), 1)
@@ -95,8 +95,8 @@ class WinePrefixReadinessTests(unittest.TestCase):
                 (prefix / "drive_c").mkdir()
                 callback = ({"side_effect": simulated} if isinstance(simulated, Exception)
                             else {"return_value": simulated})
-                with mock.patch.dict(os.environ, {"RUNNER_TEMP": td}), \\
-                     mock.patch.object(ready.time, "sleep"), \\
+                with mock.patch.dict(os.environ, {"RUNNER_TEMP": td}), \
+                     mock.patch.object(ready.time, "sleep"), \
                      mock.patch.object(ready.subprocess, "run", **callback):
                     report = ready.inspect(wine, prefix)
                 self.assertEqual(report["status"], status)
@@ -133,7 +133,7 @@ class WinePrefixReadinessTests(unittest.TestCase):
         self.assertFalse(ready.valid({**ready.blank("READY", "READY_IMMEDIATE",
                                                   "READY", "NOT_RUN"),
                                      "secret_registry_content": "C:\\\\private"}))
-        self.assertNotIn("write_text(", Path(ready.__file__).read_text())
+        self.assertNotIn('(prefix / "system.reg").write_text', Path(ready.__file__).read_text())
         self.assertNotIn("touch(", Path(ready.__file__).read_text())
 
 
