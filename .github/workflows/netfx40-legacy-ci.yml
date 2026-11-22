@@ -1612,6 +1612,12 @@ jobs:
                               "clr64_added", "loader", "native_only_managed",
                               "core_msi_candidate", "framework40_installed"):
                       out.write(f"original40_core_msi_{key}: **{original_core[key]}**\n\n")
+                  log = original_core["msi_log"]
+                  from scripts.netfx40_original_core_msi_recovery import valid_log
+                  assert valid_log(log)
+                  for key in ("status", "action"):
+                      out.write(f"original40_core_msi_log_{key}: **{log[key]}**\n\n")
+                  out.write(f"original40_core_msi_log_errors: **{','.join(log['errors'])}**\n\n")
               intermediate = Path("build/netfx40-to-48-intermediate.json")
               if intermediate.is_file():
                   from scripts.netfx40_to_48_intermediate import validate as valid_intermediate
