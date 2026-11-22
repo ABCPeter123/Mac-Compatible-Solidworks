@@ -1579,13 +1579,13 @@ jobs:
                   drain = json.loads(drain_path.read_text(encoding="ascii"))
                   assert valid_drain(drain)
                   for key in ("status", "x64", "x86", "ready"):
-                      out.write(f"native40_ngen_drain_{key}: **{drain[key]}**\\n\\n")
+                      out.write(f"native40_ngen_drain_{key}: **{drain[key]}**\n\n")
                   from scripts.netfx48_ngen_wine_trace import valid as valid_trace
                   for arch in ("x64", "x86"):
                       trace = drain["wine_trace"][arch]
                       assert valid_trace(trace)
-                      out.write(f"native40_ngen_{arch}_wine_trace_status: **{trace['status']}**\\n\\n")
-                      out.write(f"native40_ngen_{arch}_wine_trace_signals: **{','.join(trace['signals'])}**\\n\\n")
+                      out.write(f"native40_ngen_{arch}_wine_trace_status: **{trace['status']}**\n\n")
+                      out.write(f"native40_ngen_{arch}_wine_trace_signals: **{','.join(trace['signals'])}**\n\n")
               msi_path = Path("build/netfx40-to-48-signed-msi.json")
               if msi_path.is_file():
                   from scripts.netfx40_to_48_signed_msi import validate as valid_msi
