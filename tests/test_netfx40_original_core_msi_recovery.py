@@ -103,9 +103,9 @@ class OriginalCoreMSITests(unittest.TestCase):
             _core_media(args[1])
             private = args[1] / "drive_c" / core.EXTRACT_FOLDER / core.LOG_NAME
             private.write_bytes(
-                b"Private installation paths and customer secret\\n"
-                b"Error 1723: A DLL required for install could not be run\\n"
-                b"Action ended 12:00:01: CA_PrivateVendorThing. Return value 3\\n")
+                b"Private installation paths and customer secret\n"
+                b"Error 1723: A DLL required for install could not be run\n"
+                b"Action ended 12:00:01: CA_PrivateVendorThing. Return value 3\n")
             data = core.private_log(args[1])
             self.assertEqual(data, {
                 "status": "SCANNED", "action": "CUSTOM_ACTION",
