@@ -292,7 +292,13 @@ class SignedMSIGates(TestCase):
         self.assertNotIn("actions/upload-artifact", one_shot)
         reusable = LEGACY.read_text(encoding="utf-8")
         self.assertEqual(reusable.count("wow64_host_stack64:"), 2)
-        self.assertEqual(reusable.count("ulimit -s 65520"), 2)
+        # This assertion must count only the existing two x86 WoW64 steps.
+        # The separately guarded original x64 NGen stack A/B does not change
+        # the WoW64 experiment or its two inherited stack controls.
+        x86_steps = [step for step in reusable.split("      - name: ")
+                     if "SWCOMPAT_X86_HOST_STACK64:" in step]
+        self.assertEqual(len(x86_steps), 2)
+        self.assertTrue(all("ulimit -s 65520" in step for step in x86_steps))
         self.assertEqual(reusable.count("SWCOMPAT_X86_HOST_STACK64:"), 2)
         self.assertEqual(reusable.count('[[ "$actual_stack" != "65520" ]]'), 2)
         self.assertIn("native_microsoft_wow64_host_stack_kib", reusable)
@@ -300,13 +306,12 @@ class SignedMSIGates(TestCase):
         before = reusable.index("- name: Diagnose new WoW64 x86 process startup")
         after = reusable.index("- name: Capture genuine 4.0 Wine mscoree")
         self.assertGreater(after, before)
-        for step in reusable.split("      - name: "):
-            if "ulimit -s 65520" in step:
-                self.assertTrue(
-                    step.startswith("Diagnose new WoW64 x86 process startup")
-                    or step.startswith("Verify native Microsoft CLR4 x86 managed"))
-                self.assertIn('inputs.wow64_host_stack64', step)
-                self.assertIn("python3 - <<'PY'", step)
+        for step in x86_steps:
+            self.assertTrue(
+                step.startswith("Diagnose new WoW64 x86 process startup")
+                or step.startswith("Verify native Microsoft CLR4 x86 managed"))
+            self.assertIn('inputs.wow64_host_stack64', step)
+            self.assertIn("python3 - <<'PY'", step)
 
     def test_original_wow64_macos15_version_ab_keeps_exact_native_clr_only(self):
         original = (ROOT / ".github/workflows/netfx40-wow64-hoststack64-once-ci.yml").read_text(

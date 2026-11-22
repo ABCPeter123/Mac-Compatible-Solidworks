@@ -38,6 +38,11 @@ on:
         type: boolean
         required: false
         default: false
+      ngen_host_stack64:
+        description: 'Opt-in inherited macOS 65520 KiB host stack and private Wine NGen failure classifier'
+        type: boolean
+        required: false
+        default: false
       drain_native40_ngen:
         description: 'Bounded authentic x64 and x86 CLR4 NGen queue drain before signed 4.8 MSI, Wiage-only'
         type: boolean
@@ -135,6 +140,11 @@ on:
         type: boolean
         required: false
         default: false
+      ngen_host_stack64:
+        description: 'Try 65520 KiB host stack during genuine Wiage NGen and classify Wine errors'
+        type: boolean
+        required: false
+        default: false
       drain_native40_ngen:
         description: 'Opt-in Microsoft x86 and x64 NGen queue drain before signed MSI on Wiage'
         type: boolean
@@ -229,6 +239,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_prerequisite.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_prefix_readiness.py' -v
           python -m unittest discover -s tests -p 'test_netfx48_native_ngen_drain.py' -v
+          python -m unittest discover -s tests -p 'test_netfx48_ngen_wine_trace.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_restart.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_native_mscoree_provenance.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_host_api_diagnostic.py' -v
@@ -805,6 +816,12 @@ jobs:
         run: |
           echo "Original .NET 4.8 payload-host trial requires host-only and forbids all installer trials."
           exit 1
+      - name: Reject NGen stack diagnostic outside isolated Wiage signed MSI preflight
+        if: inputs.ngen_host_stack64 && (!inputs.drain_native40_ngen || !inputs.try_48_msi || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner || inputs.pause_native_ngen_queue || inputs.host_provenance_only)
+        shell: bash
+        run: |
+          echo "Host stack NGen diagnostic requires the isolated original Wiage CLR4 drain experiment."
+          exit 1
       - name: Reject incompatible original Microsoft CLR4 NGen drain experiments
         if: inputs.drain_native40_ngen && (!inputs.try_48_msi || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner || inputs.pause_native_ngen_queue || inputs.host_provenance_only)
         shell: bash
@@ -1309,13 +1326,27 @@ jobs:
       - name: Drain genuine original Microsoft CLR4 NGen x64 and x86 queues before signed 4.8 MSI
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_48_msi && inputs.drain_native40_ngen && !inputs.host_provenance_only
         shell: bash
+        env:
+          SWCOMPAT_NGEN_STACK64: ${{ inputs.ngen_host_stack64 }}
         run: |
           set -euo pipefail
+          trace_flags=()
+          if [[ "$SWCOMPAT_NGEN_STACK64" == "true" ]]; then
+            # Controlled host-thread stack A/B for Wine SEH native CLR4
+            # compilation on Rosetta. No Microsoft binary or DLL is changed.
+            ulimit -s 65520
+            [[ "$(ulimit -s)" == "65520" ]] || { echo "NGen host stack not applied" >&2; exit 1; }
+            trace_flags+=(--observe-wine-failures)
+            echo "Original Microsoft CLR4 NGen inherited host stack: 65520 KiB"
+          else
+            echo "Original Microsoft CLR4 NGen inherited host stack: DEFAULT"
+          fi
           python3 -m scripts.netfx48_native_ngen_drain \
             --wine "$SWCOMPAT_WINE" \
             --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
             --native40-report build/netfx40-msxml3-restart.json \
             --output build/netfx40-native-ngen-drain.json \
+            "${trace_flags[@]}" \
             --agree-disposable-prefix
       - name: Extract authenticated original .NET 4.8 x64 MSI and MSP after genuine CLR4.0
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && inputs.try_48_msi && !inputs.try_48_intermediate && !inputs.try_48_direct

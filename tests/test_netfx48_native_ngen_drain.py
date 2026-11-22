@@ -57,11 +57,11 @@ class OriginalNGenPreflightTests(unittest.TestCase):
         self.assertTrue(ngen.valid(ngen.blank()))
         self.assertTrue(ngen.valid({
             "status": "READY", "x64": "SUCCESS", "x86": "SUCCESS",
-            "ready": True,
+            "ready": True, "wine_trace": {"x64": ngen.trace_blank(), "x86": ngen.trace_blank()},
         }))
         self.assertFalse(ngen.valid({
             "status": "READY", "x64": "SUCCESS", "x86": "NOT_RUN",
-            "ready": True,
+            "ready": True, "wine_trace": {"x64": ngen.trace_blank(), "x86": ngen.trace_blank()},
         }))
         self.assertFalse(ngen.valid(dict(ngen.blank(), vendor_log="private")))
         self.assertFalse(ngen.valid(dict(ngen.blank(), ready=1)))
@@ -142,6 +142,46 @@ class OriginalNGenPreflightTests(unittest.TestCase):
             self.assertEqual(report["x64"], "TIMED_OUT")
             self.assertEqual(report["x86"], "NOT_RUN")
             self.assertFalse(report["ready"])
+
+    def test_private_wine_seh_trace_on_timed_out_x64_is_safe_enum_only(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            wine, prefix, native40 = self.fixture(root)
+            self.make_ngen(prefix, "x64")
+            def launch(command, **kwargs):
+                self.assertEqual(kwargs["env"]["WINEDEBUG"],
+                                 "-all,err+seh,err+ntdll,err+ole,err+rpc")
+                self.assertNotEqual(kwargs["stderr"], subprocess.DEVNULL)
+                kwargs["stderr"].write(
+                    b"01af:err:seh:setup_exception_record stack overflow 756 bytes "
+                    b"eip 0xPRIVATE\\n"
+                    b"01af:err:ntdll:RtlpWaitForCriticalSection wait timed out\\n")
+                return mock.Mock(wait=mock.Mock(
+                    side_effect=subprocess.TimeoutExpired("ngen", 180)))
+            with (mock.patch.dict(os.environ, {"RUNNER_TEMP": td}),
+                  mock.patch.object(ngen, "valid_restart", return_value=True),
+                  mock.patch.object(ngen.subprocess, "Popen", side_effect=launch),
+                  mock.patch.object(ngen, "_terminate_group")):
+                report = ngen.inspect(wine, prefix, native40,
+                                      observe_wine_failures=True)
+            self.assertEqual(report["x64"], "TIMED_OUT")
+            self.assertEqual(report["x86"], "NOT_RUN")
+            self.assertEqual(report["wine_trace"]["x64"], {
+                "status": "CLASSIFIED",
+                "signals": ["CRITICAL_SECTION_WAIT", "STACK_OVERFLOW"]})
+            self.assertEqual(report["wine_trace"]["x86"], ngen.trace_blank())
+            self.assertTrue(ngen.valid(report))
+            self.assertNotIn("PRIVATE", str(report))
+            self.assertNotIn("0xPRIVATE", str(report))
+
+    def test_stack_diagnostic_cannot_run_without_real_wiage_msi_guard(self):
+        workflow = (Path(__file__).resolve().parents[1] /
+                    ".github/workflows/netfx40-legacy-ci.yml").read_text()
+        self.assertIn("if: inputs.ngen_host_stack64 && (!inputs.drain_native40_ngen", workflow)
+        self.assertIn("inputs.wine_baseline != 'wiage-11.13'", workflow)
+        self.assertIn("ulimit -s 65520", workflow)
+        self.assertIn('[[ "$(ulimit -s)" == "65520" ]]', workflow)
+        self.assertIn('trace_flags+=(--observe-wine-failures)', workflow)
 
     def test_refuse_unverified_clr4_and_unmarked_or_wrong_root(self):
         with TemporaryDirectory() as td:

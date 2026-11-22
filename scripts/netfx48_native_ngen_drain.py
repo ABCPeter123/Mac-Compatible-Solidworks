@@ -13,6 +13,12 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tempfile
+
+from scripts.netfx48_ngen_wine_trace import (
+    blank as trace_blank, valid as valid_trace,
+    classify_private_stream,
+)
 
 from scripts.netfx481_trial import validate_prefix
 from scripts.netfx481_payload_audit import pe_type
@@ -32,7 +38,8 @@ TIMEOUT = 180
 
 def blank() -> dict:
     return {"status": "NOT_RUN", "x64": "NOT_RUN",
-            "x86": "NOT_RUN", "ready": False}
+            "x86": "NOT_RUN", "ready": False,
+            "wine_trace": {"x64": trace_blank(), "x86": trace_blank()}}
 
 
 def valid(report: object) -> bool:
@@ -40,7 +47,13 @@ def valid(report: object) -> bool:
         return False
     if (report["status"] not in STATUS
             or report["x64"] not in STEP or report["x86"] not in STEP
-            or type(report["ready"]) is not bool):
+            or type(report["ready"]) is not bool
+            or type(report["wine_trace"]) is not dict
+            or set(report["wine_trace"]) != {"x64", "x86"}
+            or any(not valid_trace(report["wine_trace"][arch]) for arch in ("x64", "x86"))
+            or any(report[arch] == "NOT_RUN"
+                   and report["wine_trace"][arch] != trace_blank()
+                   for arch in ("x64", "x86"))):
         return False
     if report["status"] == "NOT_RUN":
         return report == blank()
@@ -77,31 +90,48 @@ def _ngen(prefix: Path, architecture: str) -> tuple[Path, str]:
     return path, "SUCCESS" if kind == expected else "INVALID_PE"
 
 
-def _execute(wine: Path, prefix: Path, executable: Path) -> str:
+def _execute(wine: Path, prefix: Path, executable: Path, *,
+             observe_wine_failures: bool = False) -> tuple[str, dict]:
+    """Execute the *original* NGen; retain Wine diagnostics privately.
+
+    Only err-level Wine channels are selected. Vendor stdout is discarded,
+    native stderr is never returned, and its anonymous temporary file is
+    removed upon return. No Windows error addresses or command lines escape.
+    """
     env = os.environ.copy()
     env.update({
         "WINEPREFIX": str(prefix), "WINEARCH": "win64",
-        "WINEDEBUG": "-all", "WINEDLLOVERRIDES": "mscoree=n;clr=n",
+        "WINEDEBUG": ("-all,err+seh,err+ntdll,err+ole,err+rpc"
+                      if observe_wine_failures else "-all"),
+        "WINEDLLOVERRIDES": "mscoree=n;clr=n",
     })
-    try:
-        process = subprocess.Popen(
-            [str(wine), str(executable), "executeQueuedItems"],
-            cwd=prefix, env=env, start_new_session=True,
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL)
-    except OSError:
-        return "START_FAILED"
-    try:
-        return "SUCCESS" if process.wait(timeout=TIMEOUT) == 0 else "EXIT_NONZERO"
-    except subprocess.TimeoutExpired:
+    with tempfile.TemporaryFile() as trace:
         try:
-            _terminate_group(process)
-        except PermissionError:
-            return "TIMED_OUT_CLEANUP_DENIED"
-        return "TIMED_OUT"
+            process = subprocess.Popen(
+                [str(wine), str(executable), "executeQueuedItems"],
+                cwd=prefix, env=env, start_new_session=True,
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=trace if observe_wine_failures else subprocess.DEVNULL)
+        except OSError:
+            return "START_FAILED", trace_blank()
+        try:
+            status = ("SUCCESS" if process.wait(timeout=TIMEOUT) == 0
+                      else "EXIT_NONZERO")
+        except subprocess.TimeoutExpired:
+            try:
+                _terminate_group(process)
+                status = "TIMED_OUT"
+            except PermissionError:
+                status = "TIMED_OUT_CLEANUP_DENIED"
+        diagnostic = (classify_private_stream(trace) if observe_wine_failures
+                      else trace_blank())
+    return status, diagnostic
 
 
-def inspect(wine: Path, prefix: Path, native40: dict) -> dict:
+def inspect(wine: Path, prefix: Path, native40: dict, *,
+            observe_wine_failures: bool = False) -> dict:
+    if type(observe_wine_failures) is not bool:
+        raise ValueError("Wine trace opt-in must be boolean")
     if os.name == "nt" or prefix.is_symlink() or wine.is_symlink():
         raise ValueError("Only disposable non-Windows original CLR4 experiments")
     validate_prefix(prefix)
@@ -121,7 +151,11 @@ def inspect(wine: Path, prefix: Path, native40: dict) -> dict:
     result = blank()
     for arch in ("x64", "x86"):
         executable, status = _ngen(prefix, arch)
-        result[arch] = status if status != "SUCCESS" else _execute(wine, prefix, executable)
+        if status == "SUCCESS":
+            result[arch], result["wine_trace"][arch] = _execute(
+                wine, prefix, executable, observe_wine_failures=observe_wine_failures)
+        else:
+            result[arch] = status
         if result[arch] != "SUCCESS":
             result["status"] = "BLOCKED"
             break
@@ -135,16 +169,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Drain genuine native Microsoft NGen queue")
     for key in ("wine", "prefix", "native40-report", "output"):
         parser.add_argument("--" + key, type=Path, required=True)
+    parser.add_argument("--observe-wine-failures", action="store_true")
     parser.add_argument("--agree-disposable-prefix", required=True,
                         action="store_true")
     args = parser.parse_args(argv)
     if args.output.is_symlink() or args.output.resolve().is_relative_to(args.prefix.resolve()):
         parser.error("NGen report must remain outside disposable Wine prefix")
     report = inspect(args.wine, args.prefix,
-                     json.loads(args.native40_report.read_text(encoding="ascii")))
+                     json.loads(args.native40_report.read_text(encoding="ascii")),
+                     observe_wine_failures=args.observe_wine_failures)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, sort_keys=True), encoding="ascii")
-    for key in ("status", "x64", "x86", "ready"):
+    for key in ("status", "x64", "x86", "ready", "wine_trace"):
         print("Original CLR4 NGen preflight", key, report[key])
     return 0 if report["ready"] else 1
 
