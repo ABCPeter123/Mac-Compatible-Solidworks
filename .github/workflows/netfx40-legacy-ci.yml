@@ -94,7 +94,7 @@ on:
         required: false
         default: false
       wine_baseline:
-        description: 'Pinned Wine baseline, or experimental pinned Wiage Rosetta 11.13 only on macOS26 host-only'
+        description: 'Pinned Wine baseline; experimental Wiage Rosetta only in isolated macOS26 host/4.8 trials'
         type: string
         required: false
         default: '11.21'
@@ -831,22 +831,28 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$SWCOMPAT_WINE_BASELINE" == "wiage-11.13" ]]; then
-            # Two isolated, authenticated macOS 26 Wiage trials only:
-            # (1) native Microsoft CLR4 hosting, with no later installers;
-            # (2) original signed Microsoft .NET 4.8 direct after an
-            # independently verified persistent CLR4. Other 4.8 paths stay
-            # prohibited. A valid CLR4 result is never treated as 4.8-ready.
+            # Three isolated, authenticated macOS 26 trials only:
+            # (1) native original Microsoft CLR4 hosting;
+            # (2) original signed Microsoft .NET 4.8 bootstrapper; or
+            # (3) original signed Microsoft .NET 4.8 x64 MSI + MSP, extracted
+            # from the same authenticated Microsoft media after the observed
+            # 5100 bootstrapper prerequisite block. This third trial changes
+            # the installation path, not Microsoft package content. All
+            # install arms still require verified persistent native CLR4 and
+            # original .NET 4.8 managed execution before allowing 4.8.1.
             if [[ "$SWCOMPAT_MACOS26" != "true" ||
-                  "$SWCOMPAT_WIAGE_TRY_MSI" != "false" ||
                   "$SWCOMPAT_WIAGE_TRY_INTERMEDIATE" != "false" ||
                   "$SWCOMPAT_WIAGE_TRY_PAYLOAD" != "false" ]]; then
-              echo "Pinned Wiage requires macOS26 with MSI, Winetricks48 and payload arms disabled" >&2
+              echo "Pinned Wiage requires macOS26, no Winetricks48 and no payload-only trial" >&2
               exit 1
             fi
-            if [[ "$SWCOMPAT_HOST_ONLY" == "$SWCOMPAT_WIAGE_TRY_DIRECT" ]]; then
-              echo "Wiage must select exactly one of CLR4-host-only or signed direct 4.8" >&2
-              exit 1
-            fi
+            case "$SWCOMPAT_HOST_ONLY:$SWCOMPAT_WIAGE_TRY_DIRECT:$SWCOMPAT_WIAGE_TRY_MSI" in
+              true:false:false|false:true:false|false:false:true) ;;
+              *)
+                echo "Wiage must select exactly one of CLR4 host, signed 4.8 direct or signed 4.8 MSI" >&2
+                exit 1
+                ;;
+            esac
             EXPECTED_SHA=d0cea7ff492dd3801dfa26a2a7d5ed1331e60f65929318d17301a3ce9cbba56c
             ARCHIVE="$RUNNER_TEMP/wiage-11.13-runtime.tar.gz"
             curl --fail --location --retry 3 --max-time 600 --output "$ARCHIVE" \
