@@ -1,8 +1,8 @@
 """Gate the authenticated macOS 26 Wiage original signed .NET 4.8 A/B.
 
 The initial native CLR4 result does not imply .NET 4.8 is installed.
-This structural regression ensures no accidental alternate MSI/Winetricks or
-unverified artifact upload enters the new signed original installer test.
+This structural regression ensures the signed direct bootstrapper is isolated
+from the separately authorized signed MSI experiment, Winetricks and uploads.
 """
 from pathlib import Path
 import unittest
@@ -49,8 +49,6 @@ class SignedWiageNetfx48OnceTests(unittest.TestCase):
         self.assertIn('"$SWCOMPAT_MACOS26" != "true"', gate)
         self.assertIn('"$SWCOMPAT_HOST_ONLY:$SWCOMPAT_WIAGE_TRY_DIRECT:$SWCOMPAT_WIAGE_TRY_MSI"', gate)
         self.assertIn("true:false:false|false:true:false|false:false:true)", gate)
-        self.assertIn('"$SWCOMPAT_WIAGE_TRY_INTERMEDIATE" != "false"', gate)
-        self.assertIn('"$SWCOMPAT_WIAGE_TRY_PAYLOAD" != "false"', gate)
         self.assertIn('"$SWCOMPAT_WIAGE_TRY_INTERMEDIATE" != "false"', gate)
         self.assertIn('"$SWCOMPAT_WIAGE_TRY_PAYLOAD" != "false"', gate)
         self.assertIn("SWCOMPAT_NATIVE40_READY == 'yes'", source)
