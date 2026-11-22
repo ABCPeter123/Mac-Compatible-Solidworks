@@ -217,6 +217,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx40_legacy.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_launcher_timeout.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_prerequisite.py' -v
+          python -m unittest discover -s tests -p 'test_netfx40_prefix_readiness.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_restart.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_native_mscoree_provenance.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_host_api_diagnostic.py' -v
@@ -924,6 +925,18 @@ jobs:
           fi
           python3 -m swcompat --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" --logs-dir "$RUNNER_TEMP/netfx40-msxml3-logs" init --timeout "$BOOT_TIMEOUT" "${BOOTSTRAP_OVERRIDE[@]}"
           touch "$RUNNER_TEMP/netfx40-msxml3-prefix/.swcompat-netfx481-disposable"
+      - name: Verify genuine Wiage Wineboot registry flush before Microsoft prerequisites
+        if: inputs.wine_baseline == 'wiage-11.13'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Successful Wineboot process exit is not proof that wineserver has
+          # persisted system.reg. Do not create dummy registry files.
+          python3 -m scripts.netfx40_prefix_readiness \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --output build/netfx40-prefix-readiness.json \
+            --agree-disposable-prefix
       - name: Install native msxml3 through original Winetricks verb
         shell: bash
         run: |
@@ -1672,6 +1685,7 @@ jobs:
         with:
           name: original-netfx40-after-msxml3-privacy-safe-result
           path: |
+            build/netfx40-prefix-readiness.json
             build/netfx40-msxml3-prerequisite.json
             build/netfx40-msxml3-runtime.json
             build/netfx40-msxml3-restart.json
