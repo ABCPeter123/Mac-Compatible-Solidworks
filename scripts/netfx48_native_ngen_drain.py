@@ -14,6 +14,13 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
+from collections.abc import Callable
+
+from scripts.netfx48_ngen_progress import (
+    NgenProgress, blank as progress_blank, valid as valid_progress,
+    SAMPLE_INTERVAL,
+)
 
 from scripts.netfx48_ngen_wine_trace import (
     blank as trace_blank, valid as valid_trace,
@@ -39,7 +46,8 @@ TIMEOUT = 180
 def blank() -> dict:
     return {"status": "NOT_RUN", "x64": "NOT_RUN",
             "x86": "NOT_RUN", "ready": False,
-            "wine_trace": {"x64": trace_blank(), "x86": trace_blank()}}
+            "wine_trace": {"x64": trace_blank(), "x86": trace_blank()},
+            "ngen_progress": progress_blank()}
 
 
 def valid(report: object) -> bool:
@@ -48,6 +56,7 @@ def valid(report: object) -> bool:
     if (report["status"] not in STATUS
             or report["x64"] not in STEP or report["x86"] not in STEP
             or type(report["ready"]) is not bool
+            or not valid_progress(report["ngen_progress"])
             or type(report["wine_trace"]) is not dict
             or set(report["wine_trace"]) != {"x64", "x86"}
             or any(not valid_trace(report["wine_trace"][arch]) for arch in ("x64", "x86"))
@@ -91,7 +100,8 @@ def _ngen(prefix: Path, architecture: str) -> tuple[Path, str]:
 
 
 def _execute(wine: Path, prefix: Path, executable: Path, *,
-             observe_wine_failures: bool = False) -> tuple[str, dict]:
+             observe_wine_failures: bool = False,
+             progress: Callable[[], None] | None = None) -> tuple[str, dict]:
     """Execute the *original* NGen; retain Wine diagnostics privately.
 
     Only err-level Wine channels are selected. Vendor stdout is discarded,
@@ -115,8 +125,22 @@ def _execute(wine: Path, prefix: Path, executable: Path, *,
         except OSError:
             return "START_FAILED", trace_blank()
         try:
-            status = ("SUCCESS" if process.wait(timeout=TIMEOUT) == 0
-                      else "EXIT_NONZERO")
+            if progress is None:
+                code = process.wait(timeout=TIMEOUT)
+            else:
+                deadline = time.monotonic() + TIMEOUT
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(str(executable), TIMEOUT)
+                    try:
+                        code = process.wait(timeout=min(SAMPLE_INTERVAL, remaining))
+                        break
+                    except subprocess.TimeoutExpired:
+                        progress()  # NGen log sizes only; original text is private
+                        if time.monotonic() >= deadline:
+                            raise
+            status = "SUCCESS" if code == 0 else "EXIT_NONZERO"
         except subprocess.TimeoutExpired:
             try:
                 _terminate_group(process)
@@ -149,11 +173,17 @@ def inspect(wine: Path, prefix: Path, native40: dict, *,
             or prefix.name != "netfx40-msxml3-prefix"):
         raise ValueError("NGen queue drain restricted to ephemeral CI prefix")
     result = blank()
+    progress = NgenProgress(prefix)
     for arch in ("x64", "x86"):
         executable, status = _ngen(prefix, arch)
         if status == "SUCCESS":
             result[arch], result["wine_trace"][arch] = _execute(
-                wine, prefix, executable, observe_wine_failures=observe_wine_failures)
+                wine, prefix, executable, observe_wine_failures=observe_wine_failures,
+                progress=progress.sample)
+            # If process-group cleanup was denied, do not access its live
+            # logs again or execute another original Wine command.
+            if result[arch] != "TIMED_OUT_CLEANUP_DENIED":
+                progress.sample()
         else:
             result[arch] = status
         if result[arch] != "SUCCESS":
@@ -161,6 +191,7 @@ def inspect(wine: Path, prefix: Path, native40: dict, *,
             break
     else:
         result["status"], result["ready"] = "READY", True
+    result["ngen_progress"] = progress.snapshot()
     assert valid(result)
     return result
 
@@ -180,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
                      observe_wine_failures=args.observe_wine_failures)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, sort_keys=True), encoding="ascii")
-    for key in ("status", "x64", "x86", "ready", "wine_trace"):
+    for key in ("status", "x64", "x86", "ready", "wine_trace", "ngen_progress"):
         print("Original CLR4 NGen preflight", key, report[key])
     return 0 if report["ready"] else 1
 
