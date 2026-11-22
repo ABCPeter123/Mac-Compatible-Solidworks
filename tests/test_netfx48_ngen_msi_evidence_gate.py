@@ -46,7 +46,7 @@ class SignedNgenMSIGateTests(unittest.TestCase):
                 self.assertIn(key, report)
         self.assertIn("assert valid_drain(drain)", report)
         self.assertIn("assert valid_trace(trace)", report)
-        self.assertIn('",".join(trace[\'signals\'])', report)
+        self.assertIn("','.join(trace['signals'])", report)
         self.assertNotIn("print(raw)", report)
 
     def test_drain_artifacts_stay_sanitized_and_separate_from_vendor_payload(self):
