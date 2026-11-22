@@ -1,5 +1,9 @@
 name: One-shot Wiage original signed Microsoft .NET 4.8 x64 MSI and MSP
 
+# Retry only after checking Wineboot actually persisted its registry.
+# Run 44978776990 stopped before msxml3: Wineboot exit 0 did not provide
+# an initialized system.reg. The new bounded readiness gate never fabricates
+# registry data, and is limited to the same marked, ephemeral Wiage prefix.
 # In authenticated run 44461676995, the original signed 4.8 bootstrapper
 # exited 5100 on Wine's Windows 7 SP1 profile before running its MSI, while
 # the native Microsoft CLR4 independently survived restart and hosted C#.
