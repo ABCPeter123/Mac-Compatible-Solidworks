@@ -1,0 +1,43 @@
+name: One-shot Wiage original signed Microsoft .NET 4.8 x64 MSI and MSP
+
+# In authenticated run 44461676995, the original signed 4.8 bootstrapper
+# exited 5100 on Wine's Windows 7 SP1 profile before running its MSI, while
+# the native Microsoft CLR4 independently survived restart and hosted C#.
+# The original signed Microsoft x64 MSI + MSP are extracted from the same
+# SHA256-verified offline installer. This tests a distinct, previously
+# untested Wiage/Rosetta Wine 11.13 path, not an unsigned third-party package
+# and not a workaround that falsifies any Microsoft install/Release result.
+# The real .NET 4.8 installed CLR, MSI/patch exit, registry and native managed
+# gates must ALL pass to permit a .NET 4.8.1 follow-up. No vendor media, MSI
+# logs, traces or DLLs may leave the private runner.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netfx48-wiage-msi-once-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: original-netfx48-wiage-msi-once-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  signed-x64-msi-after-native-clr4:
+    name: Test verified original 4.8 MSI and MSP after Wiage native CLR4
+    uses: ./.github/workflows/netfx40-legacy-ci.yml
+    with:
+      wine_baseline: 'wiage-11.13'
+      use_macos26_runner: true
+      host_provenance_only: false
+      win7_setup: false
+      try_wow64_managed: false
+      try_wow64_faults: false
+      try_48_direct: false
+      try_48_intermediate: false
+      try_48_payload_host: false
+      try_48_msi: true
+      signed_msi_timeout_seconds: 420
+      prepare_48_assembly_cache: true
+      pause_native_ngen_queue: false
