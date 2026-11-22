@@ -41,6 +41,9 @@ class SignedNgenMSIGateTests(unittest.TestCase):
             "native40_ngen_drain_{key}",
             "native40_ngen_{arch}_wine_trace_status",
             "native40_ngen_{arch}_wine_trace_signals",
+            "native40_ngen_progress_{key}",
+            "from scripts.netfx48_ngen_progress import valid as valid_ngen_progress",
+            "assert valid_ngen_progress(progress)",
         ):
             with self.subTest(key=key):
                 self.assertIn(key, report)
