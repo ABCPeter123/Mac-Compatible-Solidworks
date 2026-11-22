@@ -1580,6 +1580,12 @@ jobs:
                   assert valid_drain(drain)
                   for key in ("status", "x64", "x86", "ready"):
                       out.write(f"native40_ngen_drain_{key}: **{drain[key]}**\n\n")
+                  from scripts.netfx48_ngen_progress import valid as valid_ngen_progress
+                  progress = drain["ngen_progress"]
+                  assert valid_ngen_progress(progress)
+                  for key in ("status", "samples", "x64_growth_windows",
+                              "x86_growth_windows", "x64_last", "x86_last"):
+                      out.write(f"native40_ngen_progress_{key}: **{progress[key]}**\n\n")
                   from scripts.netfx48_ngen_wine_trace import valid as valid_trace
                   for arch in ("x64", "x86"):
                       trace = drain["wine_trace"][arch]
