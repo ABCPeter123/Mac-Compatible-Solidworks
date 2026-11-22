@@ -38,6 +38,11 @@ on:
         type: boolean
         required: false
         default: false
+      drain_native40_ngen:
+        description: 'Bounded authentic x64 and x86 CLR4 NGen queue drain before signed 4.8 MSI, Wiage-only'
+        type: boolean
+        required: false
+        default: false
       pause_native_ngen_queue:
         description: 'Opt-in real Microsoft ngen queue pause/continue around original signed MSI'
         type: boolean
@@ -130,6 +135,11 @@ on:
         type: boolean
         required: false
         default: false
+      drain_native40_ngen:
+        description: 'Opt-in Microsoft x86 and x64 NGen queue drain before signed MSI on Wiage'
+        type: boolean
+        required: false
+        default: false
       pause_native_ngen_queue:
         description: 'Opt-in original Microsoft NGen queue pause before signed MSI'
         type: boolean
@@ -218,6 +228,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx40_launcher_timeout.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_prerequisite.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_prefix_readiness.py' -v
+          python -m unittest discover -s tests -p 'test_netfx48_native_ngen_drain.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_restart.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_native_mscoree_provenance.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_host_api_diagnostic.py' -v
@@ -794,6 +805,12 @@ jobs:
         run: |
           echo "Original .NET 4.8 payload-host trial requires host-only and forbids all installer trials."
           exit 1
+      - name: Reject incompatible original Microsoft CLR4 NGen drain experiments
+        if: inputs.drain_native40_ngen && (!inputs.try_48_msi || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner || inputs.pause_native_ngen_queue || inputs.host_provenance_only)
+        shell: bash
+        run: |
+          echo "NGen preflight requires a standalone authenticated Wiage signed MSI arm."
+          exit 1
       - name: Fetch selected Microsoft media privately using Windows authenticated SHA256
         shell: bash
         env:
@@ -1289,6 +1306,17 @@ jobs:
                   out.write("SWCOMPAT_NATIVE48_READY=yes\n")
           print("Original signed Microsoft native 4.8 verified:", r["native48_candidate"])
           PY
+      - name: Drain genuine original Microsoft CLR4 NGen x64 and x86 queues before signed 4.8 MSI
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_48_msi && inputs.drain_native40_ngen && !inputs.host_provenance_only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx48_native_ngen_drain \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --native40-report build/netfx40-msxml3-restart.json \
+            --output build/netfx40-native-ngen-drain.json \
+            --agree-disposable-prefix
       - name: Extract authenticated original .NET 4.8 x64 MSI and MSP after genuine CLR4.0
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && inputs.try_48_msi && !inputs.try_48_intermediate && !inputs.try_48_direct
         shell: bash
@@ -1686,6 +1714,7 @@ jobs:
           name: original-netfx40-after-msxml3-privacy-safe-result
           path: |
             build/netfx40-prefix-readiness.json
+            build/netfx40-native-ngen-drain.json
             build/netfx40-msxml3-prerequisite.json
             build/netfx40-msxml3-runtime.json
             build/netfx40-msxml3-restart.json
