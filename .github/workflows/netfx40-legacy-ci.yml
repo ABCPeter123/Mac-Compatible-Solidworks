@@ -1573,6 +1573,19 @@ jobs:
                                "verb_stages", "verb_last_stage",
                                "timeout_processes", "wineserver_settle"):
                       out.write(f"intermediate_48_{name}: **{step[name]}**\n\n")
+              drain_path = Path("build/netfx40-native-ngen-drain.json")
+              if drain_path.is_file():
+                  from scripts.netfx48_native_ngen_drain import valid as valid_drain
+                  drain = json.loads(drain_path.read_text(encoding="ascii"))
+                  assert valid_drain(drain)
+                  for key in ("status", "x64", "x86", "ready"):
+                      out.write(f"native40_ngen_drain_{key}: **{drain[key]}**\n\n")
+                  from scripts.netfx48_ngen_wine_trace import valid as valid_trace
+                  for arch in ("x64", "x86"):
+                      trace = drain["wine_trace"][arch]
+                      assert valid_trace(trace)
+                      out.write(f"native40_ngen_{arch}_wine_trace_status: **{trace['status']}**\n\n")
+                      out.write(f"native40_ngen_{arch}_wine_trace_signals: **{','.join(trace['signals'])}**\n\n")
               msi_path = Path("build/netfx40-to-48-signed-msi.json")
               if msi_path.is_file():
                   from scripts.netfx40_to_48_signed_msi import validate as valid_msi
@@ -1767,6 +1780,7 @@ jobs:
         env:
           SWCOMPAT_PROVENANCE_ONLY: ${{ inputs.host_provenance_only }}
           SWCOMPAT_PAYLOAD_48: ${{ inputs.try_48_payload_host }}
+          SWCOMPAT_DRAIN_NGEN: ${{ inputs.drain_native40_ngen }}
         shell: bash
         run: |
           python3 - <<'PY'
@@ -1843,9 +1857,29 @@ jobs:
                       direct = json.loads(direct_path.read_text(encoding="ascii"))
                       assert valid_direct(direct)
                       intermediate_ready = direct["native48_candidate"]
+                  # A failed genuine CLR4 NGen drain is a valid, measured
+                  # pre-MSI *block*. It is not a successful framework install
+                  # and must not be misreported as a missing MSI test report.
+                  drain_requested = os.environ.get("SWCOMPAT_DRAIN_NGEN") == "true"
+                  assert not drain_requested or msi_required, (
+                      "Native NGen preflight requires signed MSI trial")
+                  drain_path = Path("build/netfx40-native-ngen-drain.json")
+                  assert drain_path.is_file() == drain_requested, (
+                      "Requested original CLR4 NGen preflight was not measured")
+                  drain_ready = True
+                  if drain_requested:
+                      from scripts.netfx48_native_ngen_drain import valid as valid_drain
+                      drain = json.loads(drain_path.read_text(encoding="ascii"))
+                      assert valid_drain(drain)
+                      assert drain["status"] in {"BLOCKED", "READY"}
+                      drain_ready = drain["ready"]
+                      if not drain_ready:
+                          assert drain["status"] == "BLOCKED"
+                          print("Signed MSI was correctly skipped after failed original NGen preflight")
                   msi_path = Path("build/netfx40-to-48-signed-msi.json")
-                  assert msi_path.is_file() == msi_required, (
-                      "Requested original signed 4.8 MSI experiment not measured")
+                  assert msi_path.is_file() == (msi_required and drain_ready), (
+                      "Original signed 4.8 MSI missing despite successful preflight "
+                      "or unexpectedly ran after failed native NGen preflight")
                   if msi_path.is_file():
                       from scripts.netfx40_to_48_signed_msi import validate as valid_msi
                       msi = json.loads(msi_path.read_text(encoding="ascii"))
