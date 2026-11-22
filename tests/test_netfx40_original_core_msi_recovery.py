@@ -97,6 +97,30 @@ class OriginalCoreMSITests(unittest.TestCase):
             msi.symlink_to(Path(td) / "external")
             self.assertEqual(core._original_core(prefix)[1], "UNSAFE")
 
+    def test_private_msi_log_only_exports_fixed_category_without_vendor_content(self):
+        with tempfile.TemporaryDirectory() as td:
+            args = _synthetic_fixture(Path(td))
+            _core_media(args[1])
+            private = args[1] / "drive_c" / core.EXTRACT_FOLDER / core.LOG_NAME
+            private.write_bytes(
+                b"Private installation paths and customer secret\\n"
+                b"Error 1723: A DLL required for install could not be run\\n"
+                b"Action ended 12:00:01: CA_PrivateVendorThing. Return value 3\\n")
+            data = core.private_log(args[1])
+            self.assertEqual(data, {
+                "status": "SCANNED", "action": "CUSTOM_ACTION",
+                "errors": ["CUSTOM_DLL_ACTION_FAILURE"]})
+            self.assertTrue(core.valid_log(data))
+            self.assertNotIn("Private", str(data))
+            self.assertNotIn("VendorThing", str(data))
+            private.write_bytes(b"x" * (core.MAX_FILE_BYTES + 1))
+            self.assertEqual(core.private_log(args[1])["status"], "TRUNCATED")
+            private.unlink()
+            private.symlink_to(Path(td) / "private-other-log")
+            self.assertEqual(core.private_log(args[1])["status"], "UNSAFE")
+            self.assertFalse(core.valid_log({
+                "status": "SCANNED", "action": "secret script", "errors": []}))
+
     def test_no_original_msi_if_first_setup_worked_or_not_1603(self):
         with tempfile.TemporaryDirectory() as td:
             args = list(_synthetic_fixture(Path(td)))
@@ -132,7 +156,7 @@ class OriginalCoreMSITests(unittest.TestCase):
                 seen.append((cmd, env, cwd, timeout))
                 self.assertEqual(cmd[1:3], ["msiexec.exe", "/i"])
                 self.assertEqual(cmd[3], r"C:\\swcompat-netfx40-original-extract\\netfx_Core_x64.msi")
-                self.assertEqual(cmd[-3:], ["/qn", "/norestart", "EXTUI=1"])
+                self.assertEqual(cmd[-5:], ["/qn", "/norestart", "EXTUI=1", "/L*v", core.LOG_WINDOWS])
                 self.assertEqual(env["WINEDLLOVERRIDES"], "fusion=b")
                 self.assertEqual(cwd, args[1])
                 self.assertEqual(timeout, 420)
