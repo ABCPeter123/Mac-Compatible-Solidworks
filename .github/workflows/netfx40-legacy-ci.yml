@@ -1930,6 +1930,15 @@ jobs:
               assert runtime_validate(r)
               assert r["installer_status"] != "NOT_RUN"
               assert r["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+              if r["status"] == "BLOCKED_INSTALLER_CLEANUP":
+                  # A still-open original installer pipe means later CLR, MSI
+                  # and NGen measurements were intentionally never attempted.
+                  assert r["installer_cleanup"] == "UNVERIFIED"
+                  assert not Path("build/netfx40-msxml3-restart.json").exists()
+                  assert not Path("build/netfx40-original-core-msi-recovery.json").exists()
+                  raise AssertionError(
+                      "Original Microsoft .NET4 installer cleanup UNVERIFIED; "
+                      "CLR, MSI and NGen tests were deliberately blocked")
               if r["candidate_native40"]:
                   assert r["native_loader"] == "LOADED"
                   assert r["managed_functionality"] == "PASS"
