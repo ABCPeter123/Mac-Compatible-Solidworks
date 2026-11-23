@@ -121,6 +121,51 @@ class OriginalCoreMSITests(unittest.TestCase):
             self.assertFalse(core.valid_log({
                 "status": "SCANNED", "action": "secret script", "errors": []}))
 
+    def test_actual_extraction_branch_count_no_longer_blocks_signed_core(self):
+        # The genuine run 44990034092 reported 17 dirs and 74 file
+        # entries. The old scanner rejected even a directory with >16
+        # immediate children, without ever trying the original MSI.
+        with tempfile.TemporaryDirectory() as td:
+            args = _synthetic_fixture(Path(td))
+            prefix = args[1]
+            found = _core_media(prefix)
+            root = prefix / "drive_c" / core.EXTRACT_FOLDER
+            for idx in range(17):
+                folder = root / f"original-extract-branch-{idx:02d}"
+                folder.mkdir()
+                for num in range(4):
+                    (folder / f"original-extra-{num}.dat").write_bytes(b"original placeholder")
+            self.assertEqual(len(list(root.rglob("*.dat"))), 68)
+            result, status = core._original_core(prefix)
+            self.assertEqual(result, found)
+            self.assertEqual(status, "VERIFIED_EXTRACTED_CORE")
+
+    def test_nested_original_core_can_be_found_beyond_old_depth_limit(self):
+        with tempfile.TemporaryDirectory() as td:
+            args = _synthetic_fixture(Path(td))
+            prefix = args[1]
+            root = prefix / "drive_c" / core.EXTRACT_FOLDER
+            subdir = root
+            for idx in range(7):
+                subdir = subdir / f"level-{idx}"
+            subdir.mkdir(parents=True)
+            package = subdir / "netfx_Core_x64.msi"
+            package.write_bytes(core.OLE_SIGNATURE + bytes(4096))
+            (subdir / "netfx_Core.mzz").write_bytes(bytes(128 * 1024))
+            self.assertEqual(core._original_core(prefix),
+                             (package, "VERIFIED_EXTRACTED_CORE"))
+
+    def test_excessive_original_extraction_fanout_fails_with_fixed_status(self):
+        with tempfile.TemporaryDirectory() as td:
+            args = _synthetic_fixture(Path(td))
+            prefix = args[1]
+            _core_media(prefix)
+            root = prefix / "drive_c" / core.EXTRACT_FOLDER
+            for idx in range(core.MAX_BRANCH + 1):
+                (root / f"branch-{idx:03d}").mkdir()
+            self.assertEqual(core._original_core(prefix),
+                             (None, "SCAN_BRANCH_LIMIT"))
+
     def test_no_original_msi_if_first_setup_worked_or_not_1603(self):
         with tempfile.TemporaryDirectory() as td:
             args = list(_synthetic_fixture(Path(td)))
@@ -226,6 +271,23 @@ class OriginalCoreMSITests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     core.inspect(*args)
                 verify.assert_not_called()
+
+    def test_ci_rejects_skipped_core_msi_even_when_original_clr_missing(self):
+        project = Path(__file__).resolve().parents[1]
+        workflow = (project / ".github/workflows/netfx40-legacy-ci.yml").read_text()
+        validator = workflow.split(
+            "- name: Validate that msxml3 cannot fabricate a CLR install", 1)[1]
+        before_persistent, after_persistent = validator.split(
+            '              if rr["persistent_native_managed"]:', 1)
+        self.assertIn("core_requested =", before_persistent)
+        self.assertIn("core_path.is_file() == core_requested", before_persistent)
+        self.assertIn("genuine_1603 =", before_persistent)
+        self.assertIn('and extracted["core_x64_ole_candidate"]', before_persistent)
+        self.assertIn('assert core["status"] == "MEASURED"', before_persistent)
+        self.assertIn('assert core["install"] != "NOT_RUN"', before_persistent)
+        self.assertNotIn("core_requested =", after_persistent)
+        self.assertIn("assert valid_core(core)", before_persistent)
+        self.assertIn("assert valid_extract(extracted)", before_persistent)
 
     def test_ci_original_core_is_strictly_host_only_and_uploads_no_vendor_bytes(self):
         project = Path(__file__).resolve().parents[1]

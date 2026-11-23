@@ -1872,6 +1872,40 @@ jobs:
               from scripts.netfx40_msxml3_restart import validate as validate_restart
               rr = json.loads(restart_path.read_text())
               assert validate_restart(rr)
+              # The direct-core recovery is most relevant when the original
+              # Microsoft CLR4 is ABSENT. Validate it independently of
+              # the successful-CLR branch, or the 1603 case can go green
+              # without an MSI attempt (observed in run 44990034092).
+              core_requested = os.environ.get("SWCOMPAT_TRY_40_CORE") == "true"
+              core_path = Path("build/netfx40-original-core-msi-recovery.json")
+              assert core_path.is_file() == core_requested, (
+                  "Requested authentic original .NET4 core MSI recovery not measured")
+              if core_path.is_file():
+                  assert os.environ.get("SWCOMPAT_PROVENANCE_ONLY") == "true"
+                  from scripts.netfx40_original_core_msi_recovery import valid as valid_core
+                  from scripts.netfx40_offline_extract import validate as valid_extract
+                  core = json.loads(core_path.read_text(encoding="ascii"))
+                  assert valid_core(core)
+                  assert core["status"] != "NOT_RUN"
+                  assert core["framework40_installed"] is False
+                  assert core["framework48_installed"] is False
+                  extracted_path = Path("build/netfx40-msxml3-original-extract.json")
+                  assert extracted_path.is_file()
+                  extracted = json.loads(extracted_path.read_text(encoding="ascii"))
+                  assert valid_extract(extracted)
+                  genuine_1603 = (
+                      r["installer_status"] == "EXIT_CAPTURED"
+                      and r["installer_exit"] == "MSI_FATAL_ERROR"
+                      and r["installer_exit_hex"] == "00000643"
+                      and r["clr64_after"] == "ABSENT"
+                      and rr["status"] == "NOT_ELIGIBLE"
+                      and extracted["process"] == "ZERO"
+                      and extracted["core_x64_ole_candidate"])
+                  if genuine_1603:
+                      assert core["status"] == "MEASURED", (
+                          "Authentic original .NET4 Core MSI 1603 recovery "
+                          "did not execute despite verified extracted media")
+                      assert core["install"] != "NOT_RUN"
               if rr["persistent_native_managed"]:
                   assert rr["restart"] == "COMPLETED"
                   assert rr["native_loader"] == "LOADED"
@@ -1897,18 +1931,6 @@ jobs:
                       assert payload_valid(payload) and payload["original48_sha256_verified"]
                       assert payload["framework48_installed"] is False
                       assert payload["framework481_installed"] is False
-                  core_requested = os.environ.get("SWCOMPAT_TRY_40_CORE") == "true"
-                  core_path = Path("build/netfx40-original-core-msi-recovery.json")
-                  assert core_path.is_file() == core_requested, (
-                      "Requested authentic original .NET4 core MSI recovery not measured")
-                  if core_path.is_file():
-                      assert os.environ.get("SWCOMPAT_PROVENANCE_ONLY") == "true"
-                      from scripts.netfx40_original_core_msi_recovery import valid as valid_core
-                      core = json.loads(core_path.read_text(encoding="ascii"))
-                      assert valid_core(core)
-                      assert core["status"] != "NOT_RUN"
-                      assert core["framework40_installed"] is False
-                      assert core["framework48_installed"] is False
                   host_only = os.environ.get("SWCOMPAT_PROVENANCE_ONLY") == "true"
                   from scripts.netfx40_to_481_upgrade import validate as upgrade_valid
                   intermediate_path = Path("build/netfx40-to-48-intermediate.json")
