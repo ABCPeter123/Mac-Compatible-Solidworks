@@ -288,6 +288,23 @@ class OriginalNGenPreflightTests(unittest.TestCase):
             self.assertNotIn("PRIVATE", str(report))
             self.assertNotIn("0xPRIVATE", str(report))
 
+    def test_long_authentic_clr4_ngen_cannot_be_cancelled_by_short_ci(self):
+        workflow = (Path(__file__).resolve().parents[1] /
+                    ".github/workflows/netfx40-legacy-ci.yml").read_text()
+        concurrency = workflow.split("concurrency:", 1)[1].split(
+            "\njobs:", 1)[0]
+        self.assertIn(
+            "inputs.try_40_core_msi_recovery && format('core-{0}-{1}-{2}',",
+            concurrency)
+        self.assertIn(
+            "&& !inputs.try_40_core_msi_recovery }}", concurrency)
+        core_job = workflow.split("  apple-silicon-msxml3-fix:", 1)[1].split(
+            "    steps:", 1)[0]
+        self.assertIn(
+            "inputs.try_40_core_msi_recovery && "
+            "inputs.probe_native40_ngen_if_ready && 55", core_job)
+        self.assertIn("|| 35", core_job)
+
     def test_adaptive_grace_enabled_only_in_original_clr4_control(self):
         workflow = (Path(__file__).resolve().parents[1] /
                     ".github/workflows/netfx40-legacy-ci.yml").read_text()
