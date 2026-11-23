@@ -272,6 +272,23 @@ class OriginalCoreMSITests(unittest.TestCase):
                     core.inspect(*args)
                 verify.assert_not_called()
 
+    def test_ci_rejects_skipped_core_msi_even_when_original_clr_missing(self):
+        project = Path(__file__).resolve().parents[1]
+        workflow = (project / ".github/workflows/netfx40-legacy-ci.yml").read_text()
+        validator = workflow.split(
+            "- name: Validate that msxml3 cannot fabricate a CLR install", 1)[1]
+        before_persistent, after_persistent = validator.split(
+            '              if rr["persistent_native_managed"]:', 1)
+        self.assertIn("core_requested =", before_persistent)
+        self.assertIn("core_path.is_file() == core_requested", before_persistent)
+        self.assertIn("genuine_1603 =", before_persistent)
+        self.assertIn('and extracted["core_x64_ole_candidate"]', before_persistent)
+        self.assertIn('assert core["status"] == "MEASURED"', before_persistent)
+        self.assertIn('assert core["install"] != "NOT_RUN"', before_persistent)
+        self.assertNotIn("core_requested =", after_persistent)
+        self.assertIn("assert valid_core(core)", before_persistent)
+        self.assertIn("assert valid_extract(extracted)", before_persistent)
+
     def test_ci_original_core_is_strictly_host_only_and_uploads_no_vendor_bytes(self):
         project = Path(__file__).resolve().parents[1]
         workflow = (project / ".github/workflows/netfx40-legacy-ci.yml").read_text()
