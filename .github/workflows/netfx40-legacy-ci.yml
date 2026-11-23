@@ -58,6 +58,11 @@ on:
         type: boolean
         required: false
         default: false
+      progress_gated_native40_ngen:
+        description: 'Only in isolated signed 4.8 MSI arm: grant NGen grace when original queue logs grow'
+        type: boolean
+        required: false
+        default: false
       pause_native_ngen_queue:
         description: 'Opt-in real Microsoft ngen queue pause/continue around original signed MSI'
         type: boolean
@@ -167,6 +172,11 @@ on:
         default: false
       drain_native40_ngen:
         description: 'Opt-in Microsoft x86 and x64 NGen queue drain before signed MSI on Wiage'
+        type: boolean
+        required: false
+        default: false
+      progress_gated_native40_ngen:
+        description: 'Grant at most 2 extra NGen wait windows only on new genuine queue progress'
         type: boolean
         required: false
         default: false
@@ -821,7 +831,7 @@ jobs:
     name: Try genuine .NET 4.0 after msxml3 in a fresh Apple Silicon Wine prefix
     needs: [authentic-netfx40-windows, absolute-path-regressions]
     runs-on: ${{ inputs.use_macos26_runner && 'macos-26' || 'macos-15' }}
-    timeout-minutes: ${{ inputs.try_48_msi && inputs.signed_msi_timeout_seconds == 1200 && 55 || inputs.try_40_core_msi_recovery && inputs.probe_native40_ngen_if_ready && 55 || 35 }}
+    timeout-minutes: ${{ inputs.progress_gated_native40_ngen && 55 || inputs.try_48_msi && inputs.signed_msi_timeout_seconds == 1200 && 55 || inputs.try_40_core_msi_recovery && inputs.probe_native40_ngen_if_ready && 55 || 35 }}
     env:
       SWCOMPAT_TRY_48_INTERMEDIATE: ${{ inputs.try_48_intermediate }}
       SWCOMPAT_TRY_48_DIRECT: ${{ inputs.try_48_direct }}
@@ -863,6 +873,12 @@ jobs:
         shell: bash
         run: |
           echo "NGen preflight requires a standalone authenticated Wiage signed MSI arm."
+          exit 1
+      - name: Reject progress-gated NGen outside genuine Wiage signed .NET 4.8 MSI servicing
+        if: inputs.progress_gated_native40_ngen && (!inputs.drain_native40_ngen || !inputs.ngen_host_stack64 || !inputs.try_48_msi || inputs.host_provenance_only || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner || inputs.pause_native_ngen_queue || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_payload_host || inputs.try_40_core_msi_recovery || inputs.probe_native40_ngen_if_ready || inputs.signed_msi_timeout_seconds != 420)
+        shell: bash
+        run: |
+          echo "Progress-gated NGen is permitted only for the isolated authentic .NET 4.8 MSI control with original CLR4 and 420s MSI budget."
           exit 1
       - name: Fetch selected Microsoft media privately using Windows authenticated SHA256
         shell: bash
@@ -1407,6 +1423,7 @@ jobs:
         shell: bash
         env:
           SWCOMPAT_NGEN_STACK64: ${{ inputs.ngen_host_stack64 }}
+          SWCOMPAT_NGEN_PROGRESS_GRACE: ${{ inputs.progress_gated_native40_ngen }}
         run: |
           set -euo pipefail
           trace_flags=()
@@ -1419,6 +1436,10 @@ jobs:
             echo "Original Microsoft CLR4 NGen inherited host stack: 65520 KiB"
           else
             echo "Original Microsoft CLR4 NGen inherited host stack: DEFAULT"
+          fi
+          if [[ "$SWCOMPAT_NGEN_PROGRESS_GRACE" == "true" ]]; then
+            trace_flags+=(--extend-if-progress)
+            echo "Original Microsoft CLR4 NGen grace: fresh progress only, maximum 540 seconds per architecture"
           fi
           python3 -m scripts.netfx48_native_ngen_drain \
             --wine "$SWCOMPAT_WINE" \
