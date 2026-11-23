@@ -5,6 +5,12 @@ name: One-shot Wiage original Microsoft .NET4 x64 core MSI after setup 1603
 # Wiage runs left working Microsoft CLR4 after a long setup timeout. Test
 # whether installing the ORIGINAL unmodified x64 core MSI directly from the
 # same hash-pinned official Microsoft /x extraction can recover the former.
+# Run 45201745572 instead produced authenticated persistent x64/x86 native
+# Microsoft CLR4 after setup timed out and the direct Core MSI correctly
+# skipped as SKIPPED_ALREADY_NATIVE. Retest adaptively in the SAME isolated
+# prefix: original MSI after genuine 1603, or original x64/x86 NGen with
+# 65520KiB host stack and private Wine SEH/lock error classification when
+# native CLR4 already executes managed code. No 4.8 MSI is attempted.
 # Run 44990034092 proved original Microsoft setup MSI 1603 with CLR absent,
 # and extraction of 6 original OLE MSIs. Its direct-Core control stopped
 # BEFORE msiexec because the private candidate walk rejected the 17-directory
@@ -37,6 +43,7 @@ jobs:
       try_wow64_managed: false
       try_wow64_faults: false
       try_40_core_msi_recovery: true
+      probe_native40_ngen_if_ready: true
       try_48_direct: false
       try_48_intermediate: false
       try_48_payload_host: false
