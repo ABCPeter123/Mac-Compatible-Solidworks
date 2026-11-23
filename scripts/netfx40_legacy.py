@@ -12,6 +12,7 @@ from functools import partial
 import hashlib
 import json
 import os
+import signal
 from pathlib import Path
 import subprocess
 import tempfile
@@ -45,6 +46,7 @@ LAUNCHER_NAME = "netfx40_win32_launch.exe"
 # by Winetricks. Also checked for valid Microsoft Authenticode on Windows.
 OFFICIAL_SHA256 = "65e064258f2e418816b304f646ff9e87af101e4c9552ab064bb74d281c38659f"
 STAGES = {"MEASURED", "ALREADY_NATIVE", "BLOCKED_WINVER", "BLOCKED_REGISTRY",
+          "BLOCKED_INSTALLER_CLEANUP",
           "BLOCKED_MONO_REMOVAL", "BLOCKED_WIN32_SELFTEST", "BLOCKED_MEDIA", "BLOCKED_MSI_LOGGING",
           "BLOCKED_SCM_RESTART"}
 STATES_START = {"NOT_RUN", "EXIT_CAPTURED", "START_FAILED", "TIMEOUT", "BAD_REPORT",
@@ -53,6 +55,7 @@ MONO_STATES = {"NOT_RUN", "REMOVED", "MONO_NOT_REGISTERED", "INVENTORY_FAILED",
                "REMOVE_FAILED", "VERIFY_FAILED"}
 SELF_STATES = {"NOT_RUN", "PASS", "NO_OUTPUT", "BAD_REPORT", "PROCESS_FAILED", "TIMEOUT"}
 REG_STATES = {"NOT_RUN", "NOT_NEEDED", "CLEARED", "QUERY_FAILED", "DELETE_FAILED", "VERIFY_FAILED"}
+SETUP_CLEANUP = {"NOT_REQUESTED", "NOT_STARTED", "PIPE_CLOSED", "GROUP_REAPED", "UNVERIFIED"}
 
 
 def verify_media(installer: Path) -> None:
@@ -149,6 +152,31 @@ def _may_store_incomplete_action(store_private: bool, state: dict, result: dict)
                   and 0 < state["lines"] < MAX_RETAINED_LINES)))
 
 
+def _terminate_private_setup_group(process: subprocess.Popen) -> bool:
+    """Stop the isolated original installer *group*, not only its launcher.
+
+    The original Win32 wrapper terminates the initial Microsoft bootstrapper
+    after its own bounded wait, but nested original MSI/managed optimization
+    descendants can survive and hold its captured stderr pipe. Terminate
+    only the new Unix session created for this one disposable Wine command.
+    Never target a user's global Wine prefix or enumerate unrelated PIDs.
+    """
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(process.pid, sig)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            return False
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        except OSError:
+            return False
+    return True
+
+
 def _run_traced(wine: Path, prefix: Path, fixture: Path,
                 arguments: list[str], *, setup: bool = True, timeout: int = 75,
                 store_private: bool = False) -> dict:
@@ -168,12 +196,13 @@ def _run_traced(wine: Path, prefix: Path, fixture: Path,
     retained = bytearray()
     state = {"overflow": False, "lines": 0, "reason": "NONE"}
     code, failed = 124, "PROCESS_FAILED"
+    cleanup = "NOT_STARTED"
     with tempfile.TemporaryFile() as output:
         try:
             process = subprocess.Popen(
                 [str(wine), str(fixture), *arguments], cwd=fixture.parent,
                 env=env, stdin=subprocess.DEVNULL, stdout=output,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.PIPE, start_new_session=True,
             )
         except OSError:
             process = None
@@ -211,16 +240,21 @@ def _run_traced(wine: Path, prefix: Path, fixture: Path,
                 code = process.wait(timeout=timeout)
                 failed = None
             except subprocess.TimeoutExpired:
-                process.kill()
-                try:
-                    process.wait(timeout=15)
-                except subprocess.TimeoutExpired:
-                    pass
                 failed = "TIMEOUT"
             except OSError:
-                process.kill()
                 failed = "PROCESS_FAILED"
-            reader.join(timeout=5)
+            if failed is None:
+                # A finished Win32 launcher is NOT proof its MSI descendants
+                # exited. Their inherited stderr pipe may still be open.
+                reader.join(timeout=5)
+            if failed is not None or reader.is_alive():
+                signalled = _terminate_private_setup_group(process)
+                # Group SIGKILL is bounded; wait for actual pipe closure.
+                reader.join(timeout=5)
+                cleanup = ("GROUP_REAPED" if signalled and not reader.is_alive()
+                           else "UNVERIFIED")
+            else:
+                cleanup = "PIPE_CLOSED"
             if reader.is_alive():
                 state["overflow"] = True
                 if state["reason"] == "NONE":
@@ -240,10 +274,12 @@ def _run_traced(wine: Path, prefix: Path, fixture: Path,
         return {"status": failed, "category": "NOT_AVAILABLE",
                 "exit_hex": "NOT_VERIFIED", "child_seen": "NOT_VERIFIED",
                 "child_lifecycle": "NOT_VERIFIED", "child_exit": "NOT_VERIFIED",
-                "wine_msi_errors": errors, "custom_action_type": action_type}
+                "wine_msi_errors": errors, "custom_action_type": action_type,
+                "setup_cleanup": cleanup}
     result = parse_win32(raw, code)
     result["wine_msi_errors"] = errors
     result["custom_action_type"] = action_type
+    result["setup_cleanup"] = cleanup
     if _may_store_incomplete_action(store_private, state, result):
         raw_action = _private_failed_action(private)
         normalized = (raw_action.rsplit(b"]", 1)[-1]
@@ -291,6 +327,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
         "installer_child_seen": "NOT_VERIFIED",
         "installer_child_lifecycle": "NOT_VERIFIED",
         "installer_child_exit": "NOT_VERIFIED",
+        "installer_cleanup": "NOT_REQUESTED",
         "inner_msi": empty_msi(),
         "msi_inventory": empty_msi_inventory(),
         "wine_msi_errors": empty_wine_msi(),
@@ -378,6 +415,12 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
     report["installer_child_seen"] = installed.get("child_seen", "NOT_VERIFIED")
     report["installer_child_lifecycle"] = installed.get("child_lifecycle", "NOT_VERIFIED")
     report["installer_child_exit"] = installed.get("child_exit", "NOT_VERIFIED")
+    report["installer_cleanup"] = installed.get("setup_cleanup", "NOT_REQUESTED")
+    if report["installer_cleanup"] == "UNVERIFIED":
+        # A detached installer may still own native MSI/CLR services. Do not
+        # start any more original Wine commands or falsely treat CLR as safe.
+        report["status"] = "BLOCKED_INSTALLER_CLEANUP"
+        return report
     # Inspect the actual nested MSI failure before reboot can clear TEMP logs.
     # Raw logs NEVER leave this marked disposable prefix.
     report["inner_msi"] = scan_inner_msi(prefix)
@@ -422,7 +465,7 @@ def validate(r: dict) -> bool:
         and set(r) == {"schema", "scope", "status", "winver", "setup_profile", "registry64", "registry32",
                        "mono", "selftest", "installer_status", "installer_exit",
                        "installer_exit_hex", "installer_child_seen",
-                       "installer_child_lifecycle", "installer_child_exit", "inner_msi", "msi_inventory",
+                       "installer_child_lifecycle", "installer_child_exit", "installer_cleanup", "inner_msi", "msi_inventory",
                        "wine_msi_errors", "custom_action_type", "msi_logging_policy",
                        "pre_setup_scm_restart", "reboot", "clr64_before", "clr64_after",
                        "clr32_before", "clr32_after", "mscorlib64_after",
@@ -435,6 +478,11 @@ def validate(r: dict) -> bool:
         and r["registry64"] in REG_STATES and r["registry32"] in REG_STATES
         and r["mono"] in MONO_STATES and r["selftest"] in SELF_STATES
         and r["installer_status"] in STATES_START
+        and r["installer_cleanup"] in SETUP_CLEANUP
+        and (r["status"] != "BLOCKED_INSTALLER_CLEANUP" or
+             r["installer_cleanup"] == "UNVERIFIED")
+        and (r["installer_cleanup"] != "UNVERIFIED" or
+             r["status"] == "BLOCKED_INSTALLER_CLEANUP")
         and r["installer_exit"] in (CATEGORIES | {"NOT_AVAILABLE"})
         and r["installer_child_seen"] in CHILD_VALUES
         and r["installer_child_lifecycle"] in LIFECYCLE_VALUES
@@ -514,6 +562,7 @@ def main(argv: list[str] | None = None) -> int:
     except (ValueError, OSError):
         p.error("Original signed Microsoft .NET 4.0 disposable-prefix experiment refused")
     for key in ("status", "winver", "setup_profile", "mono", "selftest", "installer_status",
+                "installer_cleanup",
                 "installer_exit", "installer_child_seen",
                 "installer_child_lifecycle", "installer_child_exit",
                 "reboot", "clr64_before", "clr64_after",
@@ -535,7 +584,7 @@ def main(argv: list[str] | None = None) -> int:
         print("Microsoft MSI private action type", key, report["custom_action_type"][key])
     for key in ("activation", "restoration"):
         print("Microsoft MSI verbose logging policy", key, report["msi_logging_policy"][key])
-    return 0
+    return 1 if report["status"] == "BLOCKED_INSTALLER_CLEANUP" else 0
 
 
 if __name__ == "__main__":
