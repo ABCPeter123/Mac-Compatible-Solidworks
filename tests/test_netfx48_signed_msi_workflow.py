@@ -143,7 +143,7 @@ class SignedMSIGates(TestCase):
             self.assertIn(expected, source)
         self.assertNotIn("actions/upload-artifact", source)
         legacy = LEGACY.read_text(encoding="utf-8")
-        self.assertIn("timeout-minutes: ${{ inputs.try_48_msi && inputs.signed_msi_timeout_seconds == 1200 && 55 || 35 }}", legacy)
+        self.assertIn("timeout-minutes: ${{ inputs.try_48_msi && inputs.signed_msi_timeout_seconds == 1200 && 55 || inputs.try_40_core_msi_recovery && inputs.probe_native40_ngen_if_ready && 55 || 35 }}", legacy)
         self.assertIn('--msi-timeout-seconds "$SWCOMPAT_SIGNED_MSI_TIMEOUT"', legacy)
         self.assertIn("signed_msi_timeout_seconds:", legacy)
         self.assertIn('"msi_timeout_seconds"', legacy)
@@ -154,7 +154,7 @@ class SignedMSIGates(TestCase):
         source = LEGACY.read_text(encoding="utf-8")
         self.assertIn("concurrency:", source)
         self.assertIn("(inputs.try_48_msi || inputs.try_48_direct || inputs.try_48_intermediate) && github.sha || 'shared'", source)
-        self.assertIn("cancel-in-progress: ${{ !inputs.try_48_msi && !inputs.try_48_direct && !inputs.try_48_intermediate && !inputs.try_wow64_managed }}", source)
+        self.assertIn("cancel-in-progress: ${{ !inputs.try_48_msi && !inputs.try_48_direct && !inputs.try_48_intermediate && !inputs.try_wow64_managed && !inputs.try_40_core_msi_recovery }}", source)
         self.assertIn("inputs.try_wow64_managed && format('wow64-{0}-{1}-{2}-{3}', github.sha, inputs.wine_baseline, inputs.use_macos26_runner, inputs.wow64_host_stack64)", source)
         self.assertNotIn("cancel-in-progress: true", source)
         for filename in ("netfx48-msi-ngen-evidence-once-ci.yml",
@@ -214,7 +214,7 @@ class SignedMSIGates(TestCase):
             "inputs.try_wow64_managed && format('wow64-{0}-{1}-{2}-{3}', github.sha, inputs.wine_baseline, inputs.use_macos26_runner, inputs.wow64_host_stack64)",
             source)
         self.assertIn(
-            "cancel-in-progress: ${{ !inputs.try_48_msi && !inputs.try_48_direct && !inputs.try_48_intermediate && !inputs.try_wow64_managed }}",
+            "cancel-in-progress: ${{ !inputs.try_48_msi && !inputs.try_48_direct && !inputs.try_48_intermediate && !inputs.try_wow64_managed && !inputs.try_40_core_msi_recovery }}",
             source)
         for filename in (
             "netfx40-wow64-x86-once-ci.yml",
