@@ -225,6 +225,17 @@ class OriginalMicrosoftGroupCleanupTests(unittest.TestCase):
             self.assertEqual(result["status"], "TIMEOUT")
             self.assertEqual(result["setup_cleanup"], "UNVERIFIED")
 
+    def test_ci_reports_cleanup_blocker_before_missing_restart(self):
+        workflow = (Path(__file__).resolve().parents[1] /
+                    ".github/workflows/netfx40-legacy-ci.yml").read_text()
+        validator = workflow.split(
+            "- name: Validate that msxml3 cannot fabricate a CLR install", 1)[1]
+        cleaned = validator.index('if r["status"] == "BLOCKED_INSTALLER_CLEANUP":')
+        restart = validator.index('assert restart_path.is_file()')
+        self.assertLess(cleaned, restart)
+        self.assertIn("CLR, MSI and NGen tests were deliberately blocked",
+                      validator[cleaned:restart])
+
     def test_unclear_cleanup_blocks_all_further_wine_and_clr_probes(self):
         with TemporaryDirectory() as td:
             root = Path(td)
