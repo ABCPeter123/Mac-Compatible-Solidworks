@@ -155,9 +155,13 @@ class OriginalMsiCustomTypeTests(unittest.TestCase):
             fixture = root / "netfx40_win32_launch.exe"
             fixture.write_bytes(b"synthetic fixture")
             with (mock.patch.object(legacy, "validate_prefix"),
-                  mock.patch.object(legacy.subprocess, "Popen", return_value=proc)):
+                  mock.patch.object(legacy.subprocess, "Popen", return_value=proc),
+                  mock.patch.object(legacy, "_terminate_private_setup_group",
+                                    return_value=True) as cleanup):
                 r = legacy._run_traced(root / "wine", root, fixture, ["SYNTHETIC"], timeout=30)
-            proc.kill.assert_called_once()
+            cleanup.assert_called_once_with(proc)
+            proc.kill.assert_not_called()
+            self.assertEqual(r["setup_cleanup"], "GROUP_REAPED")
             self.assertEqual(r["status"], "TIMEOUT")
             self.assertEqual(r["custom_action_type"], t.empty(
                 "CAPTURE_TRUNCATED", reason="PROCESS_INCOMPLETE"))

@@ -1,5 +1,12 @@
 name: One-shot Wiage original Microsoft .NET4 x64 core MSI after setup 1603
 
+# Run 45205577127: original CLR4 persisted and x64 Microsoft NGen timed
+# out after 180s, despite 64MiB host stack, with no SEH crash and changing
+# native-image queue logs. The original installer wrapper hit its own 330s
+# wait while Wine's traced Python launcher killed only its immediate process
+# after the outer timeout. Descendant MSI/optimizer processes could retain
+# inherited stderr and run into the later NGen attempt. Re-run both genuine
+# outcomes after scoped Unix process-group cleanup and unsafe-pipe fail-closed.
 # In run 44984967536 the original, authenticated .NET4 bootstrapper exited
 # MSI 1603 with CLR64 ABSENT before genuine NGen could be studied. Earlier
 # Wiage runs left working Microsoft CLR4 after a long setup timeout. Test

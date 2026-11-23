@@ -19,13 +19,14 @@ class VerboseMsiLoggingTests(unittest.TestCase):
             dummy = root / "fixture.exe"
             fields = ("status", "winver", "mono", "selftest", "installer_status",
                       "installer_exit", "installer_child_seen",
-                      "installer_child_lifecycle", "installer_child_exit",
+                      "installer_child_lifecycle", "installer_child_exit", "installer_cleanup",
                       "reboot", "clr64_before", "clr64_after", "clr32_after",
                       "mscorlib64_after", "native_loader", "runtime_family",
                       "managed_functionality", "candidate_native40")
             report = {field: "NOT_RUN" for field in fields}
             report.update({
                 "setup_profile": "winxp",
+                "installer_cleanup": "NOT_REQUESTED",
                 "inner_msi": evidence.empty(),
                 "msi_inventory": __import__(
                     "scripts.netfx40_msi_inventory", fromlist=["empty"]).empty(),
