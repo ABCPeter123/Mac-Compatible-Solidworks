@@ -43,6 +43,11 @@ on:
         type: boolean
         required: false
         default: false
+      probe_native40_ngen_if_ready:
+        description: 'Adaptive core MSI trial: on verified native CLR4, test original NGen with 64MiB stack'
+        type: boolean
+        required: false
+        default: false
       try_40_core_msi_recovery:
         description: 'Original extracted .NET4 Core x64 MSI after genuine 1603, Wiage-only'
         type: boolean
@@ -147,6 +152,11 @@ on:
         default: false
       ngen_host_stack64:
         description: 'Try 65520 KiB host stack during genuine Wiage NGen and classify Wine errors'
+        type: boolean
+        required: false
+        default: false
+      probe_native40_ngen_if_ready:
+        description: 'If CLR4 is already native, drain genuine NGen instead of Core MSI'
         type: boolean
         required: false
         default: false
@@ -827,6 +837,12 @@ jobs:
         run: |
           echo "Original .NET 4.8 payload-host trial requires host-only and forbids all installer trials."
           exit 1
+      - name: Reject adaptive native CLR4 NGen outside authenticated Core MSI A/B
+        if: inputs.probe_native40_ngen_if_ready && (!inputs.try_40_core_msi_recovery || !inputs.host_provenance_only || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner || inputs.try_48_msi || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_payload_host || inputs.drain_native40_ngen || inputs.pause_native_ngen_queue || inputs.ngen_host_stack64)
+        shell: bash
+        run: |
+          echo "Adaptive NGen requires authenticated original CLR4 or 1603 Core MSI control only."
+          exit 1
       - name: Reject original CLR4 x64 MSI recovery outside isolated Wiage 4.0-only experiment
         if: inputs.try_40_core_msi_recovery && (!inputs.host_provenance_only || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner || inputs.try_48_msi || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_payload_host || inputs.drain_native40_ngen || inputs.pause_native_ngen_queue)
         shell: bash
@@ -1115,6 +1131,24 @@ jobs:
               assert r["persistent_native_managed"] and r["native_only_managed"] == "PASS", (
                   "Original Microsoft CLR4 prerequisite failed; NGen experiment not run")
           PY
+      - name: Drain authentic CLR4 NGen when original x64 and x86 managed code survived restart
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_40_core_msi_recovery && inputs.probe_native40_ngen_if_ready && inputs.host_provenance_only
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Diagnostic only. Do not replace, pause or edit Microsoft's NGen.
+          # Original CLR4 survived restart, so Core MSI recovery was skipped.
+          # Use increased inherited stack to test Wine SEH hypothesis against
+          # prior x64 NGen timeout; capture only finite diagnostic categories.
+          ulimit -s 65520
+          [[ "$(ulimit -s)" == "65520" ]] || { echo "NGen diagnostic host stack not applied" >&2; exit 1; }
+          python3 -m scripts.netfx48_native_ngen_drain \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --native40-report build/netfx40-msxml3-restart.json \
+            --output build/netfx40-core-path-ngen-drain.json \
+            --observe-wine-failures \
+            --agree-disposable-prefix
       - name: Diagnose new WoW64 x86 process startup versus original Microsoft managed activation
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_wow64_managed && inputs.try_wow64_faults
         shell: bash
@@ -1618,6 +1652,25 @@ jobs:
                   for key in ("status", "action"):
                       out.write(f"original40_core_msi_log_{key}: **{log[key]}**\n\n")
                   out.write(f"original40_core_msi_log_errors: **{','.join(log['errors'])}**\n\n")
+              core_ngen_path = Path("build/netfx40-core-path-ngen-drain.json")
+              if core_ngen_path.is_file():
+                  from scripts.netfx48_native_ngen_drain import valid as valid_drain
+                  diagnostic = json.loads(core_ngen_path.read_text(encoding="ascii"))
+                  assert valid_drain(diagnostic)
+                  for key in ("status", "x64", "x86", "ready"):
+                      out.write(f"adaptive_native40_ngen_{key}: **{diagnostic[key]}**\n\n")
+                  from scripts.netfx48_ngen_progress import valid as valid_progress
+                  progress = diagnostic["ngen_progress"]
+                  assert valid_progress(progress)
+                  for key in ("samples", "x64_growth_windows", "x86_growth_windows",
+                              "x64_last", "x86_last"):
+                      out.write(f"adaptive_native40_ngen_progress_{key}: **{progress[key]}**\n\n")
+                  from scripts.netfx48_ngen_wine_trace import valid as valid_trace
+                  for arch in ("x64", "x86"):
+                      trace = diagnostic["wine_trace"][arch]
+                      assert valid_trace(trace)
+                      out.write(f"adaptive_native40_ngen_{arch}_trace: **{trace['status']}**\n\n")
+                      out.write(f"adaptive_native40_ngen_{arch}_signals: **{','.join(trace['signals'])}**\n\n")
               intermediate = Path("build/netfx40-to-48-intermediate.json")
               if intermediate.is_file():
                   from scripts.netfx40_to_48_intermediate import validate as valid_intermediate
@@ -1827,6 +1880,7 @@ jobs:
             build/netfx40-msxml3-original-extract.json
             build/netfx40-msxml3-original-table.json
             build/netfx40-original-core-msi-recovery.json
+            build/netfx40-core-path-ngen-drain.json
             build/netfx40-mscoree-provenance.json
             build/netfx40-public-host-api.json
             build/netfx48-core-host-categories.json
@@ -1845,6 +1899,7 @@ jobs:
           SWCOMPAT_PAYLOAD_48: ${{ inputs.try_48_payload_host }}
           SWCOMPAT_DRAIN_NGEN: ${{ inputs.drain_native40_ngen }}
           SWCOMPAT_TRY_40_CORE: ${{ inputs.try_40_core_msi_recovery }}
+          SWCOMPAT_CORE_NGEN: ${{ inputs.probe_native40_ngen_if_ready }}
         shell: bash
         run: |
           python3 - <<'PY'
@@ -1906,6 +1961,19 @@ jobs:
                           "Authentic original .NET4 Core MSI 1603 recovery "
                           "did not execute despite verified extracted media")
                       assert core["install"] != "NOT_RUN"
+              core_ngen_requested = os.environ.get("SWCOMPAT_CORE_NGEN") == "true"
+              core_ngen_path = Path("build/netfx40-core-path-ngen-drain.json")
+              assert core_ngen_path.is_file() == (
+                  core_ngen_requested and rr["persistent_native_managed"]), (
+                  "Adaptive original Microsoft NGen did not run after verified native CLR4 "
+                  "or ran without a working authenticated Microsoft runtime")
+              if core_ngen_path.is_file():
+                  from scripts.netfx48_native_ngen_drain import valid as valid_drain
+                  ngen_report = json.loads(core_ngen_path.read_text(encoding="ascii"))
+                  assert valid_drain(ngen_report)
+                  assert ngen_report["status"] in {"READY", "BLOCKED"}
+                  assert core_path.is_file() and core["status"] == "SKIPPED_ALREADY_NATIVE", (
+                      "Original core recovery and NGen cannot run concurrently")
               if rr["persistent_native_managed"]:
                   assert rr["restart"] == "COMPLETED"
                   assert rr["native_loader"] == "LOADED"
