@@ -1131,24 +1131,6 @@ jobs:
               assert r["persistent_native_managed"] and r["native_only_managed"] == "PASS", (
                   "Original Microsoft CLR4 prerequisite failed; NGen experiment not run")
           PY
-      - name: Drain authentic CLR4 NGen when original x64 and x86 managed code survived restart
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_40_core_msi_recovery && inputs.probe_native40_ngen_if_ready && inputs.host_provenance_only
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Diagnostic only. Do not replace, pause or edit Microsoft's NGen.
-          # Original CLR4 survived restart, so Core MSI recovery was skipped.
-          # Use increased inherited stack to test Wine SEH hypothesis against
-          # prior x64 NGen timeout; capture only finite diagnostic categories.
-          ulimit -s 65520
-          [[ "$(ulimit -s)" == "65520" ]] || { echo "NGen diagnostic host stack not applied" >&2; exit 1; }
-          python3 -m scripts.netfx48_native_ngen_drain \
-            --wine "$SWCOMPAT_WINE" \
-            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
-            --native40-report build/netfx40-msxml3-restart.json \
-            --output build/netfx40-core-path-ngen-drain.json \
-            --observe-wine-failures \
-            --agree-disposable-prefix
       - name: Diagnose new WoW64 x86 process startup versus original Microsoft managed activation
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_wow64_managed && inputs.try_wow64_faults
         shell: bash
@@ -1350,6 +1332,24 @@ jobs:
                                 ",".join(k for k, v in r[variant][category].items() if v) +
                                 "**\n\n")
           PY
+      - name: Drain authentic CLR4 NGen when original x64 and x86 managed code survived restart
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_40_core_msi_recovery && inputs.probe_native40_ngen_if_ready && inputs.host_provenance_only
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Diagnostic only. Do not replace, pause or edit Microsoft's NGen.
+          # Original CLR4 survived restart, so Core MSI recovery was skipped.
+          # Use increased inherited stack to test Wine SEH hypothesis against
+          # prior x64 NGen timeout; capture only finite diagnostic categories.
+          ulimit -s 65520
+          [[ "$(ulimit -s)" == "65520" ]] || { echo "NGen diagnostic host stack not applied" >&2; exit 1; }
+          python3 -m scripts.netfx48_native_ngen_drain \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --native40-report build/netfx40-msxml3-restart.json \
+            --output build/netfx40-core-path-ngen-drain.json \
+            --observe-wine-failures \
+            --agree-disposable-prefix
       - name: Reject combining host-provenance-only with any 4.8 installer experiment
         if: inputs.host_provenance_only && (inputs.try_48_intermediate || inputs.try_48_direct || inputs.try_48_msi)
         run: |
