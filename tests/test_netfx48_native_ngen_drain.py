@@ -282,6 +282,21 @@ class OriginalNGenPreflightTests(unittest.TestCase):
             self.assertNotIn("PRIVATE", str(report))
             self.assertNotIn("0xPRIVATE", str(report))
 
+    def test_adaptive_grace_enabled_only_in_original_clr4_control(self):
+        workflow = (Path(__file__).resolve().parents[1] /
+                    ".github/workflows/netfx40-legacy-ci.yml").read_text()
+        diagnostic = workflow.split(
+            "- name: Drain authentic CLR4 NGen when original x64 and x86 "
+            "managed code survived restart", 1)[1].split(
+            "- name: Reject combining host-provenance-only", 1)[0]
+        signed_msi = workflow.split(
+            "- name: Drain genuine original Microsoft CLR4 NGen x64 and x86 "
+            "queues before signed 4.8 MSI", 1)[1].split(
+            "- name: Extract authenticated original .NET 4.8", 1)[0]
+        self.assertIn("--extend-if-progress", diagnostic)
+        self.assertIn("--observe-wine-failures", diagnostic)
+        self.assertNotIn("--extend-if-progress", signed_msi)
+
     def test_stack_diagnostic_cannot_run_without_real_wiage_msi_guard(self):
         workflow = (Path(__file__).resolve().parents[1] /
                     ".github/workflows/netfx40-legacy-ci.yml").read_text()
