@@ -109,6 +109,122 @@ class OriginalMicrosoftGroupCleanupTests(unittest.TestCase):
             term.assert_not_called()
             self.assertEqual(result["setup_cleanup"], "PIPE_CLOSED")
 
+    def test_disposable_wineserver_fallback_never_targets_user_prefix(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            engine = root / "isolated-engine" / "bin"
+            engine.mkdir(parents=True)
+            wine = engine / "wine"
+            server = engine / "wineserver"
+            for exe in (wine, server):
+                exe.write_bytes(b"synthetic Wine fixture")
+                exe.chmod(0o755)
+            prefix = root / "netfx40-msxml3-prefix"
+            (prefix / "drive_c").mkdir(parents=True)
+            (prefix / "system.reg").touch()
+            (prefix / ".swcompat-netfx481-disposable").touch()
+            with mock.patch.dict(os.environ, {"RUNNER_TEMP": td}):
+                with mock.patch.object(
+                    legacy.subprocess, "run",
+                    return_value=mock.Mock(returncode=0),
+                ) as run:
+                    self.assertTrue(
+                        legacy._terminate_private_setup_wineserver(wine, prefix))
+                self.assertEqual(run.call_count, 2)
+                self.assertEqual([c.args[0] for c in run.call_args_list],
+                                 [[str(server), "-k"], [str(server), "-w"]])
+                self.assertTrue(all(
+                    c.kwargs["env"]["WINEPREFIX"] == str(prefix)
+                    and c.kwargs["cwd"] == prefix
+                    and c.kwargs["timeout"] == 18
+                    and c.kwargs["stdout"] == subprocess.DEVNULL
+                    and c.kwargs["stderr"] == subprocess.DEVNULL
+                    for c in run.call_args_list))
+                with mock.patch.object(legacy.subprocess, "run") as run:
+                    self.assertFalse(
+                        legacy._terminate_private_setup_wineserver(
+                            wine, root / "not-the-test-prefix"))
+                    self.assertFalse(
+                        legacy._terminate_private_setup_wineserver(
+                            wine, prefix.parent.parent / prefix.name))
+                    run.assert_not_called()
+
+    def test_disposable_wineserver_fallback_requires_both_kill_and_wait(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            engine = root / "isolated-engine" / "bin"
+            engine.mkdir(parents=True)
+            wine = engine / "wine"
+            server = engine / "wineserver"
+            for exe in (wine, server):
+                exe.write_bytes(b"fixture")
+                exe.chmod(0o755)
+            prefix = root / "netfx40-msxml3-prefix"
+            (prefix / "drive_c").mkdir(parents=True)
+            (prefix / "system.reg").touch()
+            (prefix / ".swcompat-netfx481-disposable").touch()
+            with mock.patch.dict(os.environ, {"RUNNER_TEMP": td}):
+                with mock.patch.object(
+                    legacy.subprocess, "run",
+                    side_effect=[mock.Mock(returncode=0),
+                                 subprocess.TimeoutExpired("wineserver", 18)],
+                ) as run:
+                    self.assertFalse(
+                        legacy._terminate_private_setup_wineserver(wine, prefix))
+                self.assertEqual(run.call_count, 2)
+                (prefix / ".swcompat-netfx481-disposable").unlink()
+                with mock.patch.object(legacy.subprocess, "run") as run:
+                    self.assertFalse(
+                        legacy._terminate_private_setup_wineserver(wine, prefix))
+                    run.assert_not_called()
+
+    def test_detached_installer_pipe_can_close_after_prefix_server_kill(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            wine, prefix, _, launcher, _, _ = self.fixture(root)
+            proc = mock.Mock(pid=23120, wait=mock.Mock(return_value=0))
+            reader = mock.Mock()
+            # Finished Win32 wrapper, detached Wine child still holds stderr.
+            # Only killing the marked prefix's server closes the final writer.
+            reader.is_alive.side_effect = [True, True, False, False]
+            with (
+                mock.patch.object(legacy.subprocess, "Popen", return_value=proc),
+                mock.patch.object(legacy.threading, "Thread", return_value=reader),
+                mock.patch.object(legacy, "_terminate_private_setup_group",
+                                  return_value=True) as group,
+                mock.patch.object(legacy, "_terminate_private_setup_wineserver",
+                                  return_value=True) as server,
+            ):
+                result = legacy._run_traced(
+                    wine, prefix, launcher, ["SYNTHETIC"], timeout=30)
+            group.assert_called_once_with(proc)
+            server.assert_called_once_with(wine, prefix)
+            self.assertEqual(result["setup_cleanup"], "PREFIX_REAPED")
+            self.assertEqual(result["status"], "BAD_REPORT")
+            self.assertIn(mock.call(timeout=10), reader.join.call_args_list)
+
+    def test_failed_prefix_server_cleanup_still_blocks_all_next_probes(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            wine, prefix, _, launcher, _, _ = self.fixture(root)
+            proc = mock.Mock(pid=23121, wait=mock.Mock(
+                side_effect=subprocess.TimeoutExpired("Wine", 30)))
+            reader = mock.Mock()
+            reader.is_alive.return_value = True
+            with (
+                mock.patch.object(legacy.subprocess, "Popen", return_value=proc),
+                mock.patch.object(legacy.threading, "Thread", return_value=reader),
+                mock.patch.object(legacy, "_terminate_private_setup_group",
+                                  return_value=True),
+                mock.patch.object(legacy, "_terminate_private_setup_wineserver",
+                                  return_value=False) as server,
+            ):
+                result = legacy._run_traced(
+                    wine, prefix, launcher, ["SYNTHETIC"], timeout=30)
+            server.assert_called_once_with(wine, prefix)
+            self.assertEqual(result["status"], "TIMEOUT")
+            self.assertEqual(result["setup_cleanup"], "UNVERIFIED")
+
     def test_unclear_cleanup_blocks_all_further_wine_and_clr_probes(self):
         with TemporaryDirectory() as td:
             root = Path(td)
