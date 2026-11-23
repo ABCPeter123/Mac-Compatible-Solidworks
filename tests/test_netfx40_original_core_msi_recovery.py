@@ -121,6 +121,51 @@ class OriginalCoreMSITests(unittest.TestCase):
             self.assertFalse(core.valid_log({
                 "status": "SCANNED", "action": "secret script", "errors": []}))
 
+    def test_actual_extraction_branch_count_no_longer_blocks_signed_core(self):
+        # The genuine run 44990034092 reported 17 dirs and 74 file
+        # entries. The old scanner rejected even a directory with >16
+        # immediate children, without ever trying the original MSI.
+        with tempfile.TemporaryDirectory() as td:
+            args = _synthetic_fixture(Path(td))
+            prefix = args[1]
+            found = _core_media(prefix)
+            root = prefix / "drive_c" / core.EXTRACT_FOLDER
+            for idx in range(17):
+                folder = root / f"original-extract-branch-{idx:02d}"
+                folder.mkdir()
+                for num in range(4):
+                    (folder / f"original-extra-{num}.dat").write_bytes(b"original placeholder")
+            self.assertEqual(len(list(root.rglob("*.dat"))), 68)
+            result, status = core._original_core(prefix)
+            self.assertEqual(result, found)
+            self.assertEqual(status, "VERIFIED_EXTRACTED_CORE")
+
+    def test_nested_original_core_can_be_found_beyond_old_depth_limit(self):
+        with tempfile.TemporaryDirectory() as td:
+            args = _synthetic_fixture(Path(td))
+            prefix = args[1]
+            root = prefix / "drive_c" / core.EXTRACT_FOLDER
+            subdir = root
+            for idx in range(7):
+                subdir = subdir / f"level-{idx}"
+            subdir.mkdir(parents=True)
+            package = subdir / "netfx_Core_x64.msi"
+            package.write_bytes(core.OLE_SIGNATURE + bytes(4096))
+            (subdir / "netfx_Core.mzz").write_bytes(bytes(128 * 1024))
+            self.assertEqual(core._original_core(prefix),
+                             (package, "VERIFIED_EXTRACTED_CORE"))
+
+    def test_excessive_original_extraction_fanout_fails_with_fixed_status(self):
+        with tempfile.TemporaryDirectory() as td:
+            args = _synthetic_fixture(Path(td))
+            prefix = args[1]
+            _core_media(prefix)
+            root = prefix / "drive_c" / core.EXTRACT_FOLDER
+            for idx in range(core.MAX_BRANCH + 1):
+                (root / f"branch-{idx:03d}").mkdir()
+            self.assertEqual(core._original_core(prefix),
+                             (None, "SCAN_BRANCH_LIMIT"))
+
     def test_no_original_msi_if_first_setup_worked_or_not_1603(self):
         with tempfile.TemporaryDirectory() as td:
             args = list(_synthetic_fixture(Path(td)))
