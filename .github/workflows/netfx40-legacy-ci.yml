@@ -259,6 +259,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_prerequisite.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_prefix_readiness.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_original_core_msi_recovery.py' -v
+          python -m unittest discover -s tests -p 'test_netfx40_adaptive_native_ngen.py' -v
           python -m unittest discover -s tests -p 'test_netfx48_native_ngen_drain.py' -v
           python -m unittest discover -s tests -p 'test_netfx48_ngen_wine_trace.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_msxml3_restart.py' -v
