@@ -134,7 +134,9 @@ def _execute(wine: Path, prefix: Path, executable: Path, *,
                 code = process.wait(timeout=TIMEOUT)
             else:
                 remaining = TIMEOUT
-                previous_growth = 0
+                # Snapshot the current architecture's counter so earlier
+                # processes cannot earn this NGen invocation a grace period.
+                previous_growth = progress_count() if extend_if_progress else 0
                 extensions = 0
                 while remaining > 0:
                     interval = min(SAMPLE_INTERVAL, remaining)
