@@ -195,13 +195,14 @@ class OriginalNGenPreflightTests(unittest.TestCase):
             self.assertFalse(report["ready"])
 
     def _synthetic_adaptive_wait(self, growth_on: set[int],
-                                 complete_after: int | None = None):
+                                 complete_after: int | None = None,
+                                 initial_growth: int = 0):
         """Use a fake Microsoft process; never invoke Wine or vendor media."""
         with TemporaryDirectory() as td:
             root = Path(td)
             wine, prefix, _ = self.fixture(root)
             count = 0
-            growth = 0
+            growth = initial_growth
             def sample():
                 nonlocal count, growth
                 count += 1
@@ -231,6 +232,11 @@ class OriginalNGenPreflightTests(unittest.TestCase):
         self.assertEqual((result, samples, waits), ("TIMED_OUT", 3, 3))
         result, samples, waits = self._synthetic_adaptive_wait({1})
         self.assertEqual((result, samples, waits), ("TIMED_OUT", 6, 6))
+
+    def test_existing_other_architecture_growth_does_not_earn_grace(self):
+        result, samples, waits = self._synthetic_adaptive_wait(
+            set(), initial_growth=7)
+        self.assertEqual((result, samples, waits), ("TIMED_OUT", 3, 3))
 
     def test_adaptive_ngen_can_finish_during_first_progress_grace(self):
         result, samples, waits = self._synthetic_adaptive_wait(
