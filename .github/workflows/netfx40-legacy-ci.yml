@@ -1351,6 +1351,7 @@ jobs:
             --native40-report build/netfx40-msxml3-restart.json \
             --output build/netfx40-core-path-ngen-drain.json \
             --observe-wine-failures \
+            --extend-if-progress \
             --agree-disposable-prefix
       - name: Reject combining host-provenance-only with any 4.8 installer experiment
         if: inputs.host_provenance_only && (inputs.try_48_intermediate || inputs.try_48_direct || inputs.try_48_msi)
