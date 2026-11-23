@@ -5,6 +5,11 @@ name: One-shot Wiage original Microsoft .NET4 x64 core MSI after setup 1603
 # Wiage runs left working Microsoft CLR4 after a long setup timeout. Test
 # whether installing the ORIGINAL unmodified x64 core MSI directly from the
 # same hash-pinned official Microsoft /x extraction can recover the former.
+# Run 44990034092 proved original Microsoft setup MSI 1603 with CLR absent,
+# and extraction of 6 original OLE MSIs. Its direct-Core control stopped
+# BEFORE msiexec because the private candidate walk rejected the 17-directory
+# genuine extraction layout with SCAN_LIMIT. Retest with a finite branch
+# allowance, deeper discovery and unchanged trusted package checks.
 # This is a narrow diagnostic, not full .NET4/4.8/4.8.1/SOLIDWORKS support.
 # Never fake a registry Release or bypass a Microsoft licensing requirement.
 on:
