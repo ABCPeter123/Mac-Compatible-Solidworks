@@ -194,6 +194,69 @@ class OriginalNGenPreflightTests(unittest.TestCase):
             self.assertTrue(ngen.valid(report))
             self.assertFalse(report["ready"])
 
+    def _synthetic_adaptive_wait(self, growth_on: set[int],
+                                 complete_after: int | None = None,
+                                 initial_growth: int = 0):
+        """Use a fake Microsoft process; never invoke Wine or vendor media."""
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            wine, prefix, _ = self.fixture(root)
+            count = 0
+            growth = initial_growth
+            def sample():
+                nonlocal count, growth
+                count += 1
+                if count in growth_on:
+                    growth += 1
+            def wait(*, timeout):
+                self.assertEqual(timeout, 60)
+                if complete_after is not None and count >= complete_after:
+                    return 0
+                raise subprocess.TimeoutExpired("original-ngen", timeout)
+            proc = mock.Mock(wait=mock.Mock(side_effect=wait))
+            with (mock.patch.object(ngen.subprocess, "Popen",
+                                    return_value=proc) as start,
+                  mock.patch.object(ngen, "_terminate_group") as terminate):
+                result, trace = ngen._execute(
+                    wine, prefix, root / "ngen.exe", progress=sample,
+                    progress_count=lambda: growth, extend_if_progress=True)
+            self.assertEqual(trace, ngen.trace_blank())
+            self.assertEqual(start.call_count, 1)
+            self.assertEqual(start.call_args.kwargs["env"]["WINEDLLOVERRIDES"],
+                             "mscoree=n;clr=n")
+            self.assertEqual(terminate.call_count, int(result == "TIMED_OUT"))
+            return result, count, proc.wait.call_count
+
+    def test_adaptive_ngen_grace_requires_actual_growth_in_first_180_seconds(self):
+        result, samples, waits = self._synthetic_adaptive_wait(set())
+        self.assertEqual((result, samples, waits), ("TIMED_OUT", 3, 3))
+        result, samples, waits = self._synthetic_adaptive_wait({1})
+        self.assertEqual((result, samples, waits), ("TIMED_OUT", 6, 6))
+
+    def test_existing_other_architecture_growth_does_not_earn_grace(self):
+        result, samples, waits = self._synthetic_adaptive_wait(
+            set(), initial_growth=7)
+        self.assertEqual((result, samples, waits), ("TIMED_OUT", 3, 3))
+
+    def test_adaptive_ngen_can_finish_during_first_progress_grace(self):
+        result, samples, waits = self._synthetic_adaptive_wait(
+            {1, 2}, complete_after=4)
+        self.assertEqual((result, samples, waits), ("SUCCESS", 4, 5))
+
+    def test_adaptive_ngen_cannot_exceed_540_seconds_even_when_growing(self):
+        result, samples, waits = self._synthetic_adaptive_wait(set(range(1, 20)))
+        self.assertEqual((result, samples, waits), ("TIMED_OUT", 9, 9))
+
+    def test_adaptive_ngen_refuses_missing_growth_observer(self):
+        with TemporaryDirectory() as td:
+            wine, prefix, _ = self.fixture(Path(td))
+            with mock.patch.object(ngen.subprocess, "Popen") as start:
+                with self.assertRaises(ValueError):
+                    ngen._execute(wine, prefix, Path(td) / "ngen.exe",
+                                  progress=lambda: None,
+                                  extend_if_progress=True)
+                start.assert_not_called()
+
     def test_private_wine_seh_trace_on_timed_out_x64_is_safe_enum_only(self):
         with TemporaryDirectory() as td:
             root = Path(td)
@@ -224,6 +287,21 @@ class OriginalNGenPreflightTests(unittest.TestCase):
             self.assertTrue(ngen.valid(report))
             self.assertNotIn("PRIVATE", str(report))
             self.assertNotIn("0xPRIVATE", str(report))
+
+    def test_adaptive_grace_enabled_only_in_original_clr4_control(self):
+        workflow = (Path(__file__).resolve().parents[1] /
+                    ".github/workflows/netfx40-legacy-ci.yml").read_text()
+        diagnostic = workflow.split(
+            "- name: Drain authentic CLR4 NGen when original x64 and x86 "
+            "managed code survived restart", 1)[1].split(
+            "- name: Reject combining host-provenance-only", 1)[0]
+        signed_msi = workflow.split(
+            "- name: Drain genuine original Microsoft CLR4 NGen x64 and x86 "
+            "queues before signed 4.8 MSI", 1)[1].split(
+            "- name: Extract authenticated original .NET 4.8", 1)[0]
+        self.assertIn("--extend-if-progress", diagnostic)
+        self.assertIn("--observe-wine-failures", diagnostic)
+        self.assertNotIn("--extend-if-progress", signed_msi)
 
     def test_stack_diagnostic_cannot_run_without_real_wiage_msi_guard(self):
         workflow = (Path(__file__).resolve().parents[1] /
