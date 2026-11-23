@@ -1654,6 +1654,15 @@ jobs:
                   for key in ("status", "action"):
                       out.write(f"original40_core_msi_log_{key}: **{log[key]}**\n\n")
                   out.write(f"original40_core_msi_log_errors: **{','.join(log['errors'])}**\n\n")
+                  wine_log = original_core["wine_msi"]
+                  from scripts.netfx40_wine_msi_errors import validate as valid_wine
+                  assert valid_wine(wine_log)
+                  for key in ("status", "first_failed_action",
+                              "first_failed_script_phase", "first_install_failed_action",
+                              "nonstandard_name_hint", "msi_error_lines"):
+                      out.write(f"original40_core_wine_{key}: **{wine_log[key]}**\n\n")
+                  out.write(f"original40_core_wine_classes: **{','.join(wine_log['classes'])}**\n\n")
+                  out.write(f"original40_core_wine_service_actions: **{','.join(wine_log['service_action_failures'])}**\n\n")
               core_ngen_path = Path("build/netfx40-core-path-ngen-drain.json")
               if core_ngen_path.is_file():
                   from scripts.netfx48_native_ngen_drain import valid as valid_drain

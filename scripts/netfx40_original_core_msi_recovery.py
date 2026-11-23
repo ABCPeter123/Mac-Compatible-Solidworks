@@ -24,6 +24,10 @@ from scripts.netfx40_offline_extract import (
     EXTRACT_FOLDER, OLE_SIGNATURE, validate as valid_extract,
 )
 from scripts.netfx40_to_48_signed_msi import private_run
+from scripts.netfx40_wine_msi_errors import (
+    empty as empty_wine_errors, parse as parse_wine_errors,
+    validate as valid_wine_errors,
+)
 from scripts.netfx481_payload_audit import snapshot
 from scripts.netfx481_trial import probe, wineboot_restart, validate_prefix
 from scripts.netfx481_clr_load import run as load_clr
@@ -107,7 +111,7 @@ def private_log(prefix: Path) -> dict:
 def blank() -> dict:
     return {
         "status": "NOT_RUN", "media": "NOT_RUN", "install": "NOT_RUN",
-        "msi_log": blank_log(),
+        "msi_log": blank_log(), "wine_msi": empty_wine_errors(),
         "restart": "NOT_RUN", "clr64_added": False, "loader": "NOT_RUN",
         "native_only_managed": "NOT_RUN", "core_msi_candidate": False,
         "framework40_installed": False, "framework48_installed": False,
@@ -118,7 +122,7 @@ def blank() -> dict:
 def valid(r: object) -> bool:
     if type(r) is not dict or set(r) != set(blank()):
         return False
-    if (not valid_log(r["msi_log"])
+    if (not valid_log(r["msi_log"]) or not valid_wine_errors(r["wine_msi"])
             or r["status"] not in STATES or r["media"] not in MEDIA
             or r["install"] not in INSTALL or r["restart"] not in RESTART
             or r["loader"] not in LOADER
@@ -133,6 +137,7 @@ def valid(r: object) -> bool:
         return r == blank()
     if r["status"] != "MEASURED":
         return (r["msi_log"] == blank_log()
+                and r["wine_msi"] == empty_wine_errors()
                 and r["install"] == r["restart"] == "NOT_RUN"
                 and r["loader"] == r["native_only_managed"] == "NOT_RUN"
                 and not r["clr64_added"] and not r["core_msi_candidate"]
@@ -143,6 +148,7 @@ def valid(r: object) -> bool:
         return False
     if r["install"] == "TIMED_OUT_CLEANUP_DENIED":
         return (r["msi_log"] == blank_log()
+                and r["wine_msi"] == empty_wine_errors()
                 and r["restart"] == r["loader"] == r["native_only_managed"] == "NOT_RUN"
                 and not r["clr64_added"] and not r["core_msi_candidate"])
     expected = (
@@ -264,18 +270,28 @@ def inspect(wine: Path, prefix: Path, original: Path, core_extract: dict,
     env = os.environ.copy()
     env.update({
         "WINEPREFIX": str(prefix), "WINEARCH": "win64",
-        "WINEDEBUG": "-all", "WINEDLLOVERRIDES": "fusion=b",
+        "WINEDEBUG": "err+msi", "WINEDLLOVERRIDES": "fusion=b",
     })
     # The original MSI executable and package are untouched; the isolated
     # output file and all original logs stay inside the runner's prefix.
+    wine_errors = empty_wine_errors()
+
+    def classify_private_errors(raw: bytes) -> None:
+        nonlocal wine_errors
+        # Only fixed, privacy-safe Wine MSI failure categories leave the runner.
+        # Raw Wine output and original Microsoft paths never enter the report.
+        wine_errors = parse_wine_errors(raw)
+
     install = private_run(
         [str(wine), "msiexec.exe", "/i", windows_core,
          "/qn", "/norestart", "EXTUI=1", "/L*v", LOG_WINDOWS],
-        env, prefix, TIMEOUT,
+        env, prefix, TIMEOUT, on_diagnostic=classify_private_errors,
     )
     result = {**blank(), "status": "MEASURED",
-              "media": "VERIFIED_EXTRACTED_CORE", "install": install}
+              "media": "VERIFIED_EXTRACTED_CORE", "install": install,
+              "wine_msi": wine_errors}
     if install == "TIMED_OUT_CLEANUP_DENIED":
+        result["wine_msi"] = empty_wine_errors()
         assert valid(result)
         return result
     result["msi_log"] = private_log(prefix)

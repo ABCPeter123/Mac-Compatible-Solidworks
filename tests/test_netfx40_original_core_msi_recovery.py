@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
 
 from scripts import netfx40_original_core_msi_recovery as core
+from scripts.netfx40_to_48_signed_msi import private_run
 
 
 def _synthetic_fixture(root: Path):
@@ -68,6 +70,7 @@ class OriginalCoreMSITests(unittest.TestCase):
         self.assertFalse(core.valid(dict(core.blank(), framework48_installed=True)))
         self.assertFalse(core.valid(dict(core.blank(), native_only_managed="C:/private")))
         self.assertFalse(core.valid(dict(core.blank(), core_msi_candidate=True)))
+        self.assertFalse(core.valid(dict(core.blank(), wine_msi={"secret": "leak"})))
         expected = dict(core.blank(), status="MEASURED",
                         media="VERIFIED_EXTRACTED_CORE", install="SUCCESS",
                         restart="COMPLETED", clr64_added=True,
@@ -197,12 +200,14 @@ class OriginalCoreMSITests(unittest.TestCase):
             args = _synthetic_fixture(Path(td))
             _core_media(args[1])
             seen = []
-            def launch(cmd, env, cwd, timeout):
+            def launch(cmd, env, cwd, timeout, *, on_diagnostic):
                 seen.append((cmd, env, cwd, timeout))
                 self.assertEqual(cmd[1:3], ["msiexec.exe", "/i"])
                 self.assertEqual(cmd[3], r"C:\\swcompat-netfx40-original-extract\\netfx_Core_x64.msi")
                 self.assertEqual(cmd[-5:], ["/qn", "/norestart", "EXTUI=1", "/L*v", core.LOG_WINDOWS])
                 self.assertEqual(env["WINEDLLOVERRIDES"], "fusion=b")
+                self.assertEqual(env["WINEDEBUG"], "err+msi")
+                on_diagnostic(b"0007:err:msi:ready_media cabinet not found netfx_Core.mzz private-location\\n")
                 self.assertEqual(cwd, args[1])
                 self.assertEqual(timeout, 420)
                 return "EXIT_NONZERO"
@@ -218,6 +223,9 @@ class OriginalCoreMSITests(unittest.TestCase):
             self.assertEqual(len(seen), 1)
             self.assertEqual(result["status"], "MEASURED")
             self.assertEqual(result["install"], "EXIT_NONZERO")
+            self.assertIn("CABINET_MEDIA_MISSING", result["wine_msi"]["classes"])
+            self.assertIn("NETFX_CORE_CAB_MISSING", result["wine_msi"]["classes"])
+            self.assertNotIn("private-location", str(result))
             self.assertFalse(result["core_msi_candidate"])
             self.assertTrue(core.valid(result))
 
@@ -244,6 +252,18 @@ class OriginalCoreMSITests(unittest.TestCase):
             self.assertFalse(result["framework48_installed"])
             self.assertEqual(result["native_only_managed"], "PASS")
             self.assertTrue(core.valid(result))
+
+    def test_private_run_reads_bounded_diagnostics_only_after_process_exit(self):
+        with tempfile.TemporaryDirectory() as td:
+            received = []
+            env = os.environ.copy()
+            status = private_run(
+                [sys.executable, "-c",
+                 "import sys; sys.stderr.write(\u0027synthetic private Wine marker\\n\u0027)"],
+                env, Path(td), 30, on_diagnostic=received.append,
+            )
+            self.assertEqual(status, "SUCCESS")
+            self.assertEqual(received, [b"synthetic private Wine marker\n"])
 
     def test_unclean_timeout_never_runs_more_wine_commands(self):
         with tempfile.TemporaryDirectory() as td:
