@@ -40,6 +40,8 @@ PATHS = {
     "x86": ("Framework", "PE_I386"),
 }
 TIMEOUT = 180
+PROGRESS_GRACE_SECONDS = 180
+MAX_PROGRESS_EXTENSIONS = 2  # Never exceed 540 seconds per architecture.
 
 
 def blank() -> dict:
@@ -100,13 +102,17 @@ def _ngen(prefix: Path, architecture: str) -> tuple[Path, str]:
 
 def _execute(wine: Path, prefix: Path, executable: Path, *,
              observe_wine_failures: bool = False,
-             progress: Callable[[], None] | None = None) -> tuple[str, dict]:
+             progress: Callable[[], None] | None = None,
+             progress_count: Callable[[], int] | None = None,
+             extend_if_progress: bool = False) -> tuple[str, dict]:
     """Execute the *original* NGen; retain Wine diagnostics privately.
 
     Only err-level Wine channels are selected. Vendor stdout is discarded,
     native stderr is never returned, and its anonymous temporary file is
     removed upon return. No Windows error addresses or command lines escape.
     """
+    if extend_if_progress and (progress is None or progress_count is None):
+        raise ValueError("NGen grace requires verified progress sampling")
     env = os.environ.copy()
     env.update({
         "WINEPREFIX": str(prefix), "WINEARCH": "win64",
@@ -128,6 +134,8 @@ def _execute(wine: Path, prefix: Path, executable: Path, *,
                 code = process.wait(timeout=TIMEOUT)
             else:
                 remaining = TIMEOUT
+                previous_growth = 0
+                extensions = 0
                 while remaining > 0:
                     interval = min(SAMPLE_INTERVAL, remaining)
                     try:
@@ -137,7 +145,19 @@ def _execute(wine: Path, prefix: Path, executable: Path, *,
                         remaining -= interval
                         progress()  # NGen log sizes only; original text is private
                         if remaining <= 0:
-                            raise
+                            # A queue that actually grew during THIS budget
+                            # earns one 180s grace interval, at most twice.
+                            # A log that stays unchanged cannot keep extending
+                            # a hung original ngen.exe indefinitely.
+                            grown = progress_count() if extend_if_progress else 0
+                            if (extend_if_progress
+                                    and extensions < MAX_PROGRESS_EXTENSIONS
+                                    and grown > previous_growth):
+                                previous_growth = grown
+                                extensions += 1
+                                remaining = PROGRESS_GRACE_SECONDS
+                            else:
+                                raise
             status = "SUCCESS" if code == 0 else "EXIT_NONZERO"
         except subprocess.TimeoutExpired:
             try:
@@ -151,7 +171,10 @@ def _execute(wine: Path, prefix: Path, executable: Path, *,
 
 
 def inspect(wine: Path, prefix: Path, native40: dict, *,
-            observe_wine_failures: bool = False) -> dict:
+            observe_wine_failures: bool = False,
+            extend_if_progress: bool = False) -> dict:
+    if type(extend_if_progress) is not bool:
+        raise ValueError("Adaptive NGen grace opt-in must be boolean")
     if type(observe_wine_failures) is not bool:
         raise ValueError("Wine trace opt-in must be boolean")
     if os.name == "nt" or prefix.is_symlink() or wine.is_symlink():
@@ -177,7 +200,10 @@ def inspect(wine: Path, prefix: Path, native40: dict, *,
         if status == "SUCCESS":
             result[arch], result["wine_trace"][arch] = _execute(
                 wine, prefix, executable, observe_wine_failures=observe_wine_failures,
-                progress=progress.sample)
+                progress=progress.sample,
+                progress_count=lambda arch=arch: progress.report[
+                    arch + "_growth_windows"],
+                extend_if_progress=extend_if_progress)
             # If process-group cleanup was denied, do not access its live
             # logs again or execute another original Wine command.
             if result[arch] != "TIMED_OUT_CLEANUP_DENIED":
@@ -199,6 +225,8 @@ def main(argv: list[str] | None = None) -> int:
     for key in ("wine", "prefix", "native40-report", "output"):
         parser.add_argument("--" + key, type=Path, required=True)
     parser.add_argument("--observe-wine-failures", action="store_true")
+    parser.add_argument("--extend-if-progress", action="store_true",
+                        help="Allow at most 2 extra 180s waits only on log growth")
     parser.add_argument("--agree-disposable-prefix", required=True,
                         action="store_true")
     args = parser.parse_args(argv)
@@ -206,7 +234,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("NGen report must remain outside disposable Wine prefix")
     report = inspect(args.wine, args.prefix,
                      json.loads(args.native40_report.read_text(encoding="ascii")),
-                     observe_wine_failures=args.observe_wine_failures)
+                     observe_wine_failures=args.observe_wine_failures,
+                     extend_if_progress=args.extend_if_progress)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, sort_keys=True), encoding="ascii")
     for key in ("status", "x64", "x86", "ready", "wine_trace", "ngen_progress"):
