@@ -1,5 +1,10 @@
 name: One-shot Wiage original Microsoft .NET4 x64 core MSI after setup 1603
 
+# Run 45214487841: after scoped cleanup, the original .NET4 bootstrapper
+# again returned MSI 1603 with CLR absent, and direct Core x64 MSI returned
+# nonzero with FILE_NOT_FOUND and SERVICE_MISSING in its private MSI log.
+# Capture Wine's actual failed script action and cabinet/service diagnostics
+# from the same original unmodified MSI run before selecting a compatibility fix.
 # Run 45205577127: original CLR4 persisted and x64 Microsoft NGen timed
 # out after 180s, despite 64MiB host stack, with no SEH crash and changing
 # native-image queue logs. The original installer wrapper hit its own 330s
