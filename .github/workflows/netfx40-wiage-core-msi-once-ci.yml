@@ -1,5 +1,11 @@
 name: One-shot Wiage original Microsoft .NET4 x64 core MSI after setup 1603
 
+# Run 45245248757 (initial attempt): extended NGen run was cancelled
+# without retrievable Apple Silicon step logs or a published CLR4 report;
+# this is not evidence that native NGen failed or completed. Isolate each
+# authentic Core MSI/NGen trial from short-run CI cancellation and permit
+# up to 55m job time for both architecture budgets after original setup.
+# A job retry also remains active; do not infer its result from this comment.
 # Run 45235666305: prefix-specific wineserver cleanup succeeded after the
 # genuine .NET4 setup timeout; original Microsoft CLR4 persisted after restart
 # and native-only managed code passed. Direct Core MSI correctly skipped.
