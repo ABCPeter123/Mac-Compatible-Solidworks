@@ -32,7 +32,9 @@ from swcompat.wine_paths import windows_media_path
 STATES = {"NOT_RUN", "MEASURED", "SKIPPED_ALREADY_NATIVE",
           "SKIPPED_NOT_1603", "BLOCKED_MEDIA"}
 MEDIA = {"NOT_RUN", "VERIFIED_EXTRACTED_CORE", "NOT_FOUND", "MULTIPLE",
-         "BAD_OLE", "COMPANION_MISSING", "UNSAFE", "SCAN_LIMIT"}
+         "BAD_OLE", "COMPANION_MISSING", "UNSAFE", "SCAN_LIMIT",
+         "SCAN_DEPTH_LIMIT", "SCAN_DIR_LIMIT", "SCAN_FILE_LIMIT",
+         "SCAN_BRANCH_LIMIT"}
 INSTALL = {"NOT_RUN", "SUCCESS", "EXIT_NONZERO", "START_FAILED",
            "TIMED_OUT", "TIMED_OUT_CLEANUP_DENIED"}
 RESTART = {"NOT_RUN", "COMPLETED", "TIMED_OUT", "EXIT_NONZERO", "START_FAILED"}
@@ -40,9 +42,16 @@ LOADER = {"NOT_RUN", "NOT_REQUESTED", "NOT_FOUND", "LINKED",
           "LOAD_FAILED", "LOADED", "NOT_VERIFIED"}
 MANAGED = {"NOT_RUN", "PASS", "FAIL", "NOT_VERIFIED"}
 TIMEOUT = 420
-MAX_DIRS = 30
-MAX_FILES = 160
-MAX_DEPTH = 5
+# The authentic /x result has already reported 17 directories, 74 files,
+# and a partial scan with the older 4-level census. A recovery probe must
+# search that genuine tree rather than reject it because its diagnostic
+# limits were tighter than the Microsoft extractor's layout.
+# Keep finite, explicit caps with no symlink traversal or original filenames
+# in public reports. This does not lower any original media validation.
+MAX_DIRS = 128
+MAX_FILES = 1024
+MAX_DEPTH = 12
+MAX_BRANCH = 48
 MAX_MSI = 200 * 1024 * 1024
 LOG_NAME = "msi0c0e.log"
 LOG_WINDOWS = r"C:\swcompat-netfx40-original-extract\msi0c0e.log"
@@ -163,24 +172,24 @@ def _original_core(prefix: Path) -> tuple[Path | None, str]:
     for parent, dirs, names in os.walk(root, followlinks=False):
         count_dirs += 1
         if count_dirs > MAX_DIRS:
-            return None, "SCAN_LIMIT"
+            return None, "SCAN_DIR_LIMIT"
         here = Path(parent)
         if here.is_symlink():
             return None, "UNSAFE"
         if len(here.relative_to(root).parts) >= MAX_DEPTH:
             if dirs:
-                return None, "SCAN_LIMIT"
+                return None, "SCAN_DEPTH_LIMIT"
             dirs.clear()
         else:
-            if len(dirs) > 16:
-                return None, "SCAN_LIMIT"
+            if len(dirs) > MAX_BRANCH:
+                return None, "SCAN_BRANCH_LIMIT"
             if any((here / n).is_symlink() for n in dirs):
                 return None, "UNSAFE"
             dirs.sort()
         for name in sorted(names):
             count_files += 1
             if count_files > MAX_FILES:
-                return None, "SCAN_LIMIT"
+                return None, "SCAN_FILE_LIMIT"
             if name.casefold() != "netfx_core_x64.msi":
                 continue
             candidate = here / name
