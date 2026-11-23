@@ -1,0 +1,53 @@
+name: One-shot authenticated Wiage .NET 4.8 MSI after progress-drained CLR4 NGen
+
+# Authentic run 45245248757 (retry 2) proved x64 and x86 Microsoft CLR4
+# ngen.exe executeQueuedItems both SUCCESS on Apple Silicon Wiage 11.13.
+# The original CLR4 survived a Wine restart and ran native-only managed code.
+# An earlier signed 4.8 x64 MSI/patch attempt stalled during custom-action
+# NGen servicing. This one-shot tests the documented prerequisite on the
+# SAME authenticated, disposable prefix, using only original Microsoft NGen,
+# MSI and MSP from hash-verified original Microsoft media.
+#
+# NGen may receive up to two 180-second grace windows, each only if its
+# original private log grew during the preceding window. 540s absolute
+# maximum PER architecture, 420s original signed MSI budget and 55m job cap.
+# A failed x64 or x86 NGen stops BEFORE any original 4.8 MSI operation.
+# Genuine original signed MSI+MSP success, installed CLR, registry and
+# managed runtime verification must all pass before any .NET 4.8.1 upgrade.
+# Never export vendor media or logs, forge Release, or suppress MSI actions.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netfx48-wiage-ngen-progress-msi-once-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: original-wiage-progress-ngen-before-signed-48-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  original-progress-ngen-signed-msi:
+    name: Genuine CLR4 NGen progress drain then original signed 4.8 MSI and MSP
+    uses: ./.github/workflows/netfx40-legacy-ci.yml
+    with:
+      wine_baseline: 'wiage-11.13'
+      use_macos26_runner: true
+      host_provenance_only: false
+      win7_setup: false
+      try_wow64_managed: false
+      try_wow64_faults: false
+      try_40_core_msi_recovery: false
+      probe_native40_ngen_if_ready: false
+      try_48_direct: false
+      try_48_intermediate: false
+      try_48_payload_host: false
+      try_48_msi: true
+      drain_native40_ngen: true
+      ngen_host_stack64: true
+      progress_gated_native40_ngen: true
+      signed_msi_timeout_seconds: 420
+      prepare_48_assembly_cache: true
+      pause_native_ngen_queue: false
