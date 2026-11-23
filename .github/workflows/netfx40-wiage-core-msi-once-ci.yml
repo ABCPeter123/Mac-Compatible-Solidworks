@@ -1,5 +1,12 @@
 name: One-shot Wiage original Microsoft .NET4 x64 core MSI after setup 1603
 
+# Run 45235666305: prefix-specific wineserver cleanup succeeded after the
+# genuine .NET4 setup timeout; original Microsoft CLR4 persisted after restart
+# and native-only managed code passed. Direct Core MSI correctly skipped.
+# Genuine x64 NGen timed out at 180s even though the private original queue
+# log grew during 3 of 4 samples, with no Wine SEH fault signature. Retest
+# with at most two 180s grace windows, granted only on fresh NGen log growth.
+# Do not modify vendor binaries or run .NET4.8/4.8.1 in this diagnostic arm.
 # Run 45221756975: original .NET4 setup reached its 330s wait and the
 # traced Unix process group could not prove all inherited Wine stderr writers
 # had exited (installer_cleanup=UNVERIFIED). No direct Core MSI or NGen ran.
