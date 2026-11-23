@@ -235,12 +235,13 @@ permissions:
 # Apple Silicon installer experiments when a new commit queued a follow-up.
 # Fast non-MSI checks retain the existing cancel-in-progress behavior.
 concurrency:
-  # Original signed MSI and genuine x86 runtime controls can last 10+ minutes.
+  # Original signed MSI, authentic Core MSI and genuine CLR NGen controls
+  # can run long. Do not cancel them when unrelated branch CI starts.
   # Keep experiments from distinct commits separated, even when the reusable
   # workflow is called on the same branch and shares the workflow name.
   # Preserve existing cancellation behavior for ordinary non-experiment CI.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.try_wow64_managed && format('wow64-{0}-{1}-{2}-{3}', github.sha, inputs.wine_baseline, inputs.use_macos26_runner, inputs.wow64_host_stack64) || (inputs.try_48_msi || inputs.try_48_direct || inputs.try_48_intermediate) && github.sha || 'shared' }}
-  cancel-in-progress: ${{ !inputs.try_48_msi && !inputs.try_48_direct && !inputs.try_48_intermediate && !inputs.try_wow64_managed }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.try_wow64_managed && format('wow64-{0}-{1}-{2}-{3}', github.sha, inputs.wine_baseline, inputs.use_macos26_runner, inputs.wow64_host_stack64) || inputs.try_40_core_msi_recovery && format('core-{0}-{1}-{2}', github.sha, inputs.probe_native40_ngen_if_ready, inputs.use_macos26_runner) || (inputs.try_48_msi || inputs.try_48_direct || inputs.try_48_intermediate) && github.sha || 'shared' }}
+  cancel-in-progress: ${{ !inputs.try_48_msi && !inputs.try_48_direct && !inputs.try_48_intermediate && !inputs.try_wow64_managed && !inputs.try_40_core_msi_recovery }}
 
 jobs:
   absolute-path-regressions:
@@ -820,7 +821,7 @@ jobs:
     name: Try genuine .NET 4.0 after msxml3 in a fresh Apple Silicon Wine prefix
     needs: [authentic-netfx40-windows, absolute-path-regressions]
     runs-on: ${{ inputs.use_macos26_runner && 'macos-26' || 'macos-15' }}
-    timeout-minutes: ${{ inputs.try_48_msi && inputs.signed_msi_timeout_seconds == 1200 && 55 || 35 }}
+    timeout-minutes: ${{ inputs.try_48_msi && inputs.signed_msi_timeout_seconds == 1200 && 55 || inputs.try_40_core_msi_recovery && inputs.probe_native40_ngen_if_ready && 55 || 35 }}
     env:
       SWCOMPAT_TRY_48_INTERMEDIATE: ${{ inputs.try_48_intermediate }}
       SWCOMPAT_TRY_48_DIRECT: ${{ inputs.try_48_direct }}
