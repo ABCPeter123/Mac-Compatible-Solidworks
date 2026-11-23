@@ -263,7 +263,7 @@ class OriginalCoreMSITests(unittest.TestCase):
                 env, Path(td), 30, on_diagnostic=received.append,
             )
             self.assertEqual(status, "SUCCESS")
-            self.assertEqual(received, [b"synthetic private Wine marker\\n"])
+            self.assertEqual(received, [b"synthetic private Wine marker\n"])
 
     def test_unclean_timeout_never_runs_more_wine_commands(self):
         with tempfile.TemporaryDirectory() as td:
