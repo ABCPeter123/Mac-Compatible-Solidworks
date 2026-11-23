@@ -270,8 +270,13 @@ def verify_extracted_media(root: Path) -> str:
 
 
 def private_run(args: list[str], env: dict[str, str], cwd: Path,
-                timeout: int, *, progress: Callable[[], None] | None = None) -> str:
-    """No untrusted installer bytes, paths, exit text or original stdout in CI."""
+                timeout: int, *, progress: Callable[[], None] | None = None,
+                on_diagnostic: Callable[[bytes], None] | None = None) -> str:
+    """Keep vendor output private; optionally classify bounded captured bytes.
+
+    The callback runs only after the installer is reaped and never receives
+    more than 8 MiB plus one truncation sentinel byte. Nothing is printed.
+    """
     with tempfile.TemporaryFile() as sink:
         try:
             child = subprocess.Popen(
@@ -311,7 +316,13 @@ def private_run(args: list[str], env: dict[str, str], cwd: Path,
                 except (OSError, subprocess.TimeoutExpired):
                     pass
                 return "TIMED_OUT_CLEANUP_DENIED"
+            if on_diagnostic is not None:
+                sink.seek(0)
+                on_diagnostic(sink.read(8 * 1024 * 1024 + 1))
             return "TIMED_OUT"
+        if on_diagnostic is not None:
+            sink.seek(0)
+            on_diagnostic(sink.read(8 * 1024 * 1024 + 1))
     return "SUCCESS" if code == 0 else "EXIT_NONZERO"
 
 
