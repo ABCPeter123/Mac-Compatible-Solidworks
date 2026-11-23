@@ -55,7 +55,8 @@ MONO_STATES = {"NOT_RUN", "REMOVED", "MONO_NOT_REGISTERED", "INVENTORY_FAILED",
                "REMOVE_FAILED", "VERIFY_FAILED"}
 SELF_STATES = {"NOT_RUN", "PASS", "NO_OUTPUT", "BAD_REPORT", "PROCESS_FAILED", "TIMEOUT"}
 REG_STATES = {"NOT_RUN", "NOT_NEEDED", "CLEARED", "QUERY_FAILED", "DELETE_FAILED", "VERIFY_FAILED"}
-SETUP_CLEANUP = {"NOT_REQUESTED", "NOT_STARTED", "PIPE_CLOSED", "GROUP_REAPED", "UNVERIFIED"}
+SETUP_CLEANUP = {"NOT_REQUESTED", "NOT_STARTED", "PIPE_CLOSED", "GROUP_REAPED",
+                 "PREFIX_REAPED", "UNVERIFIED"}
 
 
 def verify_media(installer: Path) -> None:
@@ -177,6 +178,47 @@ def _terminate_private_setup_group(process: subprocess.Popen) -> bool:
     return True
 
 
+def _terminate_private_setup_wineserver(wine: Path, prefix: Path) -> bool:
+    """Stop only the original installer's marked, ephemeral CI Wine prefix.
+
+    Wine client descendants can escape the immediate Unix process group but
+    remain attached to the same Wine server. The server's -k and -w switches
+    use WINEPREFIX to select an isolated Wine session. Never touch a generic,
+    persistent, user-owned, symlinked or non-CI prefix; never run wineboot or
+    another installer during uncertain cleanup.
+    """
+    runner = os.environ.get("RUNNER_TEMP")
+    if os.name == "nt" or not runner:
+        return False
+    try:
+        root = Path(runner)
+        validate_prefix(prefix)
+        server = wine.with_name("wineserver")
+        if (root.is_symlink() or not root.is_dir()
+                or prefix.is_symlink() or prefix.name != "netfx40-msxml3-prefix"
+                or prefix.parent.resolve() != root.resolve()
+                or any(x.is_symlink() for x in (
+                    prefix / ".swcompat-netfx481-disposable",
+                    prefix / "system.reg", prefix / "drive_c"))
+                or wine.is_symlink() or not wine.is_file()
+                or not server.is_file() or not os.access(server, os.X_OK)
+                or not server.resolve(strict=True).is_relative_to(
+                    wine.resolve(strict=True).parent.parent)):
+            return False
+        env = _env(prefix)
+        for argument in ("-k", "-w"):
+            result = subprocess.run(
+                [str(server), argument], cwd=prefix, env=env,
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, timeout=18, check=False,
+            )
+            if result.returncode != 0:
+                return False
+        return True
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return False
+
+
 def _run_traced(wine: Path, prefix: Path, fixture: Path,
                 arguments: list[str], *, setup: bool = True, timeout: int = 75,
                 store_private: bool = False) -> dict:
@@ -251,8 +293,17 @@ def _run_traced(wine: Path, prefix: Path, fixture: Path,
                 signalled = _terminate_private_setup_group(process)
                 # Group SIGKILL is bounded; wait for actual pipe closure.
                 reader.join(timeout=5)
-                cleanup = ("GROUP_REAPED" if signalled and not reader.is_alive()
-                           else "UNVERIFIED")
+                if signalled and not reader.is_alive():
+                    cleanup = "GROUP_REAPED"
+                else:
+                    # Only when the isolated Unix group did not close its
+                    # pipe, stop the *same disposable prefix* Wine server.
+                    # Detached Wine clients can survive outside that group.
+                    stopped = _terminate_private_setup_wineserver(wine, prefix)
+                    if stopped:
+                        reader.join(timeout=10)
+                    cleanup = ("PREFIX_REAPED" if stopped and not reader.is_alive()
+                               else "UNVERIFIED")
             else:
                 cleanup = "PIPE_CLOSED"
             if reader.is_alive():

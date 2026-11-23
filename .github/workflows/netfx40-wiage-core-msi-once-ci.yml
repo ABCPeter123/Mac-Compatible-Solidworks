@@ -1,5 +1,11 @@
 name: One-shot Wiage original Microsoft .NET4 x64 core MSI after setup 1603
 
+# Run 45221756975: original .NET4 setup reached its 330s wait and the
+# traced Unix process group could not prove all inherited Wine stderr writers
+# had exited (installer_cleanup=UNVERIFIED). No direct Core MSI or NGen ran.
+# Retry after marking the exact ephemeral CI prefix and using Wine's own
+# prefix-selected wineserver -k/-w to reap clients that escape the Unix group.
+# If that also fails, block without running further Microsoft MSI or CLR.
 # Run 45214487841: after scoped cleanup, the original .NET4 bootstrapper
 # again returned MSI 1603 with CLR absent, and direct Core x64 MSI returned
 # nonzero with FILE_NOT_FOUND and SERVICE_MISSING in its private MSI log.
