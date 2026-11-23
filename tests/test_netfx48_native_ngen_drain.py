@@ -318,7 +318,14 @@ class OriginalNGenPreflightTests(unittest.TestCase):
             "- name: Extract authenticated original .NET 4.8", 1)[0]
         self.assertIn("--extend-if-progress", diagnostic)
         self.assertIn("--observe-wine-failures", diagnostic)
-        self.assertNotIn("--extend-if-progress", signed_msi)
+        self.assertIn(
+            'SWCOMPAT_NGEN_PROGRESS_GRACE: ${{ inputs.progress_gated_native40_ngen }}',
+            signed_msi)
+        self.assertIn('if [[ "$SWCOMPAT_NGEN_PROGRESS_GRACE" == "true" ]]; then',
+                      signed_msi)
+        self.assertIn("trace_flags+=(--extend-if-progress)", signed_msi)
+        self.assertNotIn("--extend-if-progress", signed_msi.split(
+            'if [[ "$SWCOMPAT_NGEN_PROGRESS_GRACE" == "true" ]]; then', 1)[0])
 
     def test_stack_diagnostic_cannot_run_without_real_wiage_msi_guard(self):
         workflow = (Path(__file__).resolve().parents[1] /

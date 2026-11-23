@@ -143,7 +143,7 @@ class SignedMSIGates(TestCase):
             self.assertIn(expected, source)
         self.assertNotIn("actions/upload-artifact", source)
         legacy = LEGACY.read_text(encoding="utf-8")
-        self.assertIn("timeout-minutes: ${{ inputs.try_48_msi && inputs.signed_msi_timeout_seconds == 1200 && 55 || inputs.try_40_core_msi_recovery && inputs.probe_native40_ngen_if_ready && 55 || 35 }}", legacy)
+        self.assertIn("timeout-minutes: ${{ inputs.progress_gated_native40_ngen && 55 || inputs.try_48_msi && inputs.signed_msi_timeout_seconds == 1200 && 55 || inputs.try_40_core_msi_recovery && inputs.probe_native40_ngen_if_ready && 55 || 35 }}", legacy)
         self.assertIn('--msi-timeout-seconds "$SWCOMPAT_SIGNED_MSI_TIMEOUT"', legacy)
         self.assertIn("signed_msi_timeout_seconds:", legacy)
         self.assertIn('"msi_timeout_seconds"', legacy)
