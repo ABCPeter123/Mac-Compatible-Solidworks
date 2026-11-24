@@ -69,7 +69,8 @@ class OriginalSignedMSITests(TestCase):
                 ngen.write_bytes(b"MZ" + b"x" * 4998)
         def fake_run(cmd, env, cwd, timeout, *, progress=None,
                      on_exit_code=None, on_diagnostic=None,
-                     on_stderr=None, stderr_tail=False):
+                     on_stderr=None, on_stderr_report=None,
+                     stderr_tail=False):
             calls.append((cmd, timeout))
             # macOS /var resolves through /private/var. Test fixture identity
             # by its exact self-authored executable name, not a symlink alias.
@@ -84,9 +85,10 @@ class OriginalSignedMSITests(TestCase):
                     return "SUCCESS"
                 if cmd[2] == "--apply-original-msp":
                     self.assertEqual(env.get("WINEDEBUG"), "-all,trace+msi,err+msi")
-                    self.assertTrue(stderr_tail)
-                    if on_stderr is not None:
-                        on_stderr(wine_error_bytes or b"")
+                    self.assertIsNone(on_stderr)
+                    if on_stderr_report is not None:
+                        on_stderr_report(p.classify_msp_wine_trace(
+                            wine_error_bytes or b""))
                     if patch_log_bytes is not None:
                         log = paths[1] / "drive_c" / p.TARGET / p.PATCH_PRIVATE_LOG
                         log.write_bytes(patch_log_bytes)
@@ -387,6 +389,33 @@ class OriginalSignedMSITests(TestCase):
             self.assertEqual(len(observed[0]), 8 * 1024 * 1024)
             self.assertTrue(observed[0].endswith(b"LAST_MSIACTION" + bytes([10])))
             self.assertNotIn(b"PRIVATE_WINE_PATH", observed[0])
+
+    def test_private_full_msp_stream_survives_verbose_trace_noise(self):
+        with TemporaryDirectory() as td:
+            results = []
+            synthetic = (
+                b'0001:trace:msi:ACTION_PerformAction Performing action '
+                b'(L"CA_Regtlb_Synthetic_amd64")\n'
+                b'0001:err:msi:ITERATE_Actions Execution halted, '
+                b'action L"InstallFinalize" returned 1603\n'
+            )
+            code = (
+                "import sys; "
+                f"sys.stderr.buffer.write(bytes.fromhex('{synthetic.hex()}')); "
+                "sys.stderr.buffer.write(b'X' * (9 * 1024 * 1024))"
+            )
+            status = p.private_run(
+                [sys.executable, "-c", code], dict(os.environ),
+                Path(td), 20, on_stderr_report=results.append)
+            self.assertEqual(status, "SUCCESS")
+            self.assertEqual(len(results), 1)
+            self.assertTrue(p.valid_msp_wine_trace(results[0]))
+            self.assertEqual(results[0]["status"], "CLASSIFIED")
+            self.assertIn("MSI_UNATTRIBUTED_SCRIPT_ENGINE",
+                          results[0]["signals"])
+            self.assertIn("MSI_TRACE_NONFINAL_TYPE_LIBRARY",
+                          results[0]["signals"])
+            self.assertNotIn("Synthetic", str(results))
 
     def test_patch_exit_callback_observes_only_host_process_code(self):
         with TemporaryDirectory() as td:

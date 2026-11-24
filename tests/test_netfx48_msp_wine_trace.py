@@ -1,5 +1,6 @@
 """Synthetic private Wine MSI trace fixtures. NEVER upload actual vendor logs."""
-from unittest import TestCase
+from io import BytesIO
+from unittest import TestCase, mock
 
 from scripts import netfx48_msp_wine_trace as t
 
@@ -219,6 +220,60 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
             self.assertNotIn(private, str(report))
         no_error = t.classify(raw.split(b'0011:err:msi:')[0])
         self.assertEqual(no_error, t.blank("NO_MSI_ERRORS"))
+
+    def test_stream_scans_early_original_msp_error_beyond_eight_megabyte_tail(self):
+        early = (
+            b'0001:trace:msi:ACTION_PerformAction Performing action '
+            b'(L"CA_Regtlb_PRIVATE_amd64")\n'
+            b'0001:err:msi:ITERATE_Actions Execution halted, '
+            b'action L"InstallFinalize" returned 1603\n'
+        )
+        raw = early + b'X' * (9 * 1024 * 1024)
+        self.assertEqual(t.classify(raw), t.blank("TOO_LARGE"))
+        report = t.classify_stream(BytesIO(raw))
+        self.assertEqual(report["status"], "CLASSIFIED")
+        self.assertEqual(report["signals"], [
+            "MSI_TRACE_NONFINAL_TYPE_LIBRARY",
+            "MSI_UNATTRIBUTED_SCRIPT_ENGINE",
+        ])
+        self.assertTrue(t.valid(report))
+        self.assertNotIn("PRIVATE", str(report))
+
+    def test_post_failure_rollback_trace_cannot_replace_original_action_context(self):
+        stream = (
+            b'0011:trace:msi:ACTION_PerformAction Performing action '
+            b'(L"CA_Regtlb_private_amd64")\n'
+            b'0011:trace:msi:ACTION_PerformAction Performing action '
+            b'(L"InstallFinalize")\n'
+            b'0011:err:msi:ITERATE_Actions Execution halted, '
+            b'action L"InstallFinalize" returned 1603\n'
+            b'0011:trace:msi:ACTION_PerformAction Performing action '
+            b'(L"CA_Ngen_Rollback_private")\n'
+        )
+        result = t.classify_stream(BytesIO(stream))
+        self.assertIn("MSI_TRACE_NONFINAL_TYPE_LIBRARY", result["signals"])
+        self.assertNotIn("MSI_TRACE_NONFINAL_NGEN", result["signals"])
+        self.assertTrue(t.valid(result))
+        self.assertNotIn("private", str(result))
+
+    def test_stream_matches_bounded_bytes_and_skips_oversized_private_lines(self):
+        valid = (
+            b'0001:err:msi:execute_script Execution of script 0 halted; '
+            b'action L"CA_Ngen_X64" returned 1603\n'
+        )
+        self.assertEqual(t.classify_stream(BytesIO(valid)), t.classify(valid))
+        too_long = (
+            b'0001:err:msi:execute_script Execution of script 0 halted; '
+            + b'PRIVATE' * 3000 + b'\n'
+        )
+        self.assertEqual(
+            t.classify_stream(BytesIO(too_long)),
+            t.blank("NO_MSI_ERRORS"))
+        with mock.patch.object(t, "MAX_STREAM_BYTES", 128):
+            self.assertEqual(
+                t.classify_stream(BytesIO(valid + b'X' * 200)),
+                t.blank("TOO_LARGE"))
+        self.assertTrue(t.valid(t.classify_stream(BytesIO(b''))))
 
     def test_no_wine_msi_errors_is_not_framework_success(self):
         for raw in (b"", b'0000:fixme:msi:install_secret PRIVATE\n',

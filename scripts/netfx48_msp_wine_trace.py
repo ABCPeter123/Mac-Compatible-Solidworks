@@ -8,9 +8,14 @@ successful Microsoft servicing, nor proof that a named action is causal.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
+from typing import BinaryIO
 
 MAX_BYTES = 8 * 1024 * 1024
 MAX_LINE = 8192
+# Bounded disk-backed scan of verbose trace+msi, never an in-memory vendor log.
+MAX_STREAM_BYTES = 512 * 1024 * 1024
+MAX_STREAM_LINES = 4_000_000
 ERROR = re.compile(r"(?i)(?:^|\s)(?:[0-9a-f]{4,8}:)?err:msi:([a-z_]+)\b")
 HALTED = re.compile(
     r'(?i)Execution of script\s+([0-9]{1,2})\s+halted;\s+'
@@ -163,26 +168,20 @@ def _return(raw: str) -> str:
     return "WIN32_1603" if raw == "1603" else "OTHER_NONZERO"
 
 
-def classify(raw: bytes) -> dict:
-    if type(raw) is not bytes:
-        return blank("UNREADABLE")
-    if len(raw) > MAX_BYTES:
-        return blank("TOO_LARGE")
-    try:
-        text = raw.decode("utf-8", errors="replace")
-    except (ValueError, UnicodeError):
-        return blank("UNREADABLE")
+def _classify_lines(lines: Iterable[str]) -> dict:
+    """Summarize Wine MSI data into a fixed-category report, without raw output."""
     report = blank("CLASSIFIED")
     signals: set[str] = set()
     unattributed_sources: set[str] = set()
     last_nonfinal: str | None = None
     finalize_seen = False
+    terminal_error_seen = False
     found = False
-    for line in text.splitlines():
+    for line in lines:
         if len(line) > MAX_LINE:
             continue
         observed = TRACE_ACTION.search(line)
-        if observed:
+        if observed and not terminal_error_seen:
             name = observed.group(1)
             if name in FINAL_ACTIONS:
                 finalize_seen = True
@@ -192,6 +191,12 @@ def classify(raw: bytes) -> dict:
         if match is None:
             continue
         found = True
+        # Preserve action context BEFORE the first terminal MSI failure.
+        # Rollback actions after this point must not replace that context.
+        if (not terminal_error_seen and
+                (match.group(1).casefold() in {"iterate_actions", "execute_script"}
+                 and ("Execution halted" in line or "halted;" in line))):
+            terminal_error_seen = True
         unattributed_sources.add(_unattributed_source(match.group(1)))
         for signal, rule in SIGNAL_MATCH.items():
             if rule.search(line):
@@ -224,3 +229,63 @@ def classify(raw: bytes) -> dict:
     report["signals"] = sorted(signals)
     assert valid(report)
     return report
+
+
+def classify(raw: bytes) -> dict:
+    """Classify small synthetic or captured Wine MSI stderr byte buffers."""
+    if type(raw) is not bytes:
+        return blank("UNREADABLE")
+    if len(raw) > MAX_BYTES:
+        return blank("TOO_LARGE")
+    try:
+        content = raw.decode("utf-8", errors="replace")
+    except (ValueError, UnicodeError):
+        return blank("UNREADABLE")
+    return _classify_lines(content.splitlines())
+
+
+def classify_stream(stream: BinaryIO) -> dict:
+    """Classify a complete private on-disk Wine MSI trace in constant memory.
+
+    A tail sample can miss the original script error when trace+msi emits
+    millions of messages. Scan the entire *private* stream, with hard byte,
+    line and per-line caps. No vendor bytes, actions, commands, SIDs or paths
+    survive this call: only the allowlisted report is returned.
+    """
+    total_bytes = 0
+    total_lines = 0
+
+    def safe_lines() -> Iterable[str]:
+        nonlocal total_bytes, total_lines
+        while True:
+            line = stream.readline(MAX_LINE + 1)
+            if not line:
+                return
+            if type(line) is not bytes:
+                raise ValueError("Original MSP trace is not bytes")
+            total_bytes += len(line)
+            total_lines += 1
+            if total_bytes > MAX_STREAM_BYTES or total_lines > MAX_STREAM_LINES:
+                raise OverflowError("Private original MSP trace exceeds scan budget")
+            if len(line) > MAX_LINE:
+                # Discard the *whole* oversized physical line, never classify
+                # a suffix that might contain only a private command payload.
+                while not line.endswith(b"\n"):
+                    line = stream.readline(MAX_LINE + 1)
+                    if not line:
+                        return
+                    if type(line) is not bytes:
+                        raise ValueError("Original MSP trace is not bytes")
+                    total_bytes += len(line)
+                    if total_bytes > MAX_STREAM_BYTES:
+                        raise OverflowError("Private original MSP trace exceeds scan budget")
+                continue
+            yield line.decode("utf-8", errors="replace")
+
+    try:
+        stream.seek(0)
+        return _classify_lines(safe_lines())
+    except OverflowError:
+        return blank("TOO_LARGE")
+    except (OSError, ValueError, UnicodeError, TypeError):
+        return blank("UNREADABLE")

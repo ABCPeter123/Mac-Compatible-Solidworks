@@ -280,17 +280,19 @@ class Signed48AfterProgressNgenTests(unittest.TestCase):
         for item in (
             '"WINEDEBUG": "-all,trace+msi,err+msi"',
             '"--apply-original-msp"',
-            "on_stderr=wine_errors.append",
-            "classify_msp_wine_trace(",
+            "on_stderr_report=wine_reports.append",
+            "classify_msp_wine_trace_stream(stderr_sink)",
             "patch_wine_trace = blank_msp_wine_trace()",
             'valid_msp_wine_trace(result["patch_wine_trace"])',
-            "stderr_sink if on_stderr is not None",
+            "or on_stderr_report is not None",
         ):
             with self.subTest(item=item):
                 self.assertIn(item, native)
         self.assertIn("signed_msi_48_patch_wine_trace_{field}", workflow)
         self.assertIn("assert valid_wine_msp_trace", workflow)
         self.assertIn("MAX_BYTES = 8 * 1024 * 1024", wine_trace)
+        self.assertIn("MAX_STREAM_BYTES = 512 * 1024 * 1024", wine_trace)
+        self.assertIn("def classify_stream(", wine_trace)
         self.assertIn("INSTALL_SCRIPT_HALTED", wine_trace)
         self.assertIn("ROLLBACK_SCRIPT_HALTED", wine_trace)
         self.assertNotIn("print(", wine_trace)
