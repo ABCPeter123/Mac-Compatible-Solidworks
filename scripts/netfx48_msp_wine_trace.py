@@ -14,14 +14,17 @@ MAX_LINE = 8192
 ERROR = re.compile(r"(?i)(?:^|\s)(?:[0-9a-f]{4,8}:)?err:msi:([a-z_]+)\b")
 HALTED = re.compile(
     r'(?i)Execution of script\s+([0-9]{1,2})\s+halted;\s+'
-    r'action\s+L"([^"\r\n]{1,384})"\s+returned\s+([0-9]{1,5})'
+    # Wine's deferred MSI actions can embed quoted executable and .tlb
+    # paths inside L"[...]CA_Regtlb_amd64". Reject newlines and bound
+    # length, but find the FINAL quote before returned, not the first.
+    r'action\s+L"([^\r\n]{1,2048})"\s+returned\s+([0-9]{1,5})\b'
 )
 ACTION_CLASS = {
     "NGEN": re.compile(r"(?i)ngen|native.?image|optimiza"),
     "SERVICE": re.compile(r"(?i)service|schedservice|msdtc|svcctl"),
     "ASSEMBLY": re.compile(r"(?i)assembl|fusion|gac"),
     "CABINET": re.compile(r"(?i)cabinet|extract_cabinet|installfiles"),
-    "REGISTRY": re.compile(r"(?i)registr|regsvcs|regasm|regsvr|typelib"),
+    "REGISTRY": re.compile(r"(?i)registr|regsvcs|regasm|regsvr|regtlb|typelib"),
     "CUSTOM": re.compile(r"(?i)custom.?action|(?:^|[^a-z])ca_"),
 }
 ACTIONS = set(ACTION_CLASS) | {"UNKNOWN", "NOT_SEEN"}
@@ -93,8 +96,14 @@ def valid(report: object) -> bool:
 
 
 def _action(raw: str) -> str:
+    # Deferred CA actions may be represented as [private payload]CA_Name.
+    # Classify ONLY the real trailing action identifier. A path/command
+    # inside brackets is neither an MSI action nor causal evidence.
+    name = raw.rsplit("]", 1)[-1] if "]" in raw else raw
+    if not name:
+        return "UNKNOWN"
     return next((kind for kind, rule in ACTION_CLASS.items()
-                 if rule.search(raw)), "UNKNOWN")
+                 if rule.search(name)), "UNKNOWN")
 
 
 def _return(raw: str) -> str:
