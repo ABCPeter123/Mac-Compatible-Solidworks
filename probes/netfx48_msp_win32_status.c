@@ -16,13 +16,77 @@
 #define _UNICODE
 #endif
 #include <windows.h>
+#include <msi.h>
+#include <msiquery.h>
 #include <stdio.h>
 #include <wchar.h>
 #include <string.h>
 
 #define PATCH_PATH L"C:\\swcompat-original-netfx48-msi\\netfx_Patch_x64.msp"
+#define ORIGINAL_MSI_PATH L"C:\\swcompat-original-netfx48-msi\\netfx_Full_x64.msi"
 #define PRIVATE_LOG L"C:\\swcompat-original-netfx48-msi\\netfx48-msp-patch-private.log"
 #define CAPACITY 2048
+
+/* Read-only Windows Installer registration probe. Never print product GUID,
+ * package path, vendor text or MSI property values. A successful /i process
+ * exit does NOT by itself prove that a patch can find a registered product. */
+static void report_registration(const char *status,
+                                const char *product, const char *cache) {
+    printf("SWCOMPAT_MSI_REG_SCHEMA=1\n");
+    printf("SWCOMPAT_MSI_REG_STATUS=%s\n", status);
+    printf("SWCOMPAT_MSI_REG_PRODUCT=%s\n", product);
+    printf("SWCOMPAT_MSI_REG_CACHE=%s\n", cache);
+    fflush(stdout);
+}
+
+static int probe_registration(void) {
+    MSIHANDLE db = 0, view = 0, record = 0;
+    WCHAR product[80] = {0};
+    WCHAR cache_path[2048] = {0};
+    DWORD length = 79, cache_length = 2047;
+    UINT rc;
+    INSTALLSTATE state;
+    const char *product_state = "UNKNOWN";
+    const char *cache_state = "UNKNOWN";
+
+    rc = MsiOpenDatabaseW(ORIGINAL_MSI_PATH, MSIDBOPEN_READONLY, &db);
+    if (rc != ERROR_SUCCESS) {
+        report_registration("OPEN_FAILED", "UNKNOWN", "UNKNOWN");
+        return 0;
+    }
+    rc = MsiDatabaseOpenViewW(
+        db, L"SELECT `Value` FROM `Property` WHERE `Property`='ProductCode'", &view);
+    if (rc == ERROR_SUCCESS) rc = MsiViewExecute(view, 0);
+    if (rc == ERROR_SUCCESS) rc = MsiViewFetch(view, &record);
+    if (rc == ERROR_SUCCESS) rc = MsiRecordGetStringW(record, 1, product, &length);
+    if (rc != ERROR_SUCCESS || !product[0]) {
+        if (record) MsiCloseHandle(record);
+        if (view) MsiCloseHandle(view);
+        MsiCloseHandle(db);
+        report_registration("QUERY_FAILED", "UNKNOWN", "UNKNOWN");
+        return 0;
+    }
+    state = MsiQueryProductStateW(product);
+    if (state == INSTALLSTATE_DEFAULT) product_state = "INSTALLED";
+    else if (state == INSTALLSTATE_ADVERTISED) product_state = "ADVERTISED";
+    else if (state == INSTALLSTATE_UNKNOWN || state == INSTALLSTATE_ABSENT)
+        product_state = "ABSENT";
+    else product_state = "OTHER";
+
+    rc = MsiGetProductInfoW(product, INSTALLPROPERTY_LOCALPACKAGE,
+                            cache_path, &cache_length);
+    if (rc == ERROR_SUCCESS && cache_length && cache_path[0]) {
+        DWORD attributes = GetFileAttributesW(cache_path);
+        cache_state = (attributes == INVALID_FILE_ATTRIBUTES ||
+                      (attributes & FILE_ATTRIBUTE_DIRECTORY))
+                      ? "MISSING" : "PRESENT";
+    }
+    if (record) MsiCloseHandle(record);
+    if (view) MsiCloseHandle(view);
+    MsiCloseHandle(db);
+    report_registration("OBSERVED", product_state, cache_state);
+    return 0;
+}
 
 static void report(const char *status, DWORD code) {
     printf("SWCOMPAT_MSP_WIN32_SCHEMA=1\n");
@@ -38,6 +102,13 @@ int wmain(int argc, wchar_t **argv) {
     PROCESS_INFORMATION process;
     DWORD rc, code = 0xFFFFFFFFu;
     UINT length;
+    if (argc == 2 && wcscmp(argv[1], L"--selftest-msi-registration") == 0) {
+        report_registration("SELFTEST", "INSTALLED", "PRESENT");
+        return 0;
+    }
+    if (argc == 2 && wcscmp(argv[1], L"--probe-original-msi-registration") == 0) {
+        return probe_registration();
+    }
     if (argc == 2 && wcscmp(argv[1], L"--selftest-1603") == 0) {
         report("SELFTEST", 1603u);
         return 0;
