@@ -31,6 +31,7 @@ class Signed48AfterProgressNgenTests(unittest.TestCase):
             "drain_native40_ngen: true",
             "ngen_host_stack64: true",
             "progress_gated_native40_ngen: true",
+            "retry_growing_native40_ngen_nonzero: true",
             "signed_msi_timeout_seconds: 420",
             "prepare_48_assembly_cache: true",
             "pause_native_ngen_queue: false",
@@ -217,9 +218,16 @@ class Signed48AfterProgressNgenTests(unittest.TestCase):
         caller = CALLER.read_text(encoding="utf-8")
         self.assertEqual(reusable.count(
             "retry_growing_native40_ngen_nonzero:"), 2)
-        # This PR must NOT launch another expensive original Microsoft MSI
-        # while the exact previous-SHA one-shot rerun is queued.
-        self.assertNotIn("retry_growing_native40_ngen_nonzero: true", caller)
+        # Previous previous-SHA attempt 2 was cancelled before native NGen.
+        # This intentional one-shot must exercise exactly the retry opt-in.
+        self.assertEqual(caller.count(
+            "retry_growing_native40_ngen_nonzero: true"), 1)
+        self.assertIn("drain_native40_ngen: true", caller)
+        self.assertIn("progress_gated_native40_ngen: true", caller)
+        self.assertIn("ngen_host_stack64: true", caller)
+        self.assertIn("signed_msp_win32_exit: true", caller)
+        self.assertIn("pause_native_ngen_queue: false", caller)
+        self.assertIn("pause_after_verified_native40_ngen: false", caller)
         guard = reusable.split(
             "- name: Reject NGen one-time progress retry outside isolated "
             "original Microsoft CLR4 servicing", 1)[1].split(

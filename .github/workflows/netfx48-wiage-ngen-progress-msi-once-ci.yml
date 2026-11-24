@@ -1,5 +1,14 @@
 name: One-shot authenticated Wiage .NET 4.8 MSI after progress-drained CLR4 NGen
 
+# Run 45329350922 (attempt 1) did NOT reach original signed MSI/MSP.
+# The genuine original x64 Microsoft NGen preflight returned nonzero after
+# seven positive log-growth windows. Attempt 2 was cancelled before MSI/MSP.
+# PR #250 adds a strict one-time original NGen retry only when a clean
+# nonzero exit followed fresh native-image log growth, with no detected
+# Wine failures. Enable that bounded retry on this authenticated one-shot
+# while leaving x64 and x86 real NGen SUCCESS mandatory. This is necessary
+# to reach the genuine MSP Win32 exit monitor from PR #249. No original
+# Microsoft executables, installer switches or release gates are modified.
 # Run 45316025486: Win10 A/B likewise original signed x64 MSI SUCCESS,
 # native Microsoft CLR4.8 LOADED and managed PASS after restart, but MSP
 # again EXIT_NONZERO, host low byte 67, private NGEN/X64 action category.
@@ -98,6 +107,7 @@ jobs:
       drain_native40_ngen: true
       ngen_host_stack64: true
       progress_gated_native40_ngen: true
+      retry_growing_native40_ngen_nonzero: true
       signed_msi_timeout_seconds: 420
       prepare_48_assembly_cache: true
       pause_native_ngen_queue: false
