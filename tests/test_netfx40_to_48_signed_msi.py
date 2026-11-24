@@ -182,6 +182,26 @@ class OriginalSignedMSITests(TestCase):
             self.assertFalse(p.validate({**result, "patch_exit_lowbyte": 0}))
             self.assertEqual(len(calls), 3)
 
+    def test_original_msp_target_not_found_from_private_engine_status_only(self):
+        with TemporaryDirectory() as td:
+            paths = self.fixture(Path(td))
+            result, calls = self.run_case(
+                paths, patch="EXIT_NONZERO", patch_process_code=106,
+                patch_log_bytes=(
+                    b"MSI (s): MainEngineThread is returning 1642\\n"
+                    b"PRIVATE_ORIGINAL_PATCH_TARGET_INFORMATION\\n"
+                ))
+            self.assertEqual(result["patch"], "EXIT_NONZERO")
+            self.assertEqual(result["patch_exit_lowbyte"], 106)
+            self.assertEqual(result["patch_log"]["errors"],
+                             ["PATCH_TARGET_NOT_FOUND"])
+            self.assertTrue(p.validate(result))
+            self.assertFalse(result["native48_candidate"])
+            self.assertNotIn("PRIVATE_ORIGINAL_PATCH_TARGET_INFORMATION",
+                             str(result))
+            self.assertFalse((paths[1] / "drive_c" / p.TARGET /
+                              p.PATCH_PRIVATE_LOG).exists())
+
     def test_untrusted_msp_lowbyte_and_unrun_patch_report_fail_closed(self):
         clean = p.blank()
         for value in (-1, 256, True, None, [], {}, "1642", "PRIVATE"):
