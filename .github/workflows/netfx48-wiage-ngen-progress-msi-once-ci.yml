@@ -10,6 +10,15 @@ name: One-shot authenticated Wiage .NET 4.8 MSI after progress-drained CLR4 NGen
 # Private original MSP verbose log lacked a failing Return value 3 marker,
 # but classified an NGen/X64 custom-action hint and SERVICE_MISSING. No
 # specific service or NGen operation has been proved to cause the failure.
+# Authenticated attempt 2 of run 45441804424: genuine original CLR4 NGen
+# x64+x86 PASS; original x64 signed MSI SUCCESS; restarted original CLR
+# native-managed PASS; original x64 signed MSP full Win32 1603 persists.
+# Its private err+msi trace had MSI errors but no recognized script action
+# and no fixed known error signal. The preceding NGen/SERVICE hints are not
+# causal evidence. Merged PR #259 now adds bounded Wine internal MSI-source
+# fallback classes, distinct regtlb and custom-action pipe/return signals.
+# Re-run solely to classify authentic MSP errors; no installer mutation,
+# fake service, fake Release, NGen suppression, or acceptance-gate bypass.
 # New original native MSP probe (PR #256) captures separate PRIVATE Wine
 # err+msi stderr and classifies the first forward Wine installer script
 # failure separately from a rollback script error. It emits only fixed
