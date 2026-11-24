@@ -36,6 +36,7 @@ class Signed48AfterProgressNgenTests(unittest.TestCase):
             "pause_native_ngen_queue: false",
             "pause_after_verified_native40_ngen: false",
             "signed_msi_win10_profile: true",
+            "signed_msp_win32_exit: true",
             "cancel-in-progress: false",
         ):
             with self.subTest(expected=expected):
@@ -170,6 +171,46 @@ class Signed48AfterProgressNgenTests(unittest.TestCase):
         self.assertIn('result["patch"] == "SUCCESS"', native)
         self.assertIn('result["native40_persistent"]', native)
         self.assertIn('result["restart"] == "COMPLETED"', native)
+
+    def test_native_msp_full_win32_exit_only_in_authenticated_signed_msi_arm(self):
+        caller = CALLER.read_text(encoding="utf-8")
+        reusable = REUSE.read_text(encoding="utf-8")
+        self.assertIn("signed_msp_win32_exit: true", caller)
+        self.assertEqual(reusable.count("signed_msp_win32_exit:"), 2)
+        guard = reusable.split(
+            "- name: Reject native full Win32 MSP exit probe outside authentic "
+            "original signed Microsoft 4.8", 1)[1].split(
+            "- name: Reject signed .NET 4.8 Win10 profile", 1)[0]
+        for field in (
+            "inputs.signed_msp_win32_exit", "!inputs.signed_msi_win10_profile",
+            "!inputs.progress_gated_native40_ngen", "!inputs.drain_native40_ngen",
+            "!inputs.ngen_host_stack64", "!inputs.try_48_msi",
+            "inputs.host_provenance_only", "inputs.wine_baseline != 'wiage-11.13'",
+            "!inputs.use_macos26_runner", "inputs.pause_native_ngen_queue",
+            "inputs.pause_after_verified_native40_ngen", "inputs.try_48_direct",
+            "inputs.try_48_intermediate", "inputs.try_48_payload_host",
+            "inputs.try_40_core_msi_recovery", "inputs.probe_native40_ngen_if_ready",
+            "inputs.signed_msi_timeout_seconds != 420", "exit 1",
+        ):
+            with self.subTest(field=field):
+                self.assertIn(field, guard)
+        self.assertIn("build/netfx48_msp_win32_status.exe", reusable)
+        self.assertIn("netfx48_msp_win32_status.c", reusable)
+        self.assertIn("SWCOMPAT_MSP_WIN32_EXIT_HEX=00000643", reusable)
+        msi = reusable.split(
+            "- name: Extract authenticated original .NET 4.8 x64 MSI and MSP "
+            "after genuine CLR4.0", 1)[1].split(
+            "- name: Gate 4.8.1 on authenticated original MSI", 1)[0]
+        self.assertIn("SWCOMPAT_MSP_WIN32: ${{ inputs.signed_msp_win32_exit }}", msi)
+        self.assertIn("cache_flags+=(--patch-fixture build/netfx48_msp_win32_status.exe)", msi)
+        self.assertNotIn("REINSTALLMODE=", msi)
+        self.assertNotIn("continue-on-error", msi)
+        native = (ROOT / "scripts/netfx40_to_48_signed_msi.py").read_text()
+        for part in ("parse_win32_patch(", "win32_patch_status(patch_win32)",
+                     "patch_win32_mode", "patch_fixture=a.patch_fixture",
+                     "TIMED_OUT_CLEANUP_DENIED"):
+            with self.subTest(part=part):
+                self.assertIn(part, native)
 
     def test_drain_runs_before_original_msi_and_has_bounded_runtime(self):
         workflow = REUSE.read_text(encoding="utf-8")
