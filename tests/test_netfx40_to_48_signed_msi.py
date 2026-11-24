@@ -393,14 +393,15 @@ class OriginalSignedMSITests(TestCase):
     def test_private_full_msp_stream_survives_verbose_trace_noise(self):
         with TemporaryDirectory() as td:
             results = []
+            synthetic = (
+                b'0001:trace:msi:ACTION_PerformAction Performing action '
+                b'(L"CA_Regtlb_Synthetic_amd64")\n'
+                b'0001:err:msi:ITERATE_Actions Execution halted, '
+                b'action L"InstallFinalize" returned 1603\n'
+            )
             code = (
                 "import sys; "
-                "sys.stderr.buffer.write("
-                "b'0001:trace:msi:ACTION_PerformAction Performing action "
-                "(L\\\"CA_Regtlb_Synthetic_amd64\\\")\\\\n'); "
-                "sys.stderr.buffer.write(b'0001:err:msi:ITERATE_Actions "
-                "Execution halted, action L\\\"InstallFinalize\\\" returned "
-                "1603\\\\n'); "
+                f"sys.stderr.buffer.write(bytes.fromhex('{synthetic.hex()}')); "
                 "sys.stderr.buffer.write(b'X' * (9 * 1024 * 1024))"
             )
             status = p.private_run(
