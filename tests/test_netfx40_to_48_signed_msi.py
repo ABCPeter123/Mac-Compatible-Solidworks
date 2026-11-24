@@ -69,7 +69,10 @@ class OriginalSignedMSITests(TestCase):
         def fake_run(cmd, env, cwd, timeout, *, progress=None,
                      on_exit_code=None, on_diagnostic=None):
             calls.append((cmd, timeout))
-            if native_patch_probe and cmd[1] == str(patch_fixture):
+            # macOS /var resolves through /private/var. Test fixture identity
+            # by its exact self-authored executable name, not a symlink alias.
+            if (native_patch_probe and
+                    Path(cmd[1]).name == "netfx48_msp_win32_status.exe"):
                 if cmd[2] == "--selftest-1603":
                     if on_diagnostic:
                         on_diagnostic(
