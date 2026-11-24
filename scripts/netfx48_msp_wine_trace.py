@@ -40,7 +40,7 @@ SIGNAL_MATCH = {
         r"(?i)\b(?:__wine_msi_call_dll_function|custom_action_server)\b"
     ),
     "MSI_SERVICE_OPERATION_FAILURE": re.compile(
-        r"(?i)\b(?:servicecontrol|serviceconfig|StartServices|InstallServices)\b"
+        r"(?i)(?:servicecontrol|serviceconfig|startservices|installservices|schedservice)"
     ),
     "MSI_PATCH_FAILURE": re.compile(
         r"(?i)\b(?:apply_patch|patching|patch_package)\b"
