@@ -385,7 +385,7 @@ class OriginalSignedMSITests(TestCase):
             self.assertEqual(status, "SUCCESS")
             self.assertEqual(len(observed), 1)
             self.assertEqual(len(observed[0]), 8 * 1024 * 1024)
-            self.assertTrue(observed[0].endswith(b"LAST_MSIACTION\\n"))
+            self.assertTrue(observed[0].endswith(b"LAST_MSIACTION" + bytes([10])))
             self.assertNotIn(b"PRIVATE_WINE_PATH", observed[0])
 
     def test_patch_exit_callback_observes_only_host_process_code(self):
