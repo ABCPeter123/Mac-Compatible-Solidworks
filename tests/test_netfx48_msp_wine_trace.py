@@ -239,6 +239,23 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
         self.assertTrue(t.valid(report))
         self.assertNotIn("PRIVATE", str(report))
 
+    def test_post_failure_rollback_trace_cannot_replace_original_action_context(self):
+        stream = (
+            b'0011:trace:msi:ACTION_PerformAction Performing action '
+            b'(L"CA_Regtlb_private_amd64")\n'
+            b'0011:trace:msi:ACTION_PerformAction Performing action '
+            b'(L"InstallFinalize")\n'
+            b'0011:err:msi:ITERATE_Actions Execution halted, '
+            b'action L"InstallFinalize" returned 1603\n'
+            b'0011:trace:msi:ACTION_PerformAction Performing action '
+            b'(L"CA_Ngen_Rollback_private")\n'
+        )
+        result = t.classify_stream(BytesIO(stream))
+        self.assertIn("MSI_TRACE_NONFINAL_TYPE_LIBRARY", result["signals"])
+        self.assertNotIn("MSI_TRACE_NONFINAL_NGEN", result["signals"])
+        self.assertTrue(t.valid(result))
+        self.assertNotIn("private", str(result))
+
     def test_stream_matches_bounded_bytes_and_skips_oversized_private_lines(self):
         valid = (
             b'0001:err:msi:execute_script Execution of script 0 halted; '
