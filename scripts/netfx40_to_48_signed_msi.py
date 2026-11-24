@@ -22,6 +22,7 @@ from scripts.netfx40_msxml3_restart import validate as valid_native40
 from scripts.netfx48_msp_wine_trace import (
     blank as blank_msp_wine_trace,
     classify as classify_msp_wine_trace,
+    classify_stream as classify_msp_wine_trace_stream,
     valid as valid_msp_wine_trace,
 )
 from scripts.netfx48_msp_win32_exit import (
@@ -335,6 +336,7 @@ def private_run(args: list[str], env: dict[str, str], cwd: Path,
                 timeout: int, *, progress: Callable[[], None] | None = None,
                 on_diagnostic: Callable[[bytes], None] | None = None,
                 on_stderr: Callable[[bytes], None] | None = None,
+                on_stderr_report: Callable[[dict], None] | None = None,
                 stderr_tail: bool = False,
                 on_exit_code: Callable[[int], None] | None = None) -> str:
     """Keep vendor output private; optionally classify bounded captured bytes.
@@ -347,6 +349,9 @@ def private_run(args: list[str], env: dict[str, str], cwd: Path,
     with (tempfile.TemporaryFile() as sink,
           tempfile.TemporaryFile() as stderr_sink):
         def emit_private_stderr() -> None:
+            if on_stderr_report is not None:
+                stderr_sink.seek(0)
+                on_stderr_report(classify_msp_wine_trace_stream(stderr_sink))
             if on_stderr is None:
                 return
             if stderr_tail:
@@ -358,7 +363,8 @@ def private_run(args: list[str], env: dict[str, str], cwd: Path,
         try:
             child = subprocess.Popen(
                 args, env=env, cwd=cwd, stdin=subprocess.DEVNULL,
-                stdout=sink, stderr=(stderr_sink if on_stderr is not None
+                stdout=sink, stderr=(stderr_sink if (on_stderr is not None
+                                 or on_stderr_report is not None)
                                      else sink), start_new_session=True,
             )
         except OSError:
@@ -598,7 +604,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                         # Microsoft msiexec child returned 1603, 1642, etc.
                         # Never interpret the wrapper exit as MSP success.
                         packets: list[bytes] = []
-                        wine_errors: list[bytes] = []
+                        wine_reports: list[dict] = []
                         # Change only Wine's *diagnostic* channel for this
                         # genuine signed MSP, not the original MSI/MSP bytes,
                         # switches, services, native runtime or installation
@@ -609,10 +615,10 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                             [str(wine), str(patch_fixture), "--apply-original-msp"],
                             patch_env, prefix, 420,
                             on_diagnostic=packets.append,
-                            on_stderr=wine_errors.append,
-                            stderr_tail=True)
-                        patch_wine_trace = classify_msp_wine_trace(
-                            wine_errors[-1] if wine_errors else b"")
+                            on_stderr_report=wine_reports.append)
+                        patch_wine_trace = (
+                            wine_reports[-1] if wine_reports
+                            else blank_msp_wine_trace("UNREADABLE"))
                         if host_status in {"TIMED_OUT_PREFIX_REAPED",
                                            "TIMED_OUT_CLEANUP_DENIED"}:
                             patch_win32 = blank_win32_patch(host_status)
