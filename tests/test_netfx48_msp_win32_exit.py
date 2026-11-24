@@ -27,8 +27,8 @@ class NativeOriginalMSPPacketTests(TestCase):
         for code, expected in (
             ("0000066A", "PATCH_TARGET_NOT_FOUND"),
             ("00000643", "MSI_FATAL_ERROR"),
-            ("00000663", "UNKNOWN_PRODUCT"),
-            ("00000663", "UNKNOWN_PRODUCT"),
+            ("00000645", "UNKNOWN_PRODUCT"),
+            ("00000663", "PATCH_PACKAGE_OPEN_FAILED"),
             ("80070424", "OTHER_WIN32_ERROR"),
         ):
             with self.subTest(code=code):
