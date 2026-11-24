@@ -186,6 +186,23 @@ class OriginalSignedMSITests(TestCase):
             self.assertFalse(result["native48_candidate"])
             self.assertFalse(p.validate(dict(result, scm_postflight=result["scm_preflight"])))
 
+    def test_reaped_msi_timeout_allows_read_only_postflight_but_not_patch(self):
+        with TemporaryDirectory() as td:
+            result, calls = self.run_case(
+                self.fixture(Path(td)), scm=True,
+                install="TIMED_OUT_PREFIX_REAPED",
+                changed=True, release="NETFX48_RANGE")
+            self.assertEqual(result["install"], "TIMED_OUT_PREFIX_REAPED")
+            self.assertEqual(result["patch"], "NOT_RUN")
+            self.assertEqual(result["scm_postflight"]["status"], "COMPLETE")
+            self.assertEqual(result["win10"], "APPLIED")
+            self.assertFalse(result["native48_candidate"])
+            self.assertTrue(p.validate(result))
+            self.assertEqual(len([command for command in calls
+                                  if command[0][1] == "msiexec.exe"]), 1)
+            self.assertFalse(p.validate({
+                **result, "native48_candidate": True}))
+
     def test_patch_cleanup_denial_preserves_prior_msi_observation(self):
         with TemporaryDirectory() as td:
             result, _ = self.run_case(
