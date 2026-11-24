@@ -194,9 +194,12 @@ def validate(result: object) -> bool:
             or result["media"] not in MEDIA or result["restart"] not in RESTART
             or not valid_msi_log(result["install_log"])
             or not valid_msi_log(result["patch_log"])
-            or (result["patch_exit_lowbyte"] not in {"NOT_RUN", "UNAVAILABLE"}
-                and (type(result["patch_exit_lowbyte"]) is not int
-                     or not 0 <= result["patch_exit_lowbyte"] <= 255))
+            or not (
+                (type(result["patch_exit_lowbyte"]) is str
+                 and result["patch_exit_lowbyte"] in {"NOT_RUN", "UNAVAILABLE"})
+                or (type(result["patch_exit_lowbyte"]) is int
+                    and 0 <= result["patch_exit_lowbyte"] <= 255)
+            )
             or (result["patch"] == "NOT_RUN"
                 and (result["patch_log"] != blank_msi_log()
                      or result["patch_exit_lowbyte"] != "NOT_RUN"))
