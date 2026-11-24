@@ -19,6 +19,15 @@ name: One-shot authenticated Wiage .NET 4.8 MSI after progress-drained CLR4 NGen
 # fallback classes, distinct regtlb and custom-action pipe/return signals.
 # Re-run solely to classify authentic MSP errors; no installer mutation,
 # fake service, fake Release, NGen suppression, or acceptance-gate bypass.
+# Authenticated run 45469551065: genuine .NET 4.8 signed x64 MSI SUCCESS,
+# original CLR x64 native-only managed PASS after restart, original signed
+# x64 MSP still full Win32 1603. Private err+msi saw only the generic
+# ITERATE_Actions error, with no first forward script action.
+# PR #260 added temporary private trace+msi only around the unchanged
+# original signed MSP and fixed-category classification of last observed
+# non-final MSI action. Stderr classification reads the final bounded 8 MiB;
+# no raw trace, action text, Microsoft binary or private path is exported.
+# An observed trace action is not proof of 1603 causation or MSP success.
 # New original native MSP probe (PR #256) captures separate PRIVATE Wine
 # err+msi stderr and classifies the first forward Wine installer script
 # failure separately from a rollback script error. It emits only fixed
