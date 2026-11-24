@@ -338,6 +338,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx48_scm_service_probe.py' -v
           python -m unittest discover -s tests -p 'test_netfx48_blockif_trace.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_to_48_direct.py' -v
+          python -m unittest discover -s tests -p 'test_netfx48_msi_registration.py' -v
 
   authentic-netfx40-windows:
     name: Authenticate original Microsoft .NET 4.0 and compile CLR probes
@@ -636,11 +637,19 @@ jobs:
           # launching the unchanged original Microsoft /p MSP. This never
           # executes Microsoft installer media on Windows CI.
           $lines = @('@echo off', ('call "' + $vcvars + '"'),
-            'cl /nologo /W4 /O2 /DUNICODE /D_UNICODE /Fe:build\netfx48_msp_win32_status.exe probes\netfx48_msp_win32_status.c',
+            'cl /nologo /W4 /O2 /DUNICODE /D_UNICODE /Fe:build\netfx48_msp_win32_status.exe probes\netfx48_msp_win32_status.c /link msi.lib',
             'exit /b %errorlevel%')
           [System.IO.File]::WriteAllLines((Join-Path (Get-Location) 'build\compile-original-msp-status.cmd'), $lines, [System.Text.Encoding]::ASCII)
           & cmd.exe /d /c build\compile-original-msp-status.cmd
           if ($LASTEXITCODE -ne 0) { throw "Original MSP Win32 exit control compilation failed" }
+          $registrationSelftest = & build\netfx48_msp_win32_status.exe --selftest-msi-registration
+          if ($LASTEXITCODE -ne 0 -or
+              $registrationSelftest -notcontains 'SWCOMPAT_MSI_REG_SCHEMA=1' -or
+              $registrationSelftest -notcontains 'SWCOMPAT_MSI_REG_STATUS=SELFTEST' -or
+              $registrationSelftest -notcontains 'SWCOMPAT_MSI_REG_PRODUCT=INSTALLED' -or
+              $registrationSelftest -notcontains 'SWCOMPAT_MSI_REG_CACHE=PRESENT') {
+            throw "Original MSI read-only registration fixture selftest failed"
+          }
           $mspSelftest = & build\netfx48_msp_win32_status.exe --selftest-1603
           if ($LASTEXITCODE -ne 0 -or
               $mspSelftest -notcontains 'SWCOMPAT_MSP_WIN32_SCHEMA=1' -or

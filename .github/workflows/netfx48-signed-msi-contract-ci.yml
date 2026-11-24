@@ -8,6 +8,7 @@ on:
       - 'scripts/netfx40_to_48_signed_msi.py'
       - 'scripts/netfx40_fresh_prefix_retry.py'
       - 'scripts/netfx48_msp_win32_exit.py'
+      - 'scripts/netfx48_msi_registration.py'
       - 'scripts/netfx48_msp_wine_trace.py'
       - 'probes/netfx48_msp_win32_status.c'
       - 'scripts/netfx48_msi_service_evidence.py'
@@ -16,6 +17,7 @@ on:
       - 'tests/test_netfx40_fresh_prefix_retry.py'
       - 'tests/test_netfx40_fresh_prefix_retry_workflow.py'
       - 'tests/test_netfx48_msp_win32_exit.py'
+      - 'tests/test_netfx48_msi_registration.py'
       - 'tests/test_netfx48_msp_wine_trace.py'
       - 'tests/test_netfx48_signed_msi_workflow.py'
       - '.github/workflows/netfx40-legacy-ci.yml'
@@ -26,6 +28,7 @@ on:
       - 'scripts/netfx40_to_48_signed_msi.py'
       - 'scripts/netfx40_fresh_prefix_retry.py'
       - 'scripts/netfx48_msp_win32_exit.py'
+      - 'scripts/netfx48_msi_registration.py'
       - 'scripts/netfx48_msp_wine_trace.py'
       - 'probes/netfx48_msp_win32_status.c'
       - 'scripts/netfx48_msi_service_evidence.py'
@@ -34,6 +37,7 @@ on:
       - 'tests/test_netfx40_fresh_prefix_retry.py'
       - 'tests/test_netfx40_fresh_prefix_retry_workflow.py'
       - 'tests/test_netfx48_msp_win32_exit.py'
+      - 'tests/test_netfx48_msi_registration.py'
       - 'tests/test_netfx48_msp_wine_trace.py'
       - 'tests/test_netfx48_signed_msi_workflow.py'
       - '.github/workflows/netfx48-signed-msi-contract-ci.yml'
@@ -59,11 +63,19 @@ jobs:
           if (!$vs) { throw "Self-authored MSVC Win32 exit probe cannot be compiled" }
           $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
           $lines = @('@echo off', ('call "' + $vcvars + '"'),
-            'cl /nologo /W4 /WX /O2 /DUNICODE /D_UNICODE /Fe:build\netfx48_msp_win32_status.exe probes\netfx48_msp_win32_status.c',
+            'cl /nologo /W4 /WX /O2 /DUNICODE /D_UNICODE /Fe:build\netfx48_msp_win32_status.exe probes\netfx48_msp_win32_status.c /link msi.lib',
             'exit /b %errorlevel%')
           [System.IO.File]::WriteAllLines((Join-Path (Get-Location) 'build\compile-msp-status.cmd'), $lines, [System.Text.Encoding]::ASCII)
           & cmd.exe /d /c build\compile-msp-status.cmd
           if ($LASTEXITCODE -ne 0) { throw "Win32 MSP probe compilation failed" }
+          $registration = & build\netfx48_msp_win32_status.exe --selftest-msi-registration
+          if ($LASTEXITCODE -ne 0 -or
+              $registration -notcontains 'SWCOMPAT_MSI_REG_SCHEMA=1' -or
+              $registration -notcontains 'SWCOMPAT_MSI_REG_STATUS=SELFTEST' -or
+              $registration -notcontains 'SWCOMPAT_MSI_REG_PRODUCT=INSTALLED' -or
+              $registration -notcontains 'SWCOMPAT_MSI_REG_CACHE=PRESENT') {
+            throw "Read-only MSI product registration fixture selftest failed"
+          }
           $status = & build\netfx48_msp_win32_status.exe --selftest-1603
           if ($LASTEXITCODE -ne 0 -or
               $status -notcontains 'SWCOMPAT_MSP_WIN32_SCHEMA=1' -or
@@ -91,6 +103,7 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_netfx40_fresh_prefix_retry.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx40_fresh_prefix_retry_workflow.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx48_msp_win32_exit.py' -v
+          python3 -m unittest discover -s tests -p 'test_netfx48_msi_registration.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx48_msp_wine_trace.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx48_msi_service_evidence.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx48_signed_msi_workflow.py' -v
