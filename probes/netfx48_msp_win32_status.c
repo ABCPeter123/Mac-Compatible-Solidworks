@@ -9,8 +9,12 @@
  * This is a process-exit probe, NOT a workaround for Windows Installer.
  */
 #define WIN32_LEAN_AND_MEAN
+#ifndef UNICODE
 #define UNICODE
+#endif
+#ifndef _UNICODE
 #define _UNICODE
+#endif
 #include <windows.h>
 #include <stdio.h>
 #include <wchar.h>
