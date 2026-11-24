@@ -46,7 +46,7 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
         )
         result = t.classify(trace)
         self.assertEqual(result["status"], "CLASSIFIED")
-        self.assertEqual(result["first_forward_action"], "REGISTRY")
+        self.assertEqual(result["first_forward_action"], "TYPE_LIBRARY")
         self.assertEqual(result["first_forward_return"], "WIN32_1603")
         self.assertEqual(result["first_rollback_action"], "SERVICE")
         self.assertEqual(result["first_rollback_return"], "WIN32_1603")
@@ -70,7 +70,7 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
             b'CA_Regtlb_amd64" returned 1603\n'
         )
         result = t.classify(raw)
-        self.assertEqual(result["first_forward_action"], "REGISTRY")
+        self.assertEqual(result["first_forward_action"], "TYPE_LIBRARY")
         self.assertNotEqual(result["first_forward_action"], "NGEN")
         self.assertTrue(t.valid(result))
         self.assertNotIn("SECRET", str(result))
@@ -80,6 +80,38 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
         self.assertEqual(no_identifier["first_forward_action"], "UNKNOWN")
         self.assertTrue(t.valid(no_identifier))
 
+    def test_wine_custom_action_pipe_failure_is_reported_without_private_data(self):
+        # A broken Wine MSI custom-action pipe is distinct from the vendor
+        # action that later returns 1603, and from rollback side effects.
+        raw = (
+            b'015c:err:msi:custom_client_thread failed to write to '
+            b'custom action client pipe: 232 PRIVATE_SID\n'
+            b'015c:err:msi:custom_get_thread_return Invalid Return Code 232\n'
+            b'015c:err:msi:execute_script Execution of script 0 halted; '
+            b'action L"CA_Regasm_PRIVATE_GUID" returned 1603\n'
+            b'015c:err:msi:execute_script Execution of script 2 halted; '
+            b'action L"RollbackServiceConfig_PRIVATE_PATH" returned 1603\n'
+        )
+        result = t.classify(raw)
+        self.assertTrue(t.valid(result))
+        self.assertEqual(result["first_forward_action"], "REGISTRY")
+        self.assertEqual(result["first_rollback_action"], "SERVICE")
+        self.assertEqual(result["signals"], [
+            "INSTALL_SCRIPT_HALTED", "MSI_CUSTOM_ACTION_PIPE_FAILURE",
+            "MSI_CUSTOM_ACTION_RETURN_INVALID", "MSI_SERVICE_OPERATION_FAILURE",
+            "ROLLBACK_SCRIPT_HALTED",
+        ])
+        for private in ("PRIVATE_SID", "PRIVATE_GUID", "PRIVATE_PATH"):
+            self.assertNotIn(private, str(result))
+
+    def test_plain_type_library_action_is_distinct_from_other_registry_action(self):
+        raw = (
+            b'015c:err:msi:execute_script Execution of script 0 halted; '
+            b'action L"CA_Regtlb_amd64" returned 1603\n'
+        )
+        self.assertEqual(t.classify(raw)["first_forward_action"], "TYPE_LIBRARY")
+        self.assertTrue(t.valid(t.classify(raw)))
+
     def test_oversize_deferred_action_is_not_fabricated_or_leaked(self):
         oversized = (
             b'003c:err:msi:execute_script Execution of script 0 halted; '
@@ -88,7 +120,7 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
         )
         result = t.classify(oversized)
         self.assertEqual(result["first_forward_action"], "NOT_SEEN")
-        self.assertEqual(result["signals"], [])
+        self.assertEqual(result["signals"], ["MSI_UNATTRIBUTED_SCRIPT_ENGINE"])
         self.assertTrue(t.valid(result))
         self.assertNotIn("PPPP", str(result))
 
@@ -114,8 +146,40 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
         self.assertEqual(report["status"], "CLASSIFIED")
         self.assertEqual(report["first_forward_action"], "NOT_SEEN")
         self.assertEqual(report["first_rollback_action"], "NOT_SEEN")
-        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["signals"], ["MSI_UNATTRIBUTED_SCRIPT_ENGINE"])
         self.assertTrue(t.valid(report))
+
+    def test_unattributed_wine_error_subsystems_stay_fixed_and_private(self):
+        # This is the exact diagnostic gap after an authentic signed MSP
+        # returned full 1603 without a recognized script-0 action.
+        cases = (
+            (b'0011:err:msi:ITERATE_Actions Execution halted, '
+             b'action L"InstallFinalize" returned 1603\n',
+             "MSI_UNATTRIBUTED_SCRIPT_ENGINE"),
+            (b'0011:err:msi:patch_set_offsets private-package-path\n',
+             "MSI_UNATTRIBUTED_PATCH_ENGINE"),
+            (b'0011:err:msi:private_unrecognized PRIVATE_GUID_SID\n',
+             "MSI_UNATTRIBUTED_OTHER"),
+        )
+        for raw, want in cases:
+            with self.subTest(source=want):
+                result = t.classify(raw)
+                self.assertTrue(t.valid(result))
+                self.assertEqual(result["first_forward_action"], "NOT_SEEN")
+                self.assertEqual(result["first_rollback_action"], "NOT_SEEN")
+                self.assertEqual(result["signals"], [want])
+                self.assertNotIn("PRIVATE", str(result))
+                self.assertNotIn("GUID", str(result))
+        # A later finalization cascade must not hide an earlier Wine
+        # subsystem error, and neither is asserted to be the root cause.
+        two = t.classify(
+            b'0011:err:msi:patch_set_offsets private-patch\n'
+            b'0011:err:msi:ITERATE_Actions Execution halted, '
+            b'action L"InstallFinalize" returned 1603\n')
+        self.assertEqual(two["signals"], [
+            "MSI_UNATTRIBUTED_PATCH_ENGINE", "MSI_UNATTRIBUTED_SCRIPT_ENGINE",
+        ])
+        self.assertTrue(t.valid(two))
 
     def test_no_wine_msi_errors_is_not_framework_success(self):
         for raw in (b"", b'0000:fixme:msi:install_secret PRIVATE\n',
