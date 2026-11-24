@@ -33,7 +33,11 @@ _UNSUPPORTED = re.compile(rb"(?i)\b(?:msidbCustomActionTypeTSAware|custom action
 _SCRIPT_PHASE = re.compile(rb"(?i)\bExecution of script ([012]) halted;")
 _SCRIPT_PHASE_LABELS = {b"0": "INSTALL", b"1": "COMMIT", b"2": "ROLLBACK"}
 PHASES = {"INSTALL", "COMMIT", "ROLLBACK", "UNDETERMINED", "NOT_IDENTIFIED"}
-_ACTION_STRING = re.compile(rb'(?i)\baction\s+L"([^"\r\n]{1,350})"\s+returned\s+1603\b')
+# The authentic Wine trace may include an MSI deferred action of the form
+# L"[\"C:\\...\\regtlibv12.exe\" \"C:\\...\\Microsoft.JScript.tlb\";SID]CA_Regtlb_amd64".
+# Match its FINAL closing quote, not the nested executable quote. The raw
+# capture remains strictly private; only fixed categories are returned.
+_ACTION_STRING = re.compile(rb'(?i)\baction\s+L"([^\r\n]{1,2048})"\s+returned\s+1603\b')
 _CUSTOM_PIPE = re.compile(rb"(?i)\bcustom_client_thread\b.*\bfailed to write\b.*\bpipe\b")
 _CUSTOM_RETURN = re.compile(rb"(?i)\bcustom_get_thread_return\b.*\binvalid Return Code\b")
 _MISSING_FILE = re.compile(rb"(?i)\bcompressed file wasn'?t installed\b")
