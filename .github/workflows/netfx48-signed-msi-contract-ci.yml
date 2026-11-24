@@ -6,9 +6,12 @@ on:
   pull_request:
     paths:
       - 'scripts/netfx40_to_48_signed_msi.py'
+      - 'scripts/netfx48_msp_win32_exit.py'
+      - 'probes/netfx48_msp_win32_status.c'
       - 'scripts/netfx48_msi_service_evidence.py'
       - 'tests/test_netfx48_msi_service_evidence.py'
       - 'tests/test_netfx40_to_48_signed_msi.py'
+      - 'tests/test_netfx48_msp_win32_exit.py'
       - 'tests/test_netfx48_signed_msi_workflow.py'
       - '.github/workflows/netfx40-legacy-ci.yml'
       - '.github/workflows/netfx48-signed-msi-contract-ci.yml'
@@ -16,9 +19,12 @@ on:
     branches: [main]
     paths:
       - 'scripts/netfx40_to_48_signed_msi.py'
+      - 'scripts/netfx48_msp_win32_exit.py'
+      - 'probes/netfx48_msp_win32_status.c'
       - 'scripts/netfx48_msi_service_evidence.py'
       - 'tests/test_netfx48_msi_service_evidence.py'
       - 'tests/test_netfx40_to_48_signed_msi.py'
+      - 'tests/test_netfx48_msp_win32_exit.py'
       - 'tests/test_netfx48_signed_msi_workflow.py'
       - '.github/workflows/netfx48-signed-msi-contract-ci.yml'
 
@@ -26,6 +32,36 @@ permissions:
   contents: read
 
 jobs:
+  native-msp-win32-control:
+    name: Compile self-authored x64 original MSP process status fixture on Windows
+    runs-on: windows-2025
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile only self-authored Win32 original MSP probe and check 1603 selftest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force build | Out-Null
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          if (!(Test-Path $vswhere)) { throw "MSVC locator unavailable" }
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw "Self-authored MSVC Win32 exit probe cannot be compiled" }
+          $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+          $lines = @('@echo off', ('call "' + $vcvars + '"'),
+            'cl /nologo /W4 /WX /O2 /DUNICODE /D_UNICODE /Fe:build\netfx48_msp_win32_status.exe probes\netfx48_msp_win32_status.c',
+            'exit /b %errorlevel%')
+          [System.IO.File]::WriteAllLines((Join-Path (Get-Location) 'build\compile-msp-status.cmd'), $lines, [System.Text.Encoding]::ASCII)
+          & cmd.exe /d /c build\compile-msp-status.cmd
+          if ($LASTEXITCODE -ne 0) { throw "Win32 MSP probe compilation failed" }
+          $status = & build\netfx48_msp_win32_status.exe --selftest-1603
+          if ($LASTEXITCODE -ne 0 -or
+              $status -notcontains 'SWCOMPAT_MSP_WIN32_SCHEMA=1' -or
+              $status -notcontains 'SWCOMPAT_MSP_WIN32_STATUS=SELFTEST' -or
+              $status -notcontains 'SWCOMPAT_MSP_WIN32_EXIT_HEX=00000643') {
+            throw "Win32 full DWORD original MSP selftest failed"
+          }
+
   original-signed-msi-contract:
     name: Verify genuine 4.8 MSI source rules on ${{ matrix.os }}
     strategy:
@@ -42,6 +78,7 @@ jobs:
       - name: Test signed original media extraction and strict runtime claims
         run: |
           python3 -m unittest discover -s tests -p 'test_netfx40_to_48_signed_msi.py' -v
+          python3 -m unittest discover -s tests -p 'test_netfx48_msp_win32_exit.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx48_msi_service_evidence.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx48_signed_msi_workflow.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx48_core_host_workflow.py' -v

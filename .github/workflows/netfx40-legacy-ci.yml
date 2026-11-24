@@ -78,6 +78,11 @@ on:
         type: boolean
         required: false
         default: false
+      signed_msp_win32_exit:
+        description: 'Only authenticated native CLR4 test: run unmodified original MSP through MSVC Win32 full exit monitor'
+        type: boolean
+        required: false
+        default: false
       signed_msi_timeout_seconds:
         description: 'Allowlisted genuine signed MSI NGen experiment timeout (seconds)'
         type: number
@@ -202,6 +207,11 @@ on:
         default: false
       signed_msi_win10_profile:
         description: 'Win10 profile A/B for genuine signed .NET 4.8 MSI+MSP only after x86/x64 CLR4 NGen success'
+        type: boolean
+        required: false
+        default: false
+      signed_msp_win32_exit:
+        description: 'Capture original signed MSP full Win32 exit DWORD after genuine MSI success'
         type: boolean
         required: false
         default: false
@@ -610,6 +620,22 @@ jobs:
               $serviceControl -notcontains 'SWCOMPAT_SCM_API_TRUSTEDINSTALLER=PRESENT') {
             throw "Native Windows TrustedInstaller positive control failed"
           }
+          # Self-authored x64 Win32 monitor gets the complete child DWORD after
+          # launching the unchanged original Microsoft /p MSP. This never
+          # executes Microsoft installer media on Windows CI.
+          $lines = @('@echo off', ('call "' + $vcvars + '"'),
+            'cl /nologo /W4 /O2 /DUNICODE /D_UNICODE /Fe:build\netfx48_msp_win32_status.exe probes\netfx48_msp_win32_status.c',
+            'exit /b %errorlevel%')
+          [System.IO.File]::WriteAllLines((Join-Path (Get-Location) 'build\compile-original-msp-status.cmd'), $lines, [System.Text.Encoding]::ASCII)
+          & cmd.exe /d /c build\compile-original-msp-status.cmd
+          if ($LASTEXITCODE -ne 0) { throw "Original MSP Win32 exit control compilation failed" }
+          $mspSelftest = & build\netfx48_msp_win32_status.exe --selftest-1603
+          if ($LASTEXITCODE -ne 0 -or
+              $mspSelftest -notcontains 'SWCOMPAT_MSP_WIN32_SCHEMA=1' -or
+              $mspSelftest -notcontains 'SWCOMPAT_MSP_WIN32_STATUS=SELFTEST' -or
+              $mspSelftest -notcontains 'SWCOMPAT_MSP_WIN32_EXIT_HEX=00000643') {
+            throw "Original MSP Win32 exit control 1603 selftest failed"
+          }
       - name: Check authenticated Microsoft /x extraction on native Windows without installing
         shell: pwsh
         run: |
@@ -630,6 +656,7 @@ jobs:
             build/netfx48.sha256
             build/netfx48_win32_launch.exe
             build/netfx48_scm_service_probe.exe
+            build/netfx48_msp_win32_status.exe
             build/netfx481_runtime_probe.exe
             build/netfx40_wow64_managed_probe.exe
             build/netfx40_wow64_native_smoke.exe
@@ -893,6 +920,12 @@ jobs:
         shell: bash
         run: |
           echo "NGen preflight requires a standalone authenticated Wiage signed MSI arm."
+          exit 1
+      - name: Reject native full Win32 MSP exit probe outside authentic original signed Microsoft 4.8
+        if: inputs.signed_msp_win32_exit && (!inputs.signed_msi_win10_profile || !inputs.progress_gated_native40_ngen || !inputs.drain_native40_ngen || !inputs.ngen_host_stack64 || !inputs.try_48_msi || inputs.host_provenance_only || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner || inputs.pause_native_ngen_queue || inputs.pause_after_verified_native40_ngen || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_payload_host || inputs.try_40_core_msi_recovery || inputs.probe_native40_ngen_if_ready || inputs.signed_msi_timeout_seconds != 420)
+        shell: bash
+        run: |
+          echo "Native Win32 original MSP status is restricted to verified isolated Apple Silicon original signed .NET 4.8 servicing."
           exit 1
       - name: Reject signed .NET 4.8 Win10 profile outside verified original CLR4 servicing
         if: inputs.signed_msi_win10_profile && (!inputs.progress_gated_native40_ngen || !inputs.drain_native40_ngen || !inputs.ngen_host_stack64 || !inputs.try_48_msi || inputs.host_provenance_only || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner || inputs.pause_native_ngen_queue || inputs.pause_after_verified_native40_ngen || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_payload_host || inputs.try_40_core_msi_recovery || inputs.probe_native40_ngen_if_ready || inputs.signed_msi_timeout_seconds != 420)
@@ -1488,9 +1521,14 @@ jobs:
           SWCOMPAT_SIGNED_MSI_TIMEOUT: ${{ inputs.signed_msi_timeout_seconds }}
           SWCOMPAT_PAUSE_NGEN_QUEUE: ${{ inputs.pause_native_ngen_queue || inputs.pause_after_verified_native40_ngen }}
           SWCOMPAT_MSI_WIN10: ${{ inputs.signed_msi_win10_profile }}
+          SWCOMPAT_MSP_WIN32: ${{ inputs.signed_msp_win32_exit }}
         run: |
           set -euo pipefail
           cache_flags=()
+          if [[ "$SWCOMPAT_MSP_WIN32" == "true" ]]; then
+            cache_flags+=(--patch-fixture build/netfx48_msp_win32_status.exe)
+            echo "Original signed x64 MSP Win32 32-bit DWORD exit instrumentation enabled"
+          fi
           if [[ "$SWCOMPAT_MSI_WIN10" == "true" ]]; then
             cache_flags+=(--install-profile win10)
             echo "Original signed .NET 4.8 MSI compatibility profile: Windows 10"
@@ -1779,7 +1817,7 @@ jobs:
                   from scripts.netfx40_to_48_signed_msi import validate as valid_msi
                   msi = json.loads(msi_path.read_text(encoding="ascii"))
                   assert valid_msi(msi)
-                  for key in ("status", "install_profile", "install_winver", "cache_policy", "cache_state", "msi_timeout_seconds", "extract", "media", "install",
+                  for key in ("status", "install_profile", "install_winver", "cache_policy", "cache_state", "msi_timeout_seconds", "extract", "media", "install", "patch_win32_mode",
                               "patch", "win10", "restart", "clr64_changed",
                               "release", "loader", "native_only_managed",
                               "native48_candidate"):
@@ -1792,6 +1830,11 @@ jobs:
                                 f"{msi['install_log'][key]}**\n\n")
                   out.write(f"signed_msi_48_patch_exit_lowbyte: **"
                             f"{msi['patch_exit_lowbyte']}**\n\n")
+                  from scripts.netfx48_msp_win32_exit import valid as valid_win32_patch
+                  assert valid_win32_patch(msi["patch_win32"])
+                  for field in ("status", "exit_hex", "category"):
+                      out.write(f"signed_msi_48_patch_win32_{field}: **"
+                                f"{msi['patch_win32'][field]}**\n\n")
                   for key in ("status", "failure", "action",
                               "last_started_action", "errors",
                               "services_mentioned", "services_near_missing_error",

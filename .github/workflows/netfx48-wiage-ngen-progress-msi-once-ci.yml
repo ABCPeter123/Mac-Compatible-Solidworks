@@ -1,5 +1,14 @@
 name: One-shot authenticated Wiage .NET 4.8 MSI after progress-drained CLR4 NGen
 
+# Run 45316025486: Win10 A/B likewise original signed x64 MSI SUCCESS,
+# native Microsoft CLR4.8 LOADED and managed PASS after restart, but MSP
+# again EXIT_NONZERO, host low byte 67, private NGEN/X64 action category.
+# The ordinary Wine host return is truncated to a POSIX byte. Native MSVC
+# self-authored Win32 CreateProcessW/GetExitCodeProcess monitor now executes
+# the SAME original signed x64 MSP /p and captures a full 32-bit Windows
+# installer exit DWORD. No vendor media, product IDs or raw logs are printed.
+# Original signed MSI, genuine NGen preflight, strict patch success and
+# native-only .NET4.8 and .NET4.8.1 gates remain exactly enforced.
 # Run 45307363167: genuine Microsoft x64 and x86 NGen preflights PASS,
 # genuine NGen queue pause x64/x86 SUCCESS, signed Microsoft x64 4.8 MSI
 # SUCCESS, but original MSP EXIT_NONZERO again (patch NGEN/X64,
@@ -94,3 +103,4 @@ jobs:
       pause_native_ngen_queue: false
       pause_after_verified_native40_ngen: false
       signed_msi_win10_profile: true
+      signed_msp_win32_exit: true
