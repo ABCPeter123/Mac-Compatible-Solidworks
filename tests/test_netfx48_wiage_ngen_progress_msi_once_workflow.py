@@ -212,6 +212,57 @@ class Signed48AfterProgressNgenTests(unittest.TestCase):
             with self.subTest(part=part):
                 self.assertIn(part, native)
 
+    def test_one_bounded_ngen_retry_only_after_monitored_real_progress(self):
+        reusable = REUSE.read_text(encoding="utf-8")
+        caller = CALLER.read_text(encoding="utf-8")
+        self.assertEqual(reusable.count(
+            "retry_growing_native40_ngen_nonzero:"), 2)
+        # This PR must NOT launch another expensive original Microsoft MSI
+        # while the exact previous-SHA one-shot rerun is queued.
+        self.assertNotIn("retry_growing_native40_ngen_nonzero: true", caller)
+        guard = reusable.split(
+            "- name: Reject NGen one-time progress retry outside isolated "
+            "original Microsoft CLR4 servicing", 1)[1].split(
+            "- name: Reject original CLR4 x64 MSI recovery", 1)[0]
+        for item in (
+            "inputs.retry_growing_native40_ngen_nonzero",
+            "!inputs.progress_gated_native40_ngen",
+            "!inputs.drain_native40_ngen",
+            "!inputs.ngen_host_stack64",
+            "!inputs.try_48_msi",
+            "inputs.host_provenance_only",
+            "inputs.wine_baseline != 'wiage-11.13'",
+            "!inputs.use_macos26_runner",
+            "inputs.pause_native_ngen_queue",
+            "inputs.pause_after_verified_native40_ngen",
+            "inputs.try_48_direct",
+            "inputs.try_48_intermediate",
+            "inputs.try_48_payload_host",
+            "inputs.try_40_core_msi_recovery",
+            "inputs.probe_native40_ngen_if_ready",
+            "inputs.signed_msi_timeout_seconds != 420",
+            "exit 1",
+        ):
+            with self.subTest(item=item):
+                self.assertIn(item, guard)
+        block = reusable.split(
+            "- name: Drain genuine original Microsoft CLR4 NGen x64 and x86 "
+            "queues before signed 4.8 MSI", 1)[1].split(
+            "- name: Extract authenticated original .NET 4.8", 1)[0]
+        self.assertIn(
+            "SWCOMPAT_NGEN_RETRY_ON_PROGRESS: "
+            "${{ inputs.retry_growing_native40_ngen_nonzero }}", block)
+        self.assertIn("trace_flags+=(--retry-growing-nonzero)", block)
+        self.assertIn("trace_flags+=(--observe-wine-failures)", block)
+        self.assertIn("trace_flags+=(--extend-if-progress)", block)
+        self.assertNotIn("continue-on-error: true", block)
+        native = (ROOT / "scripts/netfx48_native_ngen_drain.py").read_text()
+        self.assertIn("retry_growing_nonzero: bool = False", native)
+        self.assertIn("and progress.report[arch + \"_growth_windows\"] > first_growth", native)
+        self.assertIn("result[\"wine_trace\"][arch][\"status\"] == \"NO_SIGNATURE\"", native)
+        self.assertIn("extend_if_progress=False", native)
+        self.assertIn('"EXIT_SIGNALLED"', native)
+
     def test_drain_runs_before_original_msi_and_has_bounded_runtime(self):
         workflow = REUSE.read_text(encoding="utf-8")
         begin = workflow.index(

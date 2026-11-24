@@ -34,7 +34,7 @@ from scripts.netfx40_to_48_intermediate import _terminate_group
 STATUS = {"NOT_RUN", "READY", "BLOCKED"}
 STEP = {"NOT_RUN", "SUCCESS", "FILE_MISSING", "UNSAFE_FILE",
         "INVALID_PE", "START_FAILED", "TIMED_OUT",
-        "TIMED_OUT_CLEANUP_DENIED", "EXIT_NONZERO"}
+        "TIMED_OUT_CLEANUP_DENIED", "EXIT_NONZERO", "EXIT_SIGNALLED"}
 PATHS = {
     "x64": ("Framework64", "PE_AMD64"),
     "x86": ("Framework", "PE_I386"),
@@ -48,7 +48,9 @@ def blank() -> dict:
     return {"status": "NOT_RUN", "x64": "NOT_RUN",
             "x86": "NOT_RUN", "ready": False,
             "wine_trace": {"x64": trace_blank(), "x86": trace_blank()},
-            "ngen_progress": progress_blank()}
+            "ngen_progress": progress_blank(),
+            "retry_policy": "OFF",
+            "retry": {"x64": "NOT_RUN", "x86": "NOT_RUN"}}
 
 
 def valid(report: object) -> bool:
@@ -58,6 +60,18 @@ def valid(report: object) -> bool:
             or report["x64"] not in STEP or report["x86"] not in STEP
             or type(report["ready"]) is not bool
             or not valid_progress(report["ngen_progress"])
+            or type(report["retry_policy"]) is not str
+            or report["retry_policy"] not in {"OFF", "GROWING_NONZERO_ONCE"}
+            or type(report["retry"]) is not dict
+            or set(report["retry"]) != {"x64", "x86"}
+            or any(type(report["retry"][arch]) is not str
+                   or report["retry"][arch] not in STEP
+                   for arch in ("x64", "x86"))
+            or (report["retry_policy"] == "OFF"
+                and report["retry"] != {"x64": "NOT_RUN", "x86": "NOT_RUN"})
+            or any(report["retry"][arch] != "NOT_RUN"
+                   and report[arch] != report["retry"][arch]
+                   for arch in ("x64", "x86"))
             or type(report["wine_trace"]) is not dict
             or set(report["wine_trace"]) != {"x64", "x86"}
             or any(not valid_trace(report["wine_trace"][arch]) for arch in ("x64", "x86"))
@@ -160,7 +174,8 @@ def _execute(wine: Path, prefix: Path, executable: Path, *,
                                 remaining = PROGRESS_GRACE_SECONDS
                             else:
                                 raise
-            status = "SUCCESS" if code == 0 else "EXIT_NONZERO"
+            status = ("SUCCESS" if code == 0 else
+                      "EXIT_SIGNALLED" if code < 0 else "EXIT_NONZERO")
         except subprocess.TimeoutExpired:
             try:
                 _terminate_group(process)
@@ -174,9 +189,14 @@ def _execute(wine: Path, prefix: Path, executable: Path, *,
 
 def inspect(wine: Path, prefix: Path, native40: dict, *,
             observe_wine_failures: bool = False,
-            extend_if_progress: bool = False) -> dict:
+            extend_if_progress: bool = False,
+            retry_growing_nonzero: bool = False) -> dict:
     if type(extend_if_progress) is not bool:
         raise ValueError("Adaptive NGen grace opt-in must be boolean")
+    if type(retry_growing_nonzero) is not bool or (
+            retry_growing_nonzero and not (
+                extend_if_progress and observe_wine_failures)):
+        raise ValueError("Retry requires monitored authentic NGen growth and Wine diagnostics")
     if type(observe_wine_failures) is not bool:
         raise ValueError("Wine trace opt-in must be boolean")
     if os.name == "nt" or prefix.is_symlink() or wine.is_symlink():
@@ -196,10 +216,13 @@ def inspect(wine: Path, prefix: Path, native40: dict, *,
             or prefix.name != "netfx40-msxml3-prefix"):
         raise ValueError("NGen queue drain restricted to ephemeral CI prefix")
     result = blank()
+    result["retry_policy"] = ("GROWING_NONZERO_ONCE"
+                              if retry_growing_nonzero else "OFF")
     progress = NgenProgress(prefix)
     for arch in ("x64", "x86"):
         executable, status = _ngen(prefix, arch)
         if status == "SUCCESS":
+            first_growth = progress.report[arch + "_growth_windows"]
             result[arch], result["wine_trace"][arch] = _execute(
                 wine, prefix, executable, observe_wine_failures=observe_wine_failures,
                 progress=progress.sample,
@@ -210,6 +233,25 @@ def inspect(wine: Path, prefix: Path, native40: dict, *,
             # logs again or execute another original Wine command.
             if result[arch] != "TIMED_OUT_CLEANUP_DENIED":
                 progress.sample()
+            # Microsoft executeQueuedItems is an actual queue drain, not an
+            # installation substitute. A transient nonzero after growing
+            # queued work may merit ONE further genuine attempt. Do not
+            # retry timeouts, host signals, absent/unsafe logs, or a private
+            # Wine exception signature. Never silently reinterpret nonzero
+            # as success. Both x64 and x86 must still return true success.
+            if (retry_growing_nonzero and result[arch] == "EXIT_NONZERO"
+                    and result["wine_trace"][arch]["status"] == "NO_SIGNATURE"
+                    and progress.report[arch + "_growth_windows"] > first_growth):
+                second, trace = _execute(
+                    wine, prefix, executable,
+                    observe_wine_failures=observe_wine_failures,
+                    progress=progress.sample,
+                    extend_if_progress=False)  # bounded 180s, no extra grace
+                result["retry"][arch] = second
+                result[arch] = second
+                result["wine_trace"][arch] = trace
+                if second != "TIMED_OUT_CLEANUP_DENIED":
+                    progress.sample()
         else:
             result[arch] = status
         if result[arch] != "SUCCESS":
@@ -229,6 +271,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--observe-wine-failures", action="store_true")
     parser.add_argument("--extend-if-progress", action="store_true",
                         help="Allow at most 2 extra 180s waits only on log growth")
+    parser.add_argument("--retry-growing-nonzero", action="store_true",
+                        help="One bounded genuine NGen retry only after log growth and clean nonzero")
     parser.add_argument("--agree-disposable-prefix", required=True,
                         action="store_true")
     args = parser.parse_args(argv)
@@ -237,10 +281,12 @@ def main(argv: list[str] | None = None) -> int:
     report = inspect(args.wine, args.prefix,
                      json.loads(args.native40_report.read_text(encoding="ascii")),
                      observe_wine_failures=args.observe_wine_failures,
-                     extend_if_progress=args.extend_if_progress)
+                     extend_if_progress=args.extend_if_progress,
+                     retry_growing_nonzero=args.retry_growing_nonzero)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, sort_keys=True), encoding="ascii")
-    for key in ("status", "x64", "x86", "ready", "wine_trace", "ngen_progress"):
+    for key in ("status", "x64", "x86", "ready", "wine_trace",
+                "ngen_progress", "retry_policy", "retry"):
         print("Original CLR4 NGen preflight", key, report[key])
     return 0 if report["ready"] else 1
 

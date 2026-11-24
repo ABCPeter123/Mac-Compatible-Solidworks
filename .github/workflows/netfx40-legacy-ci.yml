@@ -63,6 +63,11 @@ on:
         type: boolean
         required: false
         default: false
+      retry_growing_native40_ngen_nonzero:
+        description: 'Optional one bounded original NGen retry only after actual x64/x86 queue progress and clean nonzero exit'
+        type: boolean
+        required: false
+        default: false
       pause_native_ngen_queue:
         description: 'Opt-in real Microsoft ngen queue pause/continue around original signed MSI'
         type: boolean
@@ -192,6 +197,11 @@ on:
         default: false
       progress_gated_native40_ngen:
         description: 'Grant at most 2 extra NGen wait windows only on new genuine queue progress'
+        type: boolean
+        required: false
+        default: false
+      retry_growing_native40_ngen_nonzero:
+        description: 'Safely retry original Microsoft NGen once only on nonzero with real queue progress'
         type: boolean
         required: false
         default: false
@@ -903,6 +913,12 @@ jobs:
         run: |
           echo "Adaptive NGen requires authenticated original CLR4 or 1603 Core MSI control only."
           exit 1
+      - name: Reject NGen one-time progress retry outside isolated original Microsoft CLR4 servicing
+        if: inputs.retry_growing_native40_ngen_nonzero && (!inputs.progress_gated_native40_ngen || !inputs.drain_native40_ngen || !inputs.ngen_host_stack64 || !inputs.try_48_msi || inputs.host_provenance_only || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner || inputs.pause_native_ngen_queue || inputs.pause_after_verified_native40_ngen || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_payload_host || inputs.try_40_core_msi_recovery || inputs.probe_native40_ngen_if_ready || inputs.signed_msi_timeout_seconds != 420)
+        shell: bash
+        run: |
+          echo "Original CLR4 NGen retry requires recorded log growth, private Wine error monitoring, true Microsoft NGen return success and isolated signed x64 MSI."
+          exit 1
       - name: Reject original CLR4 x64 MSI recovery outside isolated Wiage 4.0-only experiment
         if: inputs.try_40_core_msi_recovery && (!inputs.host_provenance_only || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner || inputs.try_48_msi || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_payload_host || inputs.drain_native40_ngen || inputs.pause_native_ngen_queue)
         shell: bash
@@ -1489,6 +1505,7 @@ jobs:
         env:
           SWCOMPAT_NGEN_STACK64: ${{ inputs.ngen_host_stack64 }}
           SWCOMPAT_NGEN_PROGRESS_GRACE: ${{ inputs.progress_gated_native40_ngen }}
+          SWCOMPAT_NGEN_RETRY_ON_PROGRESS: ${{ inputs.retry_growing_native40_ngen_nonzero }}
         run: |
           set -euo pipefail
           trace_flags=()
@@ -1505,6 +1522,10 @@ jobs:
           if [[ "$SWCOMPAT_NGEN_PROGRESS_GRACE" == "true" ]]; then
             trace_flags+=(--extend-if-progress)
             echo "Original Microsoft CLR4 NGen grace: fresh progress only, maximum 540 seconds per architecture"
+          fi
+          if [[ "$SWCOMPAT_NGEN_RETRY_ON_PROGRESS" == "true" ]]; then
+            trace_flags+=(--retry-growing-nonzero)
+            echo "Original Microsoft CLR4 NGen retry: one additional <=180s queue drain only after genuine log growth, no Wine errors, and nonzero return"
           fi
           python3 -m scripts.netfx48_native_ngen_drain \
             --wine "$SWCOMPAT_WINE" \

@@ -56,12 +56,12 @@ class OriginalNGenPreflightTests(unittest.TestCase):
     def test_strict_schema_disallows_success_without_both_architectures(self):
         self.assertTrue(ngen.valid(ngen.blank()))
         self.assertTrue(ngen.valid({
-            "status": "READY", "x64": "SUCCESS", "x86": "SUCCESS",
+            **ngen.blank(), "status": "READY", "x64": "SUCCESS", "x86": "SUCCESS",
             "ready": True, "wine_trace": {"x64": ngen.trace_blank(), "x86": ngen.trace_blank()},
             "ngen_progress": ngen.progress_blank(),
         }))
         self.assertFalse(ngen.valid({
-            "status": "READY", "x64": "SUCCESS", "x86": "NOT_RUN",
+            **ngen.blank(), "status": "READY", "x64": "SUCCESS", "x86": "NOT_RUN",
             "ready": True, "wine_trace": {"x64": ngen.trace_blank(), "x86": ngen.trace_blank()},
             "ngen_progress": ngen.progress_blank(),
         }))
@@ -111,6 +111,108 @@ class OriginalNGenPreflightTests(unittest.TestCase):
             self.assertEqual(report["status"], "READY")
             self.assertTrue(report["ready"])
             self.assertTrue(ngen.valid(report))
+
+    def test_bounded_second_genuine_ngen_pass_only_after_growth_and_nonzero(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            wine, prefix, native40 = self.fixture(root)
+            self.make_ngen(prefix, "x64")
+            self.make_ngen(prefix, "x86")
+            log = (prefix / "drive_c/windows/Microsoft.NET/"
+                   "Framework64/v4.0.30319/ngen.log")
+            calls = []
+            clean = {"status": "NO_SIGNATURE", "signals": []}
+            def execute(wine_arg, prefix_arg, executable, **kwargs):
+                self.assertTrue(kwargs["observe_wine_failures"])
+                self.assertTrue(kwargs["progress"] is not None)
+                calls.append((executable, kwargs["extend_if_progress"]))
+                if len(calls) == 1:
+                    log.write_bytes(b"PRIVATE_ASSEMBLY_NAME")
+                    return "EXIT_NONZERO", clean
+                return "SUCCESS", clean
+            with (mock.patch.dict(os.environ, {"RUNNER_TEMP": td}),
+                  mock.patch.object(ngen, "valid_restart", return_value=True),
+                  mock.patch.object(ngen, "_execute", side_effect=execute)):
+                result = ngen.inspect(
+                    wine, prefix, native40,
+                    observe_wine_failures=True, extend_if_progress=True,
+                    retry_growing_nonzero=True)
+            self.assertEqual(result["status"], "READY")
+            self.assertTrue(result["ready"])
+            self.assertEqual(result["retry_policy"], "GROWING_NONZERO_ONCE")
+            self.assertEqual(result["retry"], {"x64": "SUCCESS", "x86": "NOT_RUN"})
+            self.assertEqual([arch for arch, _ in calls], [
+                self.make_ngen(prefix, "x64"),
+                self.make_ngen(prefix, "x64"),
+                self.make_ngen(prefix, "x86")])
+            self.assertEqual([extended for _, extended in calls],
+                             [True, False, True])
+            self.assertTrue(ngen.valid(result))
+            self.assertNotIn("PRIVATE_ASSEMBLY_NAME", str(result))
+            self.assertFalse(ngen.valid({**result,
+                                         "retry": {"x64": "EXIT_NONZERO",
+                                                   "x86": "NOT_RUN"}}))
+
+    def test_ngen_retry_refuses_unchanged_or_wine_fault_and_signal(self):
+        for first_status, trace, growth in (
+            ("EXIT_NONZERO", {"status": "NO_SIGNATURE", "signals": []}, False),
+            ("EXIT_NONZERO", {"status": "CLASSIFIED",
+                              "signals": ["SERVICE_NOT_FOUND"]}, True),
+            ("EXIT_SIGNALLED", {"status": "NO_SIGNATURE", "signals": []}, True),
+            ("TIMED_OUT", {"status": "NO_SIGNATURE", "signals": []}, True),
+        ):
+            with self.subTest(status=first_status, growth=growth):
+                with TemporaryDirectory() as td:
+                    root = Path(td)
+                    wine, prefix, native40 = self.fixture(root)
+                    self.make_ngen(prefix, "x64")
+                    self.make_ngen(prefix, "x86")
+                    log = (prefix / "drive_c/windows/Microsoft.NET/"
+                           "Framework64/v4.0.30319/ngen.log")
+                    calls = []
+                    def execute(*args, **kwargs):
+                        calls.append(args)
+                        if growth:
+                            log.write_bytes(b"PRIVATE_ASSEMBLY_NAME")
+                        return first_status, trace
+                    with (mock.patch.dict(os.environ, {"RUNNER_TEMP": td}),
+                          mock.patch.object(ngen, "valid_restart", return_value=True),
+                          mock.patch.object(ngen, "_execute", side_effect=execute)):
+                        result = ngen.inspect(
+                            wine, prefix, native40,
+                            observe_wine_failures=True, extend_if_progress=True,
+                            retry_growing_nonzero=True)
+                    self.assertFalse(result["ready"])
+                    self.assertEqual(result["x64"], first_status)
+                    self.assertEqual(result["x86"], "NOT_RUN")
+                    self.assertEqual(result["retry"]["x64"], "NOT_RUN")
+                    self.assertEqual(len(calls), 1)
+                    self.assertTrue(ngen.valid(result))
+
+    def test_original_ngen_signal_is_not_misreported_as_windows_exit(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            wine, prefix, _ = self.fixture(root)
+            with mock.patch.object(ngen.subprocess, "Popen",
+                                   return_value=mock.Mock(
+                                       wait=mock.Mock(return_value=-9))):
+                status, trace = ngen._execute(
+                    wine, prefix, root / "ngen.exe")
+            self.assertEqual(status, "EXIT_SIGNALLED")
+            self.assertEqual(trace, ngen.trace_blank())
+
+    def test_progress_retry_requires_safe_explicit_opt_in(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            wine, prefix, native40 = self.fixture(root)
+            for invalid in (None, 1, "true", [], {}):
+                with self.subTest(value=invalid):
+                    with self.assertRaises(ValueError):
+                        ngen.inspect(wine, prefix, native40,
+                                     retry_growing_nonzero=invalid)
+            with self.assertRaises(ValueError):
+                ngen.inspect(wine, prefix, native40,
+                             retry_growing_nonzero=True)
 
     def test_nonzero_ngen_prevents_x86_and_msi_progression(self):
         with TemporaryDirectory() as td:
