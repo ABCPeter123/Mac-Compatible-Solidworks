@@ -1,6 +1,13 @@
 name: One-shot authenticated Wiage .NET 4.8 MSI after progress-drained CLR4 NGen
 
 # Current original Microsoft servicing gate, November 24, 2026.
+# Source-validated PR #261: bounded full-stream classification of the original
+# MSP's private WINEDEBUG trace, replacing the last-8-MiB sample that missed
+# Wine err:msi entirely in authenticated run 45495950145. Preserve original
+# Microsoft MSI and MSP bytes and native Win32 DWORD exit gate unchanged.
+# Original Win32 1603 remains the blocker until independently cured.
+# This authenticated one-shot tests whether a fixed-category first-failure
+# action can be observed across complete Wine MSI execution and rollback.
 # Authenticated Apple Silicon run 45426863980 attempt 2: both genuine
 # original Microsoft CLR4 x64+x86 NGen preflights SUCCESS without retry.
 # Original signed Microsoft .NET4.8 x64 MSI SUCCESS; changed real CLR64,
