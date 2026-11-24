@@ -150,6 +150,7 @@ def valid_msi_log(report: object) -> bool:
 
 MEDIA = {"NOT_RUN", "VERIFIED", "FILES_MISSING", "UNSAFE", "INVALID_PACKAGE"}
 WINVER = {"NOT_RUN", "APPLIED", "FAILED"}
+INSTALL_PROFILES = {"win7", "win10"}
 RESTART = {"NOT_RUN", "COMPLETED", "EXIT_NONZERO", "START_FAILED", "TIMED_OUT"}
 RELEASE = {"UNAVAILABLE", "NOT_FOUND", "BELOW_48", "NETFX48_RANGE", "AT_LEAST_481"}
 LOADER = LOAD_STATES | {"NOT_VERIFIED"}
@@ -166,7 +167,8 @@ def blank() -> dict:
     return {
         "status": "NOT_ELIGIBLE", "native40_persistent": False,
         "msi_timeout_seconds": 420,
-        "win7": "NOT_RUN", "extract": "NOT_RUN", "media": "NOT_RUN",
+        "install_profile": "win7", "install_winver": "NOT_RUN",
+        "extract": "NOT_RUN", "media": "NOT_RUN",
         "install": "NOT_RUN", "patch": "NOT_RUN",
         "install_log": blank_msi_log(), "patch_log": blank_msi_log(),
         "patch_exit_lowbyte": "NOT_RUN", "ngen_log": blank_ngen(),
@@ -189,7 +191,9 @@ def validate(result: object) -> bool:
     if (result["msi_timeout_seconds"] not in MSI_TIMEOUTS
             or type(result["msi_timeout_seconds"]) is not int
             or result["status"] not in {"NOT_ELIGIBLE", "MEASURED"}
-            or result["win7"] not in WINVER or result["win10"] not in WINVER
+            or result["install_profile"] not in INSTALL_PROFILES
+            or result["install_winver"] not in WINVER
+            or result["win10"] not in WINVER
             or any(result[k] not in STEPS for k in ("extract", "install", "patch"))
             or result["media"] not in MEDIA or result["restart"] not in RESTART
             or not valid_msi_log(result["install_log"])
@@ -256,7 +260,7 @@ def validate(result: object) -> bool:
     if result["status"] == "NOT_ELIGIBLE":
         return result == blank()
     ready = (
-        result["native40_persistent"] and result["win7"] == "APPLIED"
+        result["native40_persistent"] and result["install_winver"] == "APPLIED"
         and result["extract"] == "SUCCESS" and result["media"] == "VERIFIED"
         and result["install"] == "SUCCESS" and result["patch"] == "SUCCESS"
         and (result["ngen_queue_policy"] == "OFF"
@@ -370,9 +374,12 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
             service_fixture: Path | None = None,
             prepare_assembly_cache: bool = False,
             msi_timeout_seconds: int = 420,
-            pause_native_ngen_queue: bool = False) -> dict:
+            pause_native_ngen_queue: bool = False,
+            install_profile: str = "win7") -> dict:
     if type(pause_native_ngen_queue) is not bool:
         raise ValueError("Genuine NGen queue pause must be explicit")
+    if type(install_profile) is not str or install_profile not in INSTALL_PROFILES:
+        raise ValueError("Only original Microsoft signed MSI win7/win10 profiles permitted")
     if type(msi_timeout_seconds) is not int or msi_timeout_seconds not in MSI_TIMEOUTS:
         raise ValueError("Unsupported authenticated MSI timeout budget")
     if type(prepare_assembly_cache) is not bool:
@@ -404,16 +411,16 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
     if root.is_symlink() or root.exists():
         raise ValueError("Original signed MSI extraction must start with empty directory")
     env = _env(wine, prefix)
-    win7 = _set_winver(wine, prefix, env, "win7")
+    install_winver = _set_winver(wine, prefix, env, install_profile)
     cache_policy = "PREPARE" if prepare_assembly_cache else "OBSERVE"
     cache_state = "NOT_RUN"
-    if win7 == "APPLIED":
+    if install_winver == "APPLIED":
         cache_state = inspect_assembly_cache(prefix, prepare=prepare_assembly_cache)
         if cache_state in {"UNSAFE", "FAILED"}:
             # Do not launch another original Microsoft setup if its one
             # target directory cannot be independently authenticated.
             result = {**blank(), "status": "MEASURED",
-                      "native40_persistent": True, "win7": win7,
+                      "native40_persistent": True, "install_profile": install_profile, "install_winver": install_winver,
                       "cache_policy": cache_policy, "cache_state": cache_state,
                       "msi_timeout_seconds": msi_timeout_seconds,
                       "ngen_queue_policy": "PAUSE" if pause_native_ngen_queue else "OFF"}
@@ -429,7 +436,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
         if service_fixture.is_symlink() or service_fixture.name != "netfx48_scm_service_probe.exe":
             raise ValueError("Unrecognized native read-only SCM executable")
         service_fixture = service_fixture.resolve(strict=True)
-        if win7 == "APPLIED":
+        if install_winver == "APPLIED":
             scm_startup = selftest_scm(wine, prefix, service_fixture)
             if scm_startup == "PASS":
                 scm_preflight = measure_scm(wine, prefix, service_fixture)
@@ -444,7 +451,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
     queue_policy = "PAUSE" if pause_native_ngen_queue else "OFF"
     scm_postflight = blank_scm()
     try:
-        if win7 == "APPLIED":
+        if install_winver == "APPLIED":
             # /x extracts the *unmodified* official Microsoft's original MSI
             # and MSP to the dedicated disposable C: directory.
             extracted = private_run(
@@ -519,7 +526,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                  else _set_winver(wine, prefix, env, "win10"))
     if denied:
         result = {**blank(), "status": "MEASURED",
-                  "native40_persistent": True, "win7": win7,
+                  "native40_persistent": True, "install_profile": install_profile, "install_winver": install_winver,
                   "extract": extracted, "media": media, "install": installed,
                   "patch": patched, "install_log": install_log,
                   "patch_log": patch_log,
@@ -548,7 +555,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
     result = {
         "status": "MEASURED", "native40_persistent": True,
         "msi_timeout_seconds": msi_timeout_seconds,
-        "win7": win7, "extract": extracted, "media": media,
+        "install_profile": install_profile, "install_winver": install_winver, "extract": extracted, "media": media,
         "install": installed, "patch": patched, "install_log": install_log,
         "patch_log": patch_log, "patch_exit_lowbyte": patch_exit_lowbyte,
         "ngen_log": ngen_log, "ngen_progress": ngen_progress,
@@ -566,7 +573,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
         "solidworks_compatibility": "NOT_DEMONSTRATED",
     }
     result["native48_candidate"] = (
-        result["native40_persistent"] and result["win7"] == "APPLIED"
+        result["native40_persistent"] and result["install_winver"] == "APPLIED"
         and result["extract"] == "SUCCESS" and result["media"] == "VERIFIED"
         and result["install"] == "SUCCESS" and result["patch"] == "SUCCESS"
         and (result["ngen_queue_policy"] == "OFF"
@@ -588,6 +595,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--service-fixture", type=Path)
     parser.add_argument("--prepare-assembly-cache", action="store_true")
     parser.add_argument("--pause-native-ngen-queue", action="store_true")
+    parser.add_argument("--install-profile", choices=sorted(INSTALL_PROFILES),
+                        default="win7")
     parser.add_argument("--msi-timeout-seconds", type=int,
                         choices=sorted(MSI_TIMEOUTS), default=420)
     parser.add_argument("--agree-disposable-prefix", action="store_true", required=True)
@@ -598,7 +607,8 @@ def main(argv: list[str] | None = None) -> int:
                      service_fixture=a.service_fixture,
                      prepare_assembly_cache=a.prepare_assembly_cache,
                      pause_native_ngen_queue=a.pause_native_ngen_queue,
-                     msi_timeout_seconds=a.msi_timeout_seconds)
+                     msi_timeout_seconds=a.msi_timeout_seconds,
+                     install_profile=a.install_profile)
     if a.output.is_symlink():
         raise ValueError("Linked experiment report")
     a.output.parent.mkdir(parents=True, exist_ok=True)
