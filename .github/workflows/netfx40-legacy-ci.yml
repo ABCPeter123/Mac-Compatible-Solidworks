@@ -1165,6 +1165,98 @@ jobs:
             --original build/netfx40-msxml3-runtime.json \
             --output build/netfx40-msxml3-restart.json \
             --agree-disposable-prefix
+      # Only the authenticated signed-MSP one-shot may spend another fresh
+      # prefix after the original .NET 4.0 setup returned exact Win32 1603.
+      # Neither a failed partial installation nor a missing CLR can pass.
+      - name: One genuine CLR4 retry in a second fresh disposable Wine prefix after 1603
+        if: env.SWCOMPAT_MSXML3_READY == 'yes' && inputs.signed_msp_win32_exit
+        shell: bash
+        env:
+          SWCOMPAT_WIN7_SETUP: ${{ inputs.win7_setup }}
+        run: |
+          set -euo pipefail
+          outcome=$(python3 -m scripts.netfx40_fresh_prefix_retry \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --original build/netfx40-msxml3-runtime.json \
+            --restart build/netfx40-msxml3-restart.json \
+            --agree-disposable-prefix)
+          if [[ "$outcome" == "ALREADY_VERIFIED" ]]; then
+            echo "Original genuine CLR4 persisted, fresh retry is unnecessary."
+            exit 0
+          fi
+          test "$outcome" = "FRESH_PREFIX_REQUIRED"
+          echo "Real CLR4 setup 1603; original disposable prefix archived privately."
+          mv build/netfx40-msxml3-runtime.json build/netfx40-msxml3-runtime-attempt1.json
+          mv build/netfx40-msxml3-restart.json build/netfx40-msxml3-restart-attempt1.json
+
+          # Reuse the canonical prefix path for all downstream gate checks.
+          # The original attempt was moved, not mutated or reused.
+          python3 -m swcompat \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --logs-dir "$RUNNER_TEMP/netfx40-msxml3-retry-logs" init \
+            --timeout 120 --skip-bootstrap-mono-gecko
+          touch "$RUNNER_TEMP/netfx40-msxml3-prefix/.swcompat-netfx481-disposable"
+          python3 -m scripts.netfx40_prefix_readiness \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --output build/netfx40-prefix-readiness-retry.json \
+            --agree-disposable-prefix
+          python3 -m scripts.netfx40_msxml3_prerequisite \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --winetricks "$SWCOMPAT_WINETRICKS" \
+            --output build/netfx40-msxml3-prerequisite-retry.json \
+            --timeout 300 --agree-disposable-prefix
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.netfx40_prefix_readiness import validate as valid_prefix
+          from scripts.netfx40_msxml3_prerequisite import validate as valid_msxml
+          pre = json.loads(Path("build/netfx40-prefix-readiness-retry.json").read_text())
+          xml = json.loads(Path("build/netfx40-msxml3-prerequisite-retry.json").read_text())
+          assert valid_prefix(pre) and pre["ready"] is True
+          assert valid_msxml(xml) and xml["status"] == "VERB_SUCCEEDED"
+          assert xml["x64_dll_changed"] and xml["x86_dll_changed"]
+          PY
+
+          set -- python3 -m scripts.netfx40_legacy \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --installer build/dotNetFx40_Full_x86_x64.exe \
+            --managed build/netfx481_runtime_probe.exe \
+            --loader build/netfx481_clr_load.exe \
+            --launcher build/netfx40_win32_launch.exe \
+            --output build/netfx40-msxml3-runtime.json \
+            --timeout 330 --agree-disposable-prefix \
+            --experiment-extended-setup-wait \
+            --experiment-enable-verbose-msi \
+            --experiment-restart-after-mono \
+            --experiment-trace-custom-action-type \
+            --experiment-inventory-retained-msi \
+            --experiment-private-original-action
+          if [[ "${SWCOMPAT_WIN7_SETUP:-false}" == "true" ]]; then
+            set -- "$@" --experiment-win7-setup
+          fi
+          "$@"
+          python3 -m scripts.netfx40_msxml3_restart \
+            --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --loader build/netfx481_clr_load.exe \
+            --managed build/netfx481_runtime_probe.exe \
+            --original build/netfx40-msxml3-runtime.json \
+            --output build/netfx40-msxml3-restart.json \
+            --agree-disposable-prefix
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.netfx40_msxml3_restart import validate
+          r = json.loads(Path("build/netfx40-msxml3-restart.json").read_text())
+          assert validate(r)
+          assert r["persistent_native_managed"] and r["native_only_managed"] == "PASS", (
+              "Second independent original CLR4 attempt did not establish native Microsoft execution")
+          PY
+
       - name: Extract unchanged signed .NET 4.0 MSI for private failure attribution
         if: env.SWCOMPAT_MSXML3_READY == 'yes'
         shell: bash
