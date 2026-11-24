@@ -1,5 +1,15 @@
 name: One-shot authenticated Wiage .NET 4.8 MSI after progress-drained CLR4 NGen
 
+# Run 45307363167: genuine Microsoft x64 and x86 NGen preflights PASS,
+# genuine NGen queue pause x64/x86 SUCCESS, signed Microsoft x64 4.8 MSI
+# SUCCESS, but original MSP EXIT_NONZERO again (patch NGEN/X64,
+# process exit low byte 67). Original queue continue x64/x86 both
+# EXIT_NONZERO after servicing; native48_candidate false. Pausing the
+# real NGen queues did NOT solve the original MSP failure. Disable that
+# experiment and instead A/B the original signed MSI and MSP under Wine's
+# Windows 10 compatibility profile, retaining the authentic same media,
+# original custom actions, x64/x86 preflight and strict MSP+runtime gates.
+# No Windows 4.8 registry, native CLR or Microsoft bytes are fabricated.
 # Run 45302194715: original Microsoft x64 4.8 MSI SUCCESS. CLR64 genuine
 # PE changed, NETFX48_RANGE Release, native-only managed PASS after a clean
 # Wine restart. Original signed MSP returned EXIT_NONZERO with host low byte
@@ -82,4 +92,5 @@ jobs:
       signed_msi_timeout_seconds: 420
       prepare_48_assembly_cache: true
       pause_native_ngen_queue: false
-      pause_after_verified_native40_ngen: true
+      pause_after_verified_native40_ngen: false
+      signed_msi_win10_profile: true

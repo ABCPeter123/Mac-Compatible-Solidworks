@@ -73,6 +73,11 @@ on:
         type: boolean
         required: false
         default: false
+      signed_msi_win10_profile:
+        description: 'Only after pinned original CLR4 NGen preflight, test unchanged signed 4.8 MSI+MSP under Wine Windows 10'
+        type: boolean
+        required: false
+        default: false
       signed_msi_timeout_seconds:
         description: 'Allowlisted genuine signed MSI NGen experiment timeout (seconds)'
         type: number
@@ -192,6 +197,11 @@ on:
         default: false
       pause_after_verified_native40_ngen:
         description: 'After authenticated native CLR4 NGen preflight, pause both genuine queues for signed MSI+MSP'
+        type: boolean
+        required: false
+        default: false
+      signed_msi_win10_profile:
+        description: 'Win10 profile A/B for genuine signed .NET 4.8 MSI+MSP only after x86/x64 CLR4 NGen success'
         type: boolean
         required: false
         default: false
@@ -884,6 +894,12 @@ jobs:
         run: |
           echo "NGen preflight requires a standalone authenticated Wiage signed MSI arm."
           exit 1
+      - name: Reject signed .NET 4.8 Win10 profile outside verified original CLR4 servicing
+        if: inputs.signed_msi_win10_profile && (!inputs.progress_gated_native40_ngen || !inputs.drain_native40_ngen || !inputs.ngen_host_stack64 || !inputs.try_48_msi || inputs.host_provenance_only || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner || inputs.pause_native_ngen_queue || inputs.pause_after_verified_native40_ngen || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_payload_host || inputs.try_40_core_msi_recovery || inputs.probe_native40_ngen_if_ready || inputs.signed_msi_timeout_seconds != 420)
+        shell: bash
+        run: |
+          echo "Original Win10 signed MSI compatibility A/B requires authenticated original x64 and x86 CLR4 NGen and unmodified signed MSI/MSP with no queue pause."
+          exit 1
       - name: Reject Microsoft NGen post-preflight queue pause outside authenticated signed .NET 4.8 servicing
         if: inputs.pause_after_verified_native40_ngen && (!inputs.progress_gated_native40_ngen || !inputs.drain_native40_ngen || !inputs.ngen_host_stack64 || !inputs.try_48_msi || inputs.host_provenance_only || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner || inputs.pause_native_ngen_queue || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_payload_host || inputs.try_40_core_msi_recovery || inputs.probe_native40_ngen_if_ready || inputs.signed_msi_timeout_seconds != 420)
         shell: bash
@@ -1471,9 +1487,16 @@ jobs:
           SWCOMPAT_PREPARE_ASSEMBLY_CACHE: ${{ inputs.prepare_48_assembly_cache }}
           SWCOMPAT_SIGNED_MSI_TIMEOUT: ${{ inputs.signed_msi_timeout_seconds }}
           SWCOMPAT_PAUSE_NGEN_QUEUE: ${{ inputs.pause_native_ngen_queue || inputs.pause_after_verified_native40_ngen }}
+          SWCOMPAT_MSI_WIN10: ${{ inputs.signed_msi_win10_profile }}
         run: |
           set -euo pipefail
           cache_flags=()
+          if [[ "$SWCOMPAT_MSI_WIN10" == "true" ]]; then
+            cache_flags+=(--install-profile win10)
+            echo "Original signed .NET 4.8 MSI compatibility profile: Windows 10"
+          else
+            echo "Original signed .NET 4.8 MSI compatibility profile: Windows 7"
+          fi
           if [[ "$SWCOMPAT_PAUSE_NGEN_QUEUE" == "true" ]]; then
             cache_flags+=(--pause-native-ngen-queue)
           fi
@@ -1756,7 +1779,7 @@ jobs:
                   from scripts.netfx40_to_48_signed_msi import validate as valid_msi
                   msi = json.loads(msi_path.read_text(encoding="ascii"))
                   assert valid_msi(msi)
-                  for key in ("status", "win7", "cache_policy", "cache_state", "msi_timeout_seconds", "extract", "media", "install",
+                  for key in ("status", "install_profile", "install_winver", "cache_policy", "cache_state", "msi_timeout_seconds", "extract", "media", "install",
                               "patch", "win10", "restart", "clr64_changed",
                               "release", "loader", "native_only_managed",
                               "native48_candidate"):
