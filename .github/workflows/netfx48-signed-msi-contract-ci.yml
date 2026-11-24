@@ -99,6 +99,7 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_netfx40_fresh_prefix_retry.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx40_fresh_prefix_retry_workflow.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx48_msp_win32_exit.py' -v
+          python3 -m unittest discover -s tests -p 'test_netfx48_msi_registration.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx48_msp_wine_trace.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx48_msi_service_evidence.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx48_signed_msi_workflow.py' -v
