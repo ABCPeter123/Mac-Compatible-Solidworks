@@ -3,7 +3,13 @@ name: Compatibility foundation
 on:
   push:
     branches: [main]
+    # Documentation-only edits should not launch expensive Metal/GPU jobs.
+    # Any code, tests or workflow change still runs the full foundation.
+    paths-ignore:
+      - '**/*.md'
   pull_request:
+    paths-ignore:
+      - '**/*.md'
   workflow_dispatch:
 
 permissions:
