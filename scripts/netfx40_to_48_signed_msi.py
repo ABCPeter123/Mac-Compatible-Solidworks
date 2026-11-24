@@ -195,6 +195,8 @@ def validate(result: object) -> bool:
             or result["install_profile"] not in INSTALL_PROFILES
             or type(result["install_winver"]) is not str
             or result["install_winver"] not in WINVER
+            or (result["extract"] != "NOT_RUN"
+                and result["install_winver"] != "APPLIED")
             or result["win10"] not in WINVER
             or any(result[k] not in STEPS for k in ("extract", "install", "patch"))
             or result["media"] not in MEDIA or result["restart"] not in RESTART
