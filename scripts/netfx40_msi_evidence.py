@@ -35,6 +35,9 @@ _ACTION_FAILED = re.compile(
     r"([a-z][a-z0-9_. -]{0,90})\.\s*Return value 3\b"
 )
 _ERROR_NUMBER = re.compile(r"(?i)\b(?:Note:\s*1:\s*|Error\s+)(\d{4})\b")
+# Windows Installer often writes the complete Win32 code only in the
+# terminal status record. Do not guess it from POSIX process exit low bytes.
+_ENGINE_EXIT = re.compile(r"(?i)\bMainEngineThread\s+is\s+returning\s+(\d{4})\b")
 _HEX_CODE = re.compile(r"(?i)(?<![a-z0-9])0x[0-9a-f]{8}(?![a-z0-9])")
 
 ERROR_CODES = {
@@ -46,6 +49,15 @@ ERROR_CODES = {
     "2502": "MSI_TRANSACTION_ORDER",
     "2503": "MSI_TRANSACTION_ORDER",
     "2755": "MSI_PACKAGE_ACCESS",
+    # Documented Windows Installer exit errors. These identify a class of
+    # patch applicability / package failures, not an established Wine cause.
+    "1605": "UNKNOWN_PRODUCT",
+    "1612": "INSTALL_SOURCE_ABSENT",
+    "1619": "MSI_PACKAGE_OPEN_FAILED",
+    "1620": "MSI_PACKAGE_INVALID",
+    "1635": "PATCH_PACKAGE_OPEN_FAILED",
+    "1636": "PATCH_PACKAGE_INVALID",
+    "1642": "PATCH_TARGET_NOT_FOUND",
 }
 HEX_CODES = {
     "0X80070005": "ACCESS_DENIED",
@@ -128,10 +140,11 @@ def classify_msi_log(raw: bytes) -> dict:
         action = _ACTION_FAILED.search(line)
         if action and len(failures) < MAX_ACTIONS:
             failures.append(classify_action(action.group(1)))
-        for match in _ERROR_NUMBER.finditer(line):
-            category = ERROR_CODES.get(match.group(1))
-            if category:
-                errors.add(category)
+        for pattern in (_ERROR_NUMBER, _ENGINE_EXIT):
+            for match in pattern.finditer(line):
+                category = ERROR_CODES.get(match.group(1))
+                if category:
+                    errors.add(category)
         if any(x in line.lower() for x in ("error", "failed", "hresult", "status")):
             for match in _HEX_CODE.finditer(line):
                 category = HEX_CODES.get(match.group().upper())
