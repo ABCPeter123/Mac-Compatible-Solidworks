@@ -49,7 +49,8 @@ class OriginalSignedMSITests(TestCase):
                  valid_media=True, verified_native40=True, scm=False,
                  post_scm=None, prepare_cache=False, ngen_bytes=None,
                  msi_timeout_seconds=420, pause_queue=False,
-                 pause_failure=None, resume_failure=None):
+                 pause_failure=None, resume_failure=None,
+                 patch_log_bytes=None, patch_process_code=67):
         calls = []
         if pause_queue:
             prefix = paths[1]
@@ -59,7 +60,8 @@ class OriginalSignedMSITests(TestCase):
                 ngen = prefix / "drive_c" / "windows" / "Microsoft.NET" / arch / "v4.0.30319" / "ngen.exe"
                 ngen.parent.mkdir(parents=True, exist_ok=True)
                 ngen.write_bytes(b"MZ" + b"x" * 4998)
-        def fake_run(cmd, env, cwd, timeout, *, progress=None):
+        def fake_run(cmd, env, cwd, timeout, *, progress=None,
+                     on_exit_code=None):
             calls.append((cmd, timeout))
             if len(cmd) >= 4 and cmd[2] == "queue":
                 if cmd[3] == "pause" and pause_failure is not None and "Framework/" in cmd[1]:
@@ -82,6 +84,11 @@ class OriginalSignedMSITests(TestCase):
                 if progress is not None:
                     progress()
                 return install
+            if patch_log_bytes is not None:
+                (paths[1] / "drive_c" / p.TARGET / p.PATCH_PRIVATE_LOG).write_bytes(
+                    patch_log_bytes)
+            if on_exit_code is not None and patch in {"SUCCESS", "EXIT_NONZERO"}:
+                on_exit_code(0 if patch == "SUCCESS" else patch_process_code)
             return patch
 
         before = {"CLR64": ("PE_AMD64", "original40")}
@@ -136,9 +143,94 @@ class OriginalSignedMSITests(TestCase):
             self.assertIn("/L*v", calls[1][0])
             self.assertEqual(calls[1][1], 420)
             self.assertEqual(result["install_log"]["status"], "NO_LOG")
+            self.assertEqual(result["patch_log"]["status"], "NO_LOG")
+            self.assertEqual(result["patch_exit_lowbyte"], 0)
+            self.assertIn("/L*v", calls[2][0])
             self.assertEqual(calls[2][1], 420)
             self.assertFalse(p.validate(dict(result, native48_candidate=False)))
             self.assertFalse(p.validate(dict(result, private_vendor_log="forbidden")))
+
+    def test_nonzero_original_msp_lowbyte_and_private_verbose_log_are_classified(self):
+        with TemporaryDirectory() as td:
+            prefix = self.fixture(Path(td))
+            private_bytes = (
+                b"Action start 12:03:22: CA_Ngen_x86.36\n"
+                b"Error 1642, original-private-patch-target path\n"
+            )
+            result, calls = self.run_case(
+                prefix, patch="EXIT_NONZERO", patch_process_code=106,
+                patch_log_bytes=private_bytes)
+            self.assertEqual(result["install"], "SUCCESS")
+            self.assertEqual(result["patch"], "EXIT_NONZERO")
+            # Runtime must be checked after a clean Wine reboot even if
+            # the original signed patch failed and cannot authorize 4.8.
+            self.assertEqual(result["restart"], "COMPLETED")
+            self.assertEqual(result["loader"], "LOADED")
+            self.assertEqual(result["native_only_managed"], "PASS")
+            # POSIX status 106 is also 1642 modulo 256. Do NOT claim
+            # Windows Installer's full 1642 without an independent source.
+            self.assertEqual(result["patch_exit_lowbyte"], 106)
+            self.assertEqual(result["patch_log"]["status"], "CLASSIFIED")
+            self.assertEqual(result["patch_log"]["custom_action_detail"], "NGEN")
+            self.assertEqual(result["patch_log"]["ngen_custom_action_arch"], "X86")
+            self.assertFalse(result["native48_candidate"])
+            self.assertTrue(p.validate(result))
+            self.assertFalse((prefix[1] / "drive_c" / p.TARGET /
+                              p.PATCH_PRIVATE_LOG).exists())
+            self.assertNotIn("original-private-patch-target", str(result))
+            self.assertFalse(p.validate({**result, "native48_candidate": True}))
+            self.assertFalse(p.validate({**result, "patch_exit_lowbyte": 0}))
+            self.assertEqual(len(calls), 3)
+
+    def test_untrusted_msp_lowbyte_and_unrun_patch_report_fail_closed(self):
+        clean = p.blank()
+        for value in (-1, 256, True, None, [], {}, "1642", "PRIVATE"):
+            with self.subTest(value=value):
+                self.assertFalse(p.validate({**clean, "patch_exit_lowbyte": value}))
+        self.assertFalse(p.validate({
+            **clean, "patch_log": {**p.blank_msi_log(), "status": "NO_LOG"}}))
+        self.assertFalse(p.validate({
+            **clean, "patch": "EXIT_NONZERO",
+            "patch_exit_lowbyte": 106,
+            "patch_log": p.blank_msi_log()}))
+
+    def test_private_msp_log_requires_allowlisted_filename(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            real = root / "vendor-private.msp"
+            real.write_bytes(b"do not read")
+            with self.assertRaises(ValueError):
+                p.classify_private_msi_log(root, filename=real.name)
+            self.assertEqual(real.read_bytes(), b"do not read")
+            patch_log = root / p.PATCH_PRIVATE_LOG
+            patch_log.write_bytes(
+                b"Action start 11:12:34: CA_Ngen_x64.36\n"
+                b"Error 1603, PII-PATH-NOT-TO-BE-EXPORTED\n")
+            result = p.classify_private_msi_log(
+                root, filename=p.PATCH_PRIVATE_LOG)
+            self.assertEqual(result["status"], "CLASSIFIED")
+            self.assertEqual(result["ngen_custom_action_arch"], "X64")
+            self.assertNotIn("PII-PATH", str(result))
+            self.assertFalse(patch_log.exists())
+            other = root / "unrelated-private"
+            other.write_bytes(b"not deleted")
+            patch_log.symlink_to(other)
+            blocked = p.classify_private_msi_log(
+                root, filename=p.PATCH_PRIVATE_LOG)
+            self.assertEqual(blocked["status"], "UNSAFE")
+            self.assertEqual(other.read_bytes(), b"not deleted")
+
+    def test_patch_exit_callback_observes_only_host_process_code(self):
+        with TemporaryDirectory() as td:
+            fake = mock.Mock()
+            fake.wait.return_value = 106
+            lowbytes = []
+            with mock.patch.object(p.subprocess, "Popen", return_value=fake):
+                outcome = p.private_run(
+                    ["wine", "msiexec.exe", "/p", "ORIGINAL.msp"],
+                    {}, Path(td), 15, on_exit_code=lowbytes.append)
+            self.assertEqual(outcome, "EXIT_NONZERO")
+            self.assertEqual(lowbytes, [106])
 
     def test_native_original_scm_measurement_cannot_fabricate_48_success(self):
         with TemporaryDirectory() as td:
@@ -194,6 +286,7 @@ class OriginalSignedMSITests(TestCase):
                 changed=True, release="NETFX48_RANGE")
             self.assertEqual(result["install"], "TIMED_OUT_PREFIX_REAPED")
             self.assertEqual(result["patch"], "NOT_RUN")
+            self.assertEqual(result["restart"], "NOT_RUN")
             self.assertEqual(result["scm_postflight"]["status"], "COMPLETE")
             self.assertEqual(result["win10"], "APPLIED")
             self.assertFalse(result["native48_candidate"])

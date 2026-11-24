@@ -60,6 +60,7 @@ STEPS = {
 }
 LOG_STATES = {"NOT_RUN", "NO_LOG", "CLASSIFIED", "TOO_LARGE", "UNSAFE", "UNREADABLE"}
 PRIVATE_LOG = "netfx48-msi-install-private.log"
+PATCH_PRIVATE_LOG = "netfx48-msp-patch-private.log"
 # An MSI hang may have no Return value 3. Retain the last *action class*,
 # never its raw name, timestamp, command, vendor log line, or package path.
 ACTION_STARTED = re.compile(
@@ -90,9 +91,11 @@ def blank_msi_log() -> dict:
             **blank_service_evidence()}
 
 
-def classify_private_msi_log(root: Path) -> dict:
-    """Publish only existing coarse classifier enums, never vendor log content."""
-    log = root / PRIVATE_LOG
+def classify_private_msi_log(root: Path, *, filename: str = PRIVATE_LOG) -> dict:
+    """Classify only allowlisted original MSI/MSP private logs and delete them."""
+    if filename not in {PRIVATE_LOG, PATCH_PRIVATE_LOG}:
+        raise ValueError("Unrecognized original Microsoft installer log")
+    log = root / filename
     if root.is_symlink() or log.is_symlink():
         return {**blank_msi_log(), "status": "UNSAFE"}
     try:
@@ -165,7 +168,8 @@ def blank() -> dict:
         "msi_timeout_seconds": 420,
         "win7": "NOT_RUN", "extract": "NOT_RUN", "media": "NOT_RUN",
         "install": "NOT_RUN", "patch": "NOT_RUN",
-        "install_log": blank_msi_log(), "ngen_log": blank_ngen(),
+        "install_log": blank_msi_log(), "patch_log": blank_msi_log(),
+        "patch_exit_lowbyte": "NOT_RUN", "ngen_log": blank_ngen(),
         "ngen_progress": blank_progress(),
         "ngen_queue_policy": "OFF", "ngen_queue": blank_queue(),
         "scm_preflight": blank_scm(), "scm_postflight": blank_scm(),
@@ -189,6 +193,23 @@ def validate(result: object) -> bool:
             or any(result[k] not in STEPS for k in ("extract", "install", "patch"))
             or result["media"] not in MEDIA or result["restart"] not in RESTART
             or not valid_msi_log(result["install_log"])
+            or not valid_msi_log(result["patch_log"])
+            or not (
+                (type(result["patch_exit_lowbyte"]) is str
+                 and result["patch_exit_lowbyte"] in {"NOT_RUN", "UNAVAILABLE"})
+                or (type(result["patch_exit_lowbyte"]) is int
+                    and 0 <= result["patch_exit_lowbyte"] <= 255)
+            )
+            or (result["patch"] == "NOT_RUN"
+                and (result["patch_log"] != blank_msi_log()
+                     or result["patch_exit_lowbyte"] != "NOT_RUN"))
+            or (result["patch"] != "NOT_RUN"
+                and (result["patch_log"]["status"] == "NOT_RUN"
+                     or result["patch_exit_lowbyte"] == "NOT_RUN"))
+            or (result["patch"] == "SUCCESS"
+                and result["patch_exit_lowbyte"] not in {0, "UNAVAILABLE"})
+            or (result["patch"] == "EXIT_NONZERO"
+                and result["patch_exit_lowbyte"] == 0)
             or not valid_ngen(result["ngen_log"])
             or not valid_progress(result["ngen_progress"])
             or type(result["ngen_queue_policy"]) is not str
@@ -272,7 +293,8 @@ def verify_extracted_media(root: Path) -> str:
 
 def private_run(args: list[str], env: dict[str, str], cwd: Path,
                 timeout: int, *, progress: Callable[[], None] | None = None,
-                on_diagnostic: Callable[[bytes], None] | None = None) -> str:
+                on_diagnostic: Callable[[bytes], None] | None = None,
+                on_exit_code: Callable[[int], None] | None = None) -> str:
     """Keep vendor output private; optionally classify bounded captured bytes.
 
     The callback runs only after the installer is reaped and never receives
@@ -338,6 +360,8 @@ def private_run(args: list[str], env: dict[str, str], cwd: Path,
         if on_diagnostic is not None:
             sink.seek(0)
             on_diagnostic(sink.read(8 * 1024 * 1024 + 1))
+        if on_exit_code is not None:
+            on_exit_code(code)
     return "SUCCESS" if code == 0 else "EXIT_NONZERO"
 
 
@@ -412,6 +436,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
     extracted, media, installed, patched = ("NOT_RUN", "NOT_RUN", "NOT_RUN", "NOT_RUN")
     restart = "NOT_RUN"
     install_log = blank_msi_log()
+    patch_log = blank_msi_log()
+    patch_exit_lowbyte: int | str = "NOT_RUN"
     ngen_log = blank_ngen()
     ngen_progress = blank_progress()
     queue_report = blank_queue()
@@ -457,12 +483,29 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                 # queue-pause servicing window, per Microsoft's NGen guidance.
                 # The custom MSI and MSP operations remain unmodified.
                 if installed == "SUCCESS":
+                    # The original MSP is not skipped after MSI success.
+                    # The earlier EXIT_NONZERO lacked both an MSI log and a
+                    # process exit code, preventing any useful attribution.
+                    # Record only the safe POSIX low byte, NEVER assume it
+                    # equals the complete Win32 Installer error code.
+                    patch_exit_lowbyte = "UNAVAILABLE"
+                    observed_patch_exit: list[int] = []
                     patched = private_run(
                         [str(wine), "msiexec.exe", "/p",
                          "C:\\" + TARGET + "\\" + MSP,
-                         "/qn", "/norestart", "EXTUI=1"],
+                         "/qn", "/norestart", "EXTUI=1",
+                         "/L*v", "C:\\" + TARGET + "\\" + PATCH_PRIVATE_LOG],
                         env, prefix, 420,
+                        on_exit_code=observed_patch_exit.append,
                     )
+                    if observed_patch_exit:
+                        exit_code = observed_patch_exit[-1]
+                        if type(exit_code) is int and 0 <= exit_code <= 255:
+                            patch_exit_lowbyte = exit_code
+                    # Read and delete original MSI's private MSP log locally.
+                    # Never copy lines, package names, file paths or commands.
+                    patch_log = classify_private_msi_log(
+                        root, filename=PATCH_PRIVATE_LOG)
                 if pause_native_ngen_queue:
                     queue_report = resume_queue(
                         wine, prefix, env, queue_report, private_run,
@@ -479,6 +522,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                   "native40_persistent": True, "win7": win7,
                   "extract": extracted, "media": media, "install": installed,
                   "patch": patched, "install_log": install_log,
+                  "patch_log": patch_log,
+                  "patch_exit_lowbyte": patch_exit_lowbyte,
                   "ngen_log": ngen_log, "ngen_progress": ngen_progress,
                   "ngen_queue_policy": queue_policy, "ngen_queue": queue_report,
                   "scm_preflight": scm_preflight,
@@ -489,7 +534,13 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
         if not validate(result):
             raise ValueError("Invalid fail-closed signed MSI timeout report")
         return result
-    if installed == "SUCCESS" and patched == "SUCCESS" and win10 == "APPLIED":
+    # Distinguish a genuinely persistent 4.8 CLR from the state left only in
+    # a running Wine session. A completed-but-failed original MSP can still
+    # leave native CLR4.8 files and a Release marker. Reboot that disposable
+    # prefix and measure the actual original runtime, but keep the signed
+    # MSP-success gate STRICT: a failed patch is never a complete 4.8 install.
+    if (installed == "SUCCESS" and patched in {"SUCCESS", "EXIT_NONZERO"}
+            and win10 == "APPLIED"):
         restart = wineboot_restart(wine, prefix, timeout=90)
 
     after = snapshot(prefix)
@@ -499,6 +550,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
         "msi_timeout_seconds": msi_timeout_seconds,
         "win7": win7, "extract": extracted, "media": media,
         "install": installed, "patch": patched, "install_log": install_log,
+        "patch_log": patch_log, "patch_exit_lowbyte": patch_exit_lowbyte,
         "ngen_log": ngen_log, "ngen_progress": ngen_progress,
         "ngen_queue_policy": queue_policy, "ngen_queue": queue_report,
         "scm_preflight": scm_preflight, "scm_postflight": scm_postflight,

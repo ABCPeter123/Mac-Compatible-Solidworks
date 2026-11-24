@@ -1751,6 +1751,14 @@ jobs:
                               "custom_action_detail", "ngen_custom_action_arch"):
                       out.write(f"signed_msi_48_install_log_{key}: **"
                                 f"{msi['install_log'][key]}**\n\n")
+                  out.write(f"signed_msi_48_patch_exit_lowbyte: **"
+                            f"{msi['patch_exit_lowbyte']}**\n\n")
+                  for key in ("status", "failure", "action",
+                              "last_started_action", "errors",
+                              "services_mentioned", "services_near_missing_error",
+                              "custom_action_detail", "ngen_custom_action_arch"):
+                      out.write(f"signed_msi_48_patch_log_{key}: **"
+                                f"{msi['patch_log'][key]}**\n\n")
                   from scripts.netfx48_ngen_log_evidence import valid as valid_ngen
                   assert valid_ngen(msi["ngen_log"])
                   for field in ("x64", "x86", "signals"):
