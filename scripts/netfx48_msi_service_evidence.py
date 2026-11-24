@@ -31,10 +31,16 @@ START = re.compile(
 SERVICE_MISSING = re.compile(r"(?i)\b(?:0x80070424|error\s+1060)\b")
 DETAILS = {"NOT_IDENTIFIED", "NGEN", "ASSEMBLY", "SERVICE_CONFIG",
            "REGISTRATION", "OTHER_CUSTOM"}
+ARCHES = {"NOT_APPLICABLE", "NOT_IDENTIFIED", "X64", "X86", "AMBIGUOUS"}
+NGEN_ARCH = {
+    "X64": re.compile(r"(?i)(?<![a-z0-9])(?:x64|amd64)(?![a-z0-9])"),
+    "X86": re.compile(r"(?i)(?<![a-z0-9])x86(?![a-z0-9])"),
+}
 EMPTY = {
     "services_mentioned": [],
     "services_near_missing_error": [],
     "custom_action_detail": "NOT_IDENTIFIED",
+    "ngen_custom_action_arch": "NOT_APPLICABLE",
 }
 # The last action is captured independent of failed return markers. An MSI
 # can stall indefinitely without emitting "Return value 3".
@@ -48,7 +54,8 @@ DETAIL_RULES = (
 
 def blank() -> dict:
     return {"services_mentioned": [], "services_near_missing_error": [],
-            "custom_action_detail": "NOT_IDENTIFIED"}
+            "custom_action_detail": "NOT_IDENTIFIED",
+    "ngen_custom_action_arch": "NOT_APPLICABLE"}
 
 
 def valid(report: object) -> bool:
@@ -56,6 +63,13 @@ def valid(report: object) -> bool:
         return False
     if type(report["custom_action_detail"]) is not str or (
             report["custom_action_detail"] not in DETAILS):
+        return False
+    if (type(report["ngen_custom_action_arch"]) is not str
+            or report["ngen_custom_action_arch"] not in ARCHES
+            or (report["custom_action_detail"] != "NGEN"
+                and report["ngen_custom_action_arch"] != "NOT_APPLICABLE")
+            or (report["custom_action_detail"] == "NGEN"
+                and report["ngen_custom_action_arch"] == "NOT_APPLICABLE")):
         return False
     for key in ("services_mentioned", "services_near_missing_error"):
         values = report[key]
@@ -79,6 +93,7 @@ def classify(raw: bytes) -> dict:
     mentions: set[str] = set()
     near_error: set[str] = set()
     last_custom = "NOT_IDENTIFIED"
+    last_ngen_arch = "NOT_APPLICABLE"
     context: list[set[str]] = []
     for line in lines:
         codes = ({code for code, pat in SERVICE_PATTERNS.items()
@@ -99,10 +114,19 @@ def classify(raw: bytes) -> dict:
                     (tag for tag, pat in DETAIL_RULES if pat.search(name)),
                     "OTHER_CUSTOM",
                 )
+                if last_custom == "NGEN":
+                    matched = {arch for arch, pattern in NGEN_ARCH.items()
+                               if pattern.search(name)}
+                    last_ngen_arch = (next(iter(matched)) if len(matched) == 1
+                                      else "AMBIGUOUS" if matched
+                                      else "NOT_IDENTIFIED")
+                else:
+                    last_ngen_arch = "NOT_APPLICABLE"
     report = {
         "services_mentioned": sorted(mentions),
         "services_near_missing_error": sorted(near_error),
         "custom_action_detail": last_custom,
+        "ngen_custom_action_arch": last_ngen_arch,
     }
     assert valid(report)
     return report

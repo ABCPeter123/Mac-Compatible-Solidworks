@@ -1748,7 +1748,7 @@ jobs:
                   for key in ("status", "failure", "action",
                               "last_started_action", "errors",
                               "services_mentioned", "services_near_missing_error",
-                              "custom_action_detail"):
+                              "custom_action_detail", "ngen_custom_action_arch"):
                       out.write(f"signed_msi_48_install_log_{key}: **"
                                 f"{msi['install_log'][key]}**\n\n")
                   from scripts.netfx48_ngen_log_evidence import valid as valid_ngen

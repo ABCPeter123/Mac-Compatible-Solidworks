@@ -14,6 +14,7 @@ class SignedMSIServiceEvidenceTests(unittest.TestCase):
             "services_mentioned": ["CLR_OPTIMIZATION_64"],
             "services_near_missing_error": ["CLR_OPTIMIZATION_64"],
             "custom_action_detail": "SERVICE_CONFIG",
+            "ngen_custom_action_arch": "NOT_APPLICABLE",
         })
         self.assertTrue(ev.valid(report))
         self.assertNotIn("private-vendor-path", str(report))
@@ -48,6 +49,31 @@ class SignedMSIServiceEvidenceTests(unittest.TestCase):
                     f"Action start 11:12:34: {action}.".encode()
                 )["custom_action_detail"], want)
 
+    def test_original_ngen_action_architecture_is_explicit_and_never_guessed(self):
+        fixtures = (
+            (b"Action start 11:12:34: CA_NgenServiceVersionCheck_X64.36\n", "X64"),
+            (b"Action start 11:12:34: CA_NgenServiceVersionCheck_X86.36\n", "X86"),
+            (b"Action start 11:12:34: CA_NgenServiceVersionCheck.36\n",
+             "NOT_IDENTIFIED"),
+            (b"Action start 11:12:34: CA_Ngen_x86_x64.36\n", "AMBIGUOUS"),
+            (b"Action start 11:12:34: CA_NgenPrivateWindowsUserData.36\n",
+             "NOT_IDENTIFIED"),
+        )
+        for raw, architecture in fixtures:
+            with self.subTest(architecture=architecture):
+                report = ev.classify(raw)
+                self.assertEqual(report["custom_action_detail"], "NGEN")
+                self.assertEqual(report["ngen_custom_action_arch"], architecture)
+                self.assertTrue(ev.valid(report))
+                self.assertNotIn("NgenServiceVersionCheck", str(report))
+                self.assertNotIn("PrivateWindowsUserData", str(report))
+        changed = ev.classify(
+            b"Action start 11:12:34: CA_Ngen_X86.36\n"
+            b"Action start 11:15:20: CA_ServiceConfig_X64.36\n")
+        self.assertEqual(changed["custom_action_detail"], "SERVICE_CONFIG")
+        self.assertEqual(changed["ngen_custom_action_arch"], "NOT_APPLICABLE")
+        self.assertTrue(ev.valid(changed))
+
     def test_invalid_input_never_exports_or_corrupts_evidence(self):
         self.assertEqual(ev.classify(b""), ev.blank())
         self.assertEqual(ev.classify(b"x" * (ev.MAX_FILE_BYTES + 1)), ev.blank())
@@ -61,6 +87,17 @@ class SignedMSIServiceEvidenceTests(unittest.TestCase):
         }))
         self.assertFalse(ev.valid({
             **ev.blank(), "custom_action_detail": "PRIVATE",
+        }))
+        self.assertFalse(ev.valid({
+            **ev.blank(), "ngen_custom_action_arch": "PRIVATE_ARCH",
+        }))
+        self.assertFalse(ev.valid({
+            **ev.blank(), "custom_action_detail": "SERVICE_CONFIG",
+            "ngen_custom_action_arch": "X86",
+        }))
+        self.assertFalse(ev.valid({
+            **ev.blank(), "custom_action_detail": "NGEN",
+            "ngen_custom_action_arch": "NOT_APPLICABLE",
         }))
         self.assertEqual(ev.classify(
             b"Service TrustedInstaller shown without an error."
