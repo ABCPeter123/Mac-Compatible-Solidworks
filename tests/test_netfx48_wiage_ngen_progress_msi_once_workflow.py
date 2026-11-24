@@ -271,6 +271,34 @@ class Signed48AfterProgressNgenTests(unittest.TestCase):
         self.assertIn("extend_if_progress=False", native)
         self.assertIn('"EXIT_SIGNALLED"', native)
 
+    def test_wine_msp_trace_is_private_and_only_the_native_original_patch(self):
+        workflow = REUSE.read_text(encoding="utf-8")
+        native = (ROOT / "scripts/netfx40_to_48_signed_msi.py").read_text(
+            encoding="utf-8")
+        wine_trace = (ROOT / "scripts/netfx48_msp_wine_trace.py").read_text(
+            encoding="utf-8")
+        for item in (
+            '"WINEDEBUG": "-all,err+msi"',
+            '"--apply-original-msp"',
+            "on_stderr=wine_errors.append",
+            "classify_msp_wine_trace(",
+            "patch_wine_trace = blank_msp_wine_trace()",
+            'valid_msp_wine_trace(result["patch_wine_trace"])',
+            "stderr_sink if on_stderr is not None",
+        ):
+            with self.subTest(item=item):
+                self.assertIn(item, native)
+        self.assertIn("signed_msi_48_patch_wine_trace_{field}", workflow)
+        self.assertIn("assert valid_wine_msp_trace", workflow)
+        self.assertIn("MAX_BYTES = 8 * 1024 * 1024", wine_trace)
+        self.assertIn("INSTALL_SCRIPT_HALTED", wine_trace)
+        self.assertIn("ROLLBACK_SCRIPT_HALTED", wine_trace)
+        self.assertNotIn("print(", wine_trace)
+        self.assertNotIn("logging.", wine_trace)
+        self.assertIn('signed_msp_win32_exit: true',
+                      CALLER.read_text(encoding="utf-8"))
+        self.assertIn('result["patch"] == "SUCCESS"', native)
+
     def test_drain_runs_before_original_msi_and_has_bounded_runtime(self):
         workflow = REUSE.read_text(encoding="utf-8")
         begin = workflow.index(

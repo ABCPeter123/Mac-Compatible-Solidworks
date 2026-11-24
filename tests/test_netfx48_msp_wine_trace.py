@@ -1,0 +1,94 @@
+"""Synthetic private Wine MSI trace fixtures. NEVER upload actual vendor logs."""
+from unittest import TestCase
+
+from scripts import netfx48_msp_wine_trace as t
+
+
+class OriginalMSPPrivateWineMSIErrors(TestCase):
+    def test_original_script_1603_and_later_rollback_are_not_confused(self):
+        raw = (
+            b'003c:err:msi:execute_script Execution of script 0 halted; '
+            b'action L"CA_Ngen_X64_PRIVATE_PATH_GUID" returned 1603\n'
+            b'0040:err:msi:execute_script Execution of script 2 halted; '
+            b'action L"[SchedServiceConfig<=>S-1-5-21-SECRET]RollbackServiceConfig" '
+            b'returned 1603\n'
+            b'0040:err:msi:ITERATE_Actions Execution halted, '
+            b'action L"InstallFinalize" returned 1603\n'
+        )
+        result = t.classify(raw)
+        self.assertTrue(t.valid(result))
+        self.assertEqual(result, {
+            "status": "CLASSIFIED",
+            "first_forward_action": "NGEN",
+            "first_forward_return": "WIN32_1603",
+            "first_rollback_action": "SERVICE",
+            "first_rollback_return": "WIN32_1603",
+            "signals": ["INSTALL_SCRIPT_HALTED", "MSI_SERVICE_OPERATION_FAILURE",
+                        "ROLLBACK_SCRIPT_HALTED"],
+        })
+        self.assertNotIn("SECRET", str(result))
+        self.assertNotIn("PRIVATE_PATH", str(result))
+        self.assertNotIn("GUID", str(result))
+        self.assertNotIn("SchedServiceConfig", str(result))
+
+    def test_first_forward_error_wins_over_later_finalization_cascade(self):
+        raw = (
+            b'1111:err:msi:execute_script Execution of script 0 halted; '
+            b'action L"InstallFiles" returned 1603\n'
+            b'2222:err:msi:execute_script Execution of script 0 halted; '
+            b'action L"CA_Ngen_X64" returned 1603\n'
+            b'0001:err:msi:extract_cabinet_stream FDICopy failed\n'
+        )
+        report = t.classify(raw)
+        self.assertEqual(report["first_forward_action"], "CABINET")
+        self.assertEqual(report["first_rollback_action"], "NOT_SEEN")
+        self.assertEqual(report["signals"],
+                         ["INSTALL_SCRIPT_HALTED", "MSI_CABINET_FAILURE"])
+        self.assertTrue(t.valid(report))
+
+    def test_unknown_script_is_not_a_forward_failure(self):
+        s = (b'003c:err:msi:execute_script Execution of script 8 halted; '
+             b'action L"CA_PRIVATE_SID" returned 1642\n')
+        report = t.classify(s)
+        self.assertEqual(report["status"], "CLASSIFIED")
+        self.assertEqual(report["first_forward_action"], "NOT_SEEN")
+        self.assertEqual(report["first_rollback_action"], "NOT_SEEN")
+        self.assertEqual(report["signals"], [])
+        self.assertTrue(t.valid(report))
+
+    def test_no_wine_msi_errors_is_not_framework_success(self):
+        for raw in (b"", b'0000:fixme:msi:install_secret PRIVATE\n',
+                    b'0000:err:ole:private_path\n'):
+            r = t.classify(raw)
+            self.assertEqual(r, t.blank("NO_MSI_ERRORS"))
+            self.assertTrue(t.valid(r))
+        self.assertTrue(t.valid(t.blank()))
+        self.assertFalse(t.valid({**t.blank(), "signals": ["PRIVATE"]}))
+
+    def test_only_fixed_categories_and_strict_private_limits(self):
+        for action, want in (
+            ("SchedServiceConfig PRIVATE_SID", "SERVICE"),
+            ("CA_Ngen_X64", "NGEN"),
+            ("MsiPublishAssemblies", "ASSEMBLY"),
+            ("CA_RegAsm_X64", "REGISTRY"),
+            ("Some_private_action_name", "UNKNOWN"),
+            ("CA_CustomPrivateIdentity", "CUSTOM"),
+        ):
+            with self.subTest(action=action):
+                raw = (f'0011:err:msi:execute_script Execution of script 0 halted; '
+                       f'action L"{action}" returned 1603\n').encode()
+                r = t.classify(raw)
+                self.assertEqual(r["first_forward_action"], want)
+                self.assertEqual(r["first_forward_return"], "WIN32_1603")
+                self.assertNotIn(action, str(r))
+                self.assertTrue(t.valid(r))
+        self.assertEqual(t.classify(b"a" * (t.MAX_BYTES + 1)),
+                         t.blank("TOO_LARGE"))
+        self.assertEqual(t.classify(b"0011:err:msi:foo " + b"a" * 9000),
+                         t.blank("NO_MSI_ERRORS"))
+        bad = {**t.blank("CLASSIFIED"),
+               "first_forward_action": "NGEN",
+               "first_forward_return": "WIN32_1603"}
+        self.assertFalse(t.valid(bad))
+        self.assertFalse(t.valid({**t.blank(), "first_forward_action": []}))
+        self.assertFalse(t.valid({**t.blank(), "signals": ["INSTALL_SCRIPT_HALTED"]}))

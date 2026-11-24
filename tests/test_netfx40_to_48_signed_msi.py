@@ -52,7 +52,7 @@ class OriginalSignedMSITests(TestCase):
                  pause_failure=None, resume_failure=None,
                  patch_log_bytes=None, patch_process_code=67,
                  install_profile="win7", native_patch_probe=False,
-                 native_patch_code=1603):
+                 native_patch_code=1603, wine_error_bytes=None):
         calls = []
         patch_fixture = None
         if native_patch_probe:
@@ -67,7 +67,8 @@ class OriginalSignedMSITests(TestCase):
                 ngen.parent.mkdir(parents=True, exist_ok=True)
                 ngen.write_bytes(b"MZ" + b"x" * 4998)
         def fake_run(cmd, env, cwd, timeout, *, progress=None,
-                     on_exit_code=None, on_diagnostic=None):
+                     on_exit_code=None, on_diagnostic=None,
+                     on_stderr=None):
             calls.append((cmd, timeout))
             # macOS /var resolves through /private/var. Test fixture identity
             # by its exact self-authored executable name, not a symlink alias.
@@ -81,6 +82,9 @@ class OriginalSignedMSITests(TestCase):
                             b"SWCOMPAT_MSP_WIN32_EXIT_HEX=00000643\n")
                     return "SUCCESS"
                 if cmd[2] == "--apply-original-msp":
+                    self.assertEqual(env.get("WINEDEBUG"), "-all,err+msi")
+                    if on_stderr is not None:
+                        on_stderr(wine_error_bytes or b"")
                     if patch_log_bytes is not None:
                         log = paths[1] / "drive_c" / p.TARGET / p.PATCH_PRIVATE_LOG
                         log.write_bytes(patch_log_bytes)
@@ -179,6 +183,48 @@ class OriginalSignedMSITests(TestCase):
             self.assertEqual(calls[2][1], 420)
             self.assertFalse(p.validate(dict(result, native48_candidate=False)))
             self.assertFalse(p.validate(dict(result, private_vendor_log="forbidden")))
+
+    def test_genuine_msp_wine_error_stderr_is_private_and_does_not_change_exit(self):
+        with TemporaryDirectory() as td:
+            trace = (
+                b'003c:err:msi:execute_script Execution of script 0 halted; '
+                b'action L"CA_Ngen_X64_PRIVATE_USER_PATH" returned 1603\n'
+                b'003c:err:msi:execute_script Execution of script 2 halted; '
+                b'action L"RollbackServiceConfig_PRIVATE_USER" returned 1603\n'
+            )
+            result, calls = self.run_case(
+                self.fixture(Path(td)), native_patch_probe=True,
+                native_patch_code=1603, wine_error_bytes=trace)
+            self.assertEqual(result["patch"], "EXIT_NONZERO")
+            self.assertEqual(result["patch_win32"]["exit_hex"], "00000643")
+            self.assertEqual(result["patch_wine_trace"]["status"], "CLASSIFIED")
+            self.assertEqual(result["patch_wine_trace"]["first_forward_action"],
+                             "NGEN")
+            self.assertEqual(result["patch_wine_trace"]["first_rollback_action"],
+                             "SERVICE")
+            self.assertFalse(result["native48_candidate"])
+            self.assertNotIn("PRIVATE_USER_PATH", str(result))
+            self.assertNotIn("RollbackServiceConfig", str(result))
+            self.assertEqual(len([cmd for cmd, _ in calls
+                                  if len(cmd) == 3
+                                  and cmd[2] == "--apply-original-msp"]), 1)
+            self.assertFalse(p.validate({
+                **result, "patch_wine_trace": {**result["patch_wine_trace"],
+                                               "first_forward_action": "PRIVATE"}}))
+        with TemporaryDirectory() as td:
+            result, _ = self.run_case(
+                self.fixture(Path(td)), native_patch_probe=True,
+                native_patch_code=0)
+            self.assertEqual(result["patch_wine_trace"]["status"],
+                             "NO_MSI_ERRORS")
+            self.assertTrue(result["native48_candidate"])
+            self.assertFalse(p.validate({
+                **result, "patch_wine_trace": {"status": "SUCCESS"}}))
+        with TemporaryDirectory() as td:
+            result, _ = self.run_case(self.fixture(Path(td)))
+            self.assertEqual(result["patch_wine_trace"], p.blank_msp_wine_trace())
+            self.assertFalse(p.validate({
+                **result, "patch_wine_trace": p.blank_msp_wine_trace("CLASSIFIED")}))
 
     def test_true_win32_original_msp_1603_is_not_mistaken_for_green_wrapper(self):
         with TemporaryDirectory() as td:

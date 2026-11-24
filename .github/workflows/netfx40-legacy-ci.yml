@@ -1856,6 +1856,13 @@ jobs:
                   for field in ("status", "exit_hex", "category"):
                       out.write(f"signed_msi_48_patch_win32_{field}: **"
                                 f"{msi['patch_win32'][field]}**\n\n")
+                  from scripts.netfx48_msp_wine_trace import valid as valid_wine_msp_trace
+                  assert valid_wine_msp_trace(msi["patch_wine_trace"])
+                  for field in ("status", "first_forward_action",
+                                "first_forward_return", "first_rollback_action",
+                                "first_rollback_return", "signals"):
+                      out.write(f"signed_msi_48_patch_wine_trace_{field}: **"
+                                f"{msi['patch_wine_trace'][field]}**\n\n")
                   for key in ("status", "failure", "action",
                               "last_started_action", "errors",
                               "services_mentioned", "services_near_missing_error",
