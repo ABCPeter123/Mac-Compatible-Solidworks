@@ -64,7 +64,9 @@ def valid(report: object) -> bool:
             or report["retry_policy"] not in {"OFF", "GROWING_NONZERO_ONCE"}
             or type(report["retry"]) is not dict
             or set(report["retry"]) != {"x64", "x86"}
-            or any(report["retry"][arch] not in STEP for arch in ("x64", "x86"))
+            or any(type(report["retry"][arch]) is not str
+                   or report["retry"][arch] not in STEP
+                   for arch in ("x64", "x86"))
             or (report["retry_policy"] == "OFF"
                 and report["retry"] != {"x64": "NOT_RUN", "x86": "NOT_RUN"})
             or any(report["retry"][arch] != "NOT_RUN"
