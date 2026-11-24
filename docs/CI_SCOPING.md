@@ -1,15 +1,21 @@
-# CI policy: one active compatibility path
+# CI policy: one active authenticated Microsoft .NET 4.8 MSI/MSP path
 
-Every pull request and push to `main` runs [Compatibility foundation](../.github/workflows/compatibility-ci.yml). This includes all Python regression tests, including the native .NET 4.0, 4.8.1 prerequisite classifier, and CBS parser safety tests.
+## Code-only regression jobs
 
-The signed, multi-minute Microsoft installer experiments are **manual-only**:
-- [Original .NET 4.0 and authenticated 4.8.1 upgrade](../.github/workflows/netfx40-legacy-ci.yml)
-- [Genuine .NET 4.8.1 fresh-prefix baseline](../.github/workflows/netfx481-wine-ci.yml)
+Every pull request and push to `main` runs [Compatibility foundation](../.github/workflows/compatibility-ci.yml), including the cross-platform Python safety tests, independent Windows build probes, Apple Metal tests, and the .NET Framework compatibility classifiers. Specialized contract workflows, including [signed 4.8 MSI source contract](../.github/workflows/netfx48-signed-msi-contract-ci.yml), run only for their scoped source changes.
 
-Run a new signed-installer experiment only after changing one targeted hypothesis or validating a previously unseen defect. Do not rerun the same installation for documentation, parser changes, or cosmetic CI updates. Distinguish test infrastructure success from successful framework installation.
+These code-only jobs cannot demonstrate a completed Microsoft installer or working SOLIDWORKS. A green infrastructure workflow is not proof of installation.
 
-The one-off Python-only CI workflows for prerequisite OS bands and CBS preflight were removed because universal unit testing already covers them. The production servicing inventory still imports and tests the actual CBS operation preflight parser. Other specialized workflows continue to use their own narrow path filters or manual dispatch. They are not prerequisites for the current .NET investigation.
+## Authenticated installer jobs
 
-**Priority:** independently verified Microsoft .NET 4.0 execution and restart persistence, then resolve authentic .NET 4.8.1 return code 5100 using installer-observed prerequisites and servicing evidence. See [Roadmap](ROADMAP.md) and [Issue #115](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/issues/115).
+The reusable [original .NET 4.0 / 4.8 servicing workflow](../.github/workflows/netfx40-legacy-ci.yml) is `workflow_dispatch` and `workflow_call` gated. The single current, main-only, **self-path-triggered** authentic x64 .NET 4.8 test is [Wiage NGen preflight and signed MSI/MSP](../.github/workflows/netfx48-wiage-ngen-progress-msi-once-ci.yml). It calls the same reusable workflow with pinned Wine, macOS 26, Microsoft media authentication, genuine original x64/x86 NGen preflight, bounded progress-gated retry, unmodified vendor signed MSI/MSP, and independent full Win32 MSP exit capture.
 
-Keep old successful evidence in GitHub Actions and PR history. Historical results do not need repeated validation unless the affected runtime changes.
+The [fresh-prefix .NET 4.8.1 trial](../.github/workflows/netfx481-wine-ci.yml) and original Microsoft setup variants remain separately gated. **Do not run 4.8.1 as if 4.8 were installed**; the original signed x64 .NET 4.8 MSP must first succeed alongside the restart, Release and native managed runtime checks.
+
+The one-shot workflow only starts when its own file changes on `main`. Updating a README, an ordinary script, a Python unit test, or the reusable CI workflow does not restart that authenticated test. Changes to the one-shot caller must be deliberate. GitHub's runner queue can delay the test. Never infer installation from a queued/cancelled run.
+
+## Retired experiments
+
+Historical self-triggered Winetricks, direct-4.8 bootstrapper, NGen drain and service-discovery variants were replaced by the current authenticated signed-MSI/MSP path. Nine unreferenced one-shot workflow files were deleted in [PR #252](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/pull/252). Past source, runs, and evidence remain in Git history and GitHub Actions. Keep actively referenced tests, protocols, SOLIDWORKS bootstrap/GUI checks, and independently verified Windows binaries.
+
+Before scheduling another expensive signed Microsoft installer test, identify the new hypothesis and check [Issue #115](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/issues/115) and the [roadmap](ROADMAP.md). Prioritize full original MSP Windows Installer failure evidence, then genuine .NET 4.8.1, then licensed SOLIDWORKS testing.

@@ -12,7 +12,15 @@ The opt-in [licensed installer trial](.github/workflows/solidworks-bootstrap-tri
 
 **The authentic SOLIDWORKS installer has now been downloaded, digitally verified and executed under hosted Apple Silicon Wine** ([CI run 43494158179](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43494158179)). Its process started and remained running until the bounded 120-second timeout. Installation Manager visibility, completed installation, activation and working CAD remain **NOT VERIFIED**. Later diagnostic runs detected one visible, responsive installer-associated Win32 window, but client-area pixel readback failed. The current probe also checks visible child HWNDs, owned popup windows and composition styles on the next manually dispatched trial, without collecting screenshots or licenses.
 
-## Current compatibility blocker: .NET Framework 4.8.1
+## Current compatibility blocker: complete signed .NET 4.8 servicing before .NET 4.8.1
+
+**Verified on authenticated Apple Silicon, November 24, 2026:** In multiple runs of the isolated Wiage 11.13/macOS 26 compatibility path, the **original Microsoft-signed .NET 4.8 x64 MSI returned SUCCESS**, a genuine installed x64 Microsoft CLR binary changed, the original registry Release entered `NETFX48_RANGE`, and native-only Microsoft managed execution passed even **after a clean Wine restart**. See [run #45316025486](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/45316025486). This is working authentic Microsoft CLR 4.8 managed execution, **not** proof of a complete .NET 4.8 servicing transaction.
+
+The next authentic x64 **Microsoft MSP patch still returns nonzero** with a private classified `NGEN/X64` custom-action category; Wine's observed process-exit low byte `67` does **not** establish the full Windows Installer error. Switching the Wine Win7/Win10 profile or pausing real Microsoft NGen queues did not fix the patch. The [active, separately authenticated one-shot](.github/workflows/netfx48-wiage-ngen-progress-msi-once-ci.yml) now uses an independently MSVC-compiled x64 Win32 monitor to capture the original MSP's **full DWORD exit code**, with a narrowly scoped, growth-dependent one-time original Microsoft NGen preflight retry. [Run #45426863980](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/45426863980) is the current test. **Original signed MSP success has not been demonstrated**, so complete .NET 4.8, subsequent .NET 4.8.1 installation, SOLIDWORKS installation, and CAD functionality are all unverified.
+
+The following paragraphs preserve earlier milestones as historical evidence. The [current roadmap](docs/ROADMAP.md), [CI scope](docs/CI_SCOPING.md), and [Issue #115](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/issues/115) carry the latest acceptance criteria.
+
+### Historical .NET diagnostics
 
 **November 15, 2026:** Native Microsoft .NET Framework 4.0 has now loaded, completed native-only managed execution, and survived a Wine restart in two authenticated Apple Silicon runs ([first](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43743135426), [repeat](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43744752248)). Other runs still fail, and neither a timeout nor an infrastructure-green job proves that the installer finished correctly.
 
