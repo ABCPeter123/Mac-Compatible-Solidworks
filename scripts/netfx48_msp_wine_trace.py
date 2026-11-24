@@ -1,6 +1,6 @@
 """Privacy-safe classification of Wine MSI stderr from ORIGINAL .NET 4.8 MSP.
 
-Only errors from Wine's err+msi channel are considered. Do not retain or
+Only errors and explicitly requested trace actions from Wine MSI are classified. Do not retain or
 publish raw action names, vendor data, SID, GUID, command lines, paths, PIDs,
 service names or Windows Installer logs. This diagnostic is not evidence of
 successful Microsoft servicing, nor proof that a named action is causal.
@@ -219,7 +219,7 @@ def classify(raw: bytes) -> dict:
         signals.add("MSI_TRACE_NONFINAL_" + last_nonfinal)
     # Only surface the coarse Wine error sources if more specific, bounded
     # classifications were unavailable. This preserves prior evidence shapes.
-    if not signals:
+    if not signals.intersection({"INSTALL_SCRIPT_HALTED", "ROLLBACK_SCRIPT_HALTED"} | set(SIGNAL_MATCH)):
         signals.update(unattributed_sources)
     report["signals"] = sorted(signals)
     assert valid(report)
