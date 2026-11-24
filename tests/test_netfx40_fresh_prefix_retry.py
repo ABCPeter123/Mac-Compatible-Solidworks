@@ -2,7 +2,7 @@
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest import TestCase, mock
+from unittest import TestCase, mock, skipIf
 
 from scripts import netfx40_fresh_prefix_retry as p
 
@@ -73,6 +73,7 @@ class OriginalMSIFreshPrefixRetryTests(TestCase):
                 "ALREADY_VERIFIED")
             stop.assert_not_called()
 
+    @skipIf(os.name == "nt", "Clean Wine prefix retry is POSIX-only")
     def test_rename_only_an_exact_marked_ephemeral_prefix_after_server_shutdown(self):
         with TemporaryDirectory() as td:
             root = Path(td)
@@ -101,6 +102,7 @@ class OriginalMSIFreshPrefixRetryTests(TestCase):
                               self.invalid_restart(), agreed=True),
                     "DENIED")
 
+    @skipIf(os.name == "nt", "Clean Wine prefix retry is POSIX-only")
     def test_refuse_unmarked_symlinked_existing_archive_or_failed_cleanup(self):
         with TemporaryDirectory() as td:
             root = Path(td)
