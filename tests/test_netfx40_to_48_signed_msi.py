@@ -51,8 +51,13 @@ class OriginalSignedMSITests(TestCase):
                  msi_timeout_seconds=420, pause_queue=False,
                  pause_failure=None, resume_failure=None,
                  patch_log_bytes=None, patch_process_code=67,
-                 install_profile="win7"):
+                 install_profile="win7", native_patch_probe=False,
+                 native_patch_code=1603):
         calls = []
+        patch_fixture = None
+        if native_patch_probe:
+            patch_fixture = paths[0].parent / "netfx48_msp_win32_status.exe"
+            patch_fixture.write_bytes(b"synthetic self-authored Win32 only")
         if pause_queue:
             prefix = paths[1]
             (prefix / ".swcompat-netfx481-disposable").touch()
@@ -62,8 +67,27 @@ class OriginalSignedMSITests(TestCase):
                 ngen.parent.mkdir(parents=True, exist_ok=True)
                 ngen.write_bytes(b"MZ" + b"x" * 4998)
         def fake_run(cmd, env, cwd, timeout, *, progress=None,
-                     on_exit_code=None):
+                     on_exit_code=None, on_diagnostic=None):
             calls.append((cmd, timeout))
+            if native_patch_probe and cmd[1] == str(patch_fixture):
+                if cmd[2] == "--selftest-1603":
+                    if on_diagnostic:
+                        on_diagnostic(
+                            b"SWCOMPAT_MSP_WIN32_SCHEMA=1\n"
+                            b"SWCOMPAT_MSP_WIN32_STATUS=SELFTEST\n"
+                            b"SWCOMPAT_MSP_WIN32_EXIT_HEX=00000643\n")
+                    return "SUCCESS"
+                if cmd[2] == "--apply-original-msp":
+                    if patch_log_bytes is not None:
+                        log = paths[1] / "drive_c" / p.TARGET / p.PATCH_PRIVATE_LOG
+                        log.write_bytes(patch_log_bytes)
+                    if on_diagnostic:
+                        on_diagnostic((
+                            "SWCOMPAT_MSP_WIN32_SCHEMA=1\n"
+                            "SWCOMPAT_MSP_WIN32_STATUS=EXIT\n"
+                            f"SWCOMPAT_MSP_WIN32_EXIT_HEX={native_patch_code:08X}\n"
+                        ).encode("ascii"))
+                    return "SUCCESS"  # Wrapper success != original MSP success.
             if len(cmd) >= 4 and cmd[2] == "queue":
                 if cmd[3] == "pause" and pause_failure is not None and "Framework/" in cmd[1]:
                     return pause_failure
@@ -125,7 +149,8 @@ class OriginalSignedMSITests(TestCase):
                 prepare_assembly_cache=prepare_cache,
                 msi_timeout_seconds=msi_timeout_seconds,
                 pause_native_ngen_queue=pause_queue,
-                install_profile=install_profile)
+                install_profile=install_profile,
+                patch_fixture=patch_fixture)
         self.assertTrue(p.validate(result))
         self.assertEqual(result["solidworks_compatibility"], "NOT_DEMONSTRATED")
         self.assertFalse(result["framework481_confirmed"])
@@ -151,6 +176,59 @@ class OriginalSignedMSITests(TestCase):
             self.assertEqual(calls[2][1], 420)
             self.assertFalse(p.validate(dict(result, native48_candidate=False)))
             self.assertFalse(p.validate(dict(result, private_vendor_log="forbidden")))
+
+    def test_true_win32_original_msp_1603_is_not_mistaken_for_green_wrapper(self):
+        with TemporaryDirectory() as td:
+            paths = self.fixture(Path(td))
+            result, calls = self.run_case(
+                paths, native_patch_probe=True, native_patch_code=1603,
+                patch_log_bytes=(
+                    b"Action start 12:00:10: CA_Ngen_x64.36\n"
+                    b"Error: 0x80070424 from private-original-path\n"))
+            self.assertTrue(p.validate(result))
+            self.assertEqual(result["patch_win32_mode"], "NATIVE")
+            self.assertEqual(result["patch_win32"]["status"], "EXIT_CAPTURED")
+            self.assertEqual(result["patch_win32"]["exit_hex"], "00000643")
+            self.assertEqual(result["patch_win32"]["category"], "MSI_FATAL_ERROR")
+            self.assertEqual(result["patch"], "EXIT_NONZERO")
+            self.assertEqual(result["patch_exit_lowbyte"], "UNAVAILABLE")
+            self.assertEqual(result["patch_log"]["ngen_custom_action_arch"], "X64")
+            self.assertFalse(result["native48_candidate"])
+            self.assertEqual(result["restart"], "COMPLETED")
+            self.assertEqual(result["native_only_managed"], "PASS")
+            self.assertEqual(result["release"], "NETFX48_RANGE")
+            self.assertNotIn("private-original-path", str(result))
+            self.assertTrue(any(len(cmd) == 3
+                                and cmd[2] == "--apply-original-msp"
+                                for cmd, _ in calls))
+            self.assertFalse(any(cmd[1] == "msiexec.exe" and "/p" in cmd
+                                 for cmd, _ in calls))
+            self.assertFalse(p.validate({**result, "patch": "SUCCESS"}))
+            self.assertFalse(p.validate({**result,
+                                         "patch_win32": {
+                                             **result["patch_win32"],
+                                             "exit_hex": "00000000"}}))
+
+    def test_only_actual_original_msp_win32_zero_can_complete_native48(self):
+        with TemporaryDirectory() as td:
+            result, calls = self.run_case(
+                self.fixture(Path(td)), native_patch_probe=True,
+                native_patch_code=0)
+            self.assertTrue(p.validate(result))
+            self.assertEqual(result["patch_win32"]["category"], "SUCCESS")
+            self.assertEqual(result["patch"], "SUCCESS")
+            self.assertTrue(result["native48_candidate"])
+            self.assertTrue(any("--selftest-1603" in cmd for cmd, _ in calls))
+            self.assertFalse(p.validate({
+                **result, "patch_exit_lowbyte": 0}))
+        with TemporaryDirectory() as td:
+            fixture = self.fixture(Path(td))
+            missing = fixture[0].parent / "bad-original-msi-probe.exe"
+            missing.write_bytes(b"synthetic")
+            with self.assertRaises(ValueError):
+                with mock.patch.object(p, "verify_original_media"):
+                    p.inspect(*fixture[:3], fixture[3], fixture[4],
+                              fixture[5], {}, patch_fixture=missing)
 
     def test_nonzero_original_msp_lowbyte_and_private_verbose_log_are_classified(self):
         with TemporaryDirectory() as td:
