@@ -1,6 +1,7 @@
 """Prove original signed .NET4.8 MSI experiments cannot fabricate 4.8 or 4.8.1."""
 import os
 import subprocess
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase, mock
@@ -68,7 +69,7 @@ class OriginalSignedMSITests(TestCase):
                 ngen.write_bytes(b"MZ" + b"x" * 4998)
         def fake_run(cmd, env, cwd, timeout, *, progress=None,
                      on_exit_code=None, on_diagnostic=None,
-                     on_stderr=None):
+                     on_stderr=None, stderr_tail=False):
             calls.append((cmd, timeout))
             # macOS /var resolves through /private/var. Test fixture identity
             # by its exact self-authored executable name, not a symlink alias.
@@ -82,7 +83,8 @@ class OriginalSignedMSITests(TestCase):
                             b"SWCOMPAT_MSP_WIN32_EXIT_HEX=00000643\n")
                     return "SUCCESS"
                 if cmd[2] == "--apply-original-msp":
-                    self.assertEqual(env.get("WINEDEBUG"), "-all,err+msi")
+                    self.assertEqual(env.get("WINEDEBUG"), "-all,trace+msi,err+msi")
+                    self.assertTrue(stderr_tail)
                     if on_stderr is not None:
                         on_stderr(wine_error_bytes or b"")
                     if patch_log_bytes is not None:
@@ -368,6 +370,23 @@ class OriginalSignedMSITests(TestCase):
                 root, filename=p.PATCH_PRIVATE_LOG)
             self.assertEqual(blocked["status"], "UNSAFE")
             self.assertEqual(other.read_bytes(), b"not deleted")
+
+    def test_private_stderr_tail_retains_last_msi_trace_with_bounded_bytes(self):
+        with TemporaryDirectory() as td:
+            observed = []
+            cmd = [
+                sys.executable, "-c",
+                "import sys; sys.stderr.buffer.write(b'X' * (8*1024*1024+3)); "
+                "sys.stderr.buffer.write(b'LAST_MSIACTION\\n')",
+            ]
+            status = p.private_run(
+                cmd, dict(os.environ), Path(td), 20,
+                on_stderr=observed.append, stderr_tail=True)
+            self.assertEqual(status, "SUCCESS")
+            self.assertEqual(len(observed), 1)
+            self.assertEqual(len(observed[0]), 8 * 1024 * 1024)
+            self.assertTrue(observed[0].endswith(b"LAST_MSIACTION" + bytes([10])))
+            self.assertNotIn(b"PRIVATE_WINE_PATH", observed[0])
 
     def test_patch_exit_callback_observes_only_host_process_code(self):
         with TemporaryDirectory() as td:

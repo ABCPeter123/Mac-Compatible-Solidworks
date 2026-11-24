@@ -1,6 +1,6 @@
 """Privacy-safe classification of Wine MSI stderr from ORIGINAL .NET 4.8 MSP.
 
-Only errors from Wine's err+msi channel are considered. Do not retain or
+Only errors and explicitly requested trace actions from Wine MSI are classified. Do not retain or
 publish raw action names, vendor data, SID, GUID, command lines, paths, PIDs,
 service names or Windows Installer logs. This diagnostic is not evidence of
 successful Microsoft servicing, nor proof that a named action is causal.
@@ -19,7 +19,16 @@ HALTED = re.compile(
     # length, but find the FINAL quote before returned, not the first.
     r'action\s+L"([^\r\n]{1,2048})"\s+returned\s+([0-9]{1,5})\b'
 )
+# Wine 11.x msi/action.c logs each MSI action before executing it.
+# Preserve only the fixed class of the last non-finalization action.
+TRACE_ACTION = re.compile(
+    r'(?i)\btrace:msi:ACTION_PerformAction\b.*?\bPerforming action\s+'
+    r'\(L"([^\r\n]{1,512})"\)\s*$'
+)
+FINAL_ACTIONS = {"InstallFinalize", "ExecuteAction"}
+
 ACTION_CLASS = {
+    "PATCH": re.compile(r"(?i)patchfiles|apply_patch|patch_package"),
     "NGEN": re.compile(r"(?i)ngen|native.?image|optimiza"),
     "SERVICE": re.compile(r"(?i)service|schedservice|msdtc|svcctl"),
     "ASSEMBLY": re.compile(r"(?i)assembl|fusion|gac"),
@@ -42,7 +51,10 @@ SIGNALS = {
     "MSI_UNATTRIBUTED_DATABASE", "MSI_UNATTRIBUTED_FILE_ENGINE",
     "MSI_UNATTRIBUTED_CUSTOM_ACTION", "MSI_UNATTRIBUTED_SERVICE",
     "MSI_UNATTRIBUTED_OTHER",
-}
+    "MSI_TRACE_FINALIZE_OBSERVED",
+    "MSI_TRACE_NONFINAL_UNKNOWN",
+} | {"MSI_TRACE_NONFINAL_" + action for action in ACTIONS
+     if action not in {"NOT_SEEN", "UNKNOWN"}}
 SIGNAL_MATCH = {
     "MSI_CABINET_FAILURE": re.compile(
         r"(?i)\b(?:extract_cabinet|extract_cabinet_stream|FDICopy|ready_media)\b"
@@ -163,10 +175,19 @@ def classify(raw: bytes) -> dict:
     report = blank("CLASSIFIED")
     signals: set[str] = set()
     unattributed_sources: set[str] = set()
+    last_nonfinal: str | None = None
+    finalize_seen = False
     found = False
     for line in text.splitlines():
         if len(line) > MAX_LINE:
             continue
+        observed = TRACE_ACTION.search(line)
+        if observed:
+            name = observed.group(1)
+            if name in FINAL_ACTIONS:
+                finalize_seen = True
+            else:
+                last_nonfinal = _action(name)
         match = ERROR.search(line)
         if match is None:
             continue
@@ -192,9 +213,13 @@ def classify(raw: bytes) -> dict:
                     signals.add("ROLLBACK_SCRIPT_HALTED")
     if not found:
         return blank("NO_MSI_ERRORS")
+    if finalize_seen:
+        signals.add("MSI_TRACE_FINALIZE_OBSERVED")
+    if last_nonfinal is not None:
+        signals.add("MSI_TRACE_NONFINAL_" + last_nonfinal)
     # Only surface the coarse Wine error sources if more specific, bounded
     # classifications were unavailable. This preserves prior evidence shapes.
-    if not signals:
+    if not signals.intersection({"INSTALL_SCRIPT_HALTED", "ROLLBACK_SCRIPT_HALTED"} | set(SIGNAL_MATCH)):
         signals.update(unattributed_sources)
     report["signals"] = sorted(signals)
     assert valid(report)
