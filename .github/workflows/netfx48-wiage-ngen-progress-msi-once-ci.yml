@@ -1,5 +1,17 @@
 name: One-shot authenticated Wiage .NET 4.8 MSI after progress-drained CLR4 NGen
 
+# Run 45302194715: original Microsoft x64 4.8 MSI SUCCESS. CLR64 genuine
+# PE changed, NETFX48_RANGE Release, native-only managed PASS after a clean
+# Wine restart. Original signed MSP returned EXIT_NONZERO with host low byte
+# 67 and private patch log's last custom action NGEN/X64. Both x64 and x86
+# native optimization services were present. The failed MSP is NOT ignored:
+# native48_candidate remained False and no 4.8.1 or SOLIDWORKS followed.
+# NEW CONTROL: after original Microsoft x64 AND x86 NGen preflight SUCCESS,
+# issue original ngen.exe queue pause for BOTH architectures, run unchanged
+# hash-verified Microsoft x64 MSI+MSP, and issue original queue continue for
+# BOTH. Any pause/resume failure blocks native48_candidate. This isolates
+# genuine native-image queue concurrency without suppressing installer
+# custom actions, patch exit checks, strict Release or native managed tests.
 # Run 45296688430 (authentic Apple Silicon, verified after cleanup fix):
 # the original signed x64 MSI returned SUCCESS, the CLR64 payload changed,
 # Microsoft native-only managed execution PASS, loader LOADED, and the real
@@ -70,3 +82,4 @@ jobs:
       signed_msi_timeout_seconds: 420
       prepare_48_assembly_cache: true
       pause_native_ngen_queue: false
+      pause_after_verified_native40_ngen: true
