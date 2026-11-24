@@ -120,7 +120,7 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
         )
         result = t.classify(oversized)
         self.assertEqual(result["first_forward_action"], "NOT_SEEN")
-        self.assertEqual(result["signals"], [])
+        self.assertEqual(result["signals"], ["MSI_UNATTRIBUTED_SCRIPT_ENGINE"])
         self.assertTrue(t.valid(result))
         self.assertNotIn("PPPP", str(result))
 
@@ -146,8 +146,40 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
         self.assertEqual(report["status"], "CLASSIFIED")
         self.assertEqual(report["first_forward_action"], "NOT_SEEN")
         self.assertEqual(report["first_rollback_action"], "NOT_SEEN")
-        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["signals"], ["MSI_UNATTRIBUTED_SCRIPT_ENGINE"])
         self.assertTrue(t.valid(report))
+
+    def test_unattributed_wine_error_subsystems_stay_fixed_and_private(self):
+        # This is the exact diagnostic gap after an authentic signed MSP
+        # returned full 1603 without a recognized script-0 action.
+        cases = (
+            (b'0011:err:msi:ITERATE_Actions Execution halted, '
+             b'action L"InstallFinalize" returned 1603\n',
+             "MSI_UNATTRIBUTED_SCRIPT_ENGINE"),
+            (b'0011:err:msi:patch_set_offsets private-package-path\n',
+             "MSI_UNATTRIBUTED_PATCH_ENGINE"),
+            (b'0011:err:msi:private_unrecognized PRIVATE_GUID_SID\n',
+             "MSI_UNATTRIBUTED_OTHER"),
+        )
+        for raw, want in cases:
+            with self.subTest(source=want):
+                result = t.classify(raw)
+                self.assertTrue(t.valid(result))
+                self.assertEqual(result["first_forward_action"], "NOT_SEEN")
+                self.assertEqual(result["first_rollback_action"], "NOT_SEEN")
+                self.assertEqual(result["signals"], [want])
+                self.assertNotIn("PRIVATE", str(result))
+                self.assertNotIn("GUID", str(result))
+        # A later finalization cascade must not hide an earlier Wine
+        # subsystem error, and neither is asserted to be the root cause.
+        two = t.classify(
+            b'0011:err:msi:patch_set_offsets private-patch\n'
+            b'0011:err:msi:ITERATE_Actions Execution halted, '
+            b'action L"InstallFinalize" returned 1603\n')
+        self.assertEqual(two["signals"], [
+            "MSI_UNATTRIBUTED_PATCH_ENGINE", "MSI_UNATTRIBUTED_SCRIPT_ENGINE",
+        ])
+        self.assertTrue(t.valid(two))
 
     def test_no_wine_msi_errors_is_not_framework_success(self):
         for raw in (b"", b'0000:fixme:msi:install_secret PRIVATE\n',
