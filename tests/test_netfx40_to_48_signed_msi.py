@@ -1,5 +1,6 @@
 """Prove original signed .NET4.8 MSI experiments cannot fabricate 4.8 or 4.8.1."""
 import os
+import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase, mock
@@ -184,6 +185,23 @@ class OriginalSignedMSITests(TestCase):
             self.assertEqual(result["scm_postflight"], p.blank_scm())
             self.assertFalse(result["native48_candidate"])
             self.assertFalse(p.validate(dict(result, scm_postflight=result["scm_preflight"])))
+
+    def test_reaped_msi_timeout_allows_read_only_postflight_but_not_patch(self):
+        with TemporaryDirectory() as td:
+            result, calls = self.run_case(
+                self.fixture(Path(td)), scm=True,
+                install="TIMED_OUT_PREFIX_REAPED",
+                changed=True, release="NETFX48_RANGE")
+            self.assertEqual(result["install"], "TIMED_OUT_PREFIX_REAPED")
+            self.assertEqual(result["patch"], "NOT_RUN")
+            self.assertEqual(result["scm_postflight"]["status"], "COMPLETE")
+            self.assertEqual(result["win10"], "APPLIED")
+            self.assertFalse(result["native48_candidate"])
+            self.assertTrue(p.validate(result))
+            self.assertEqual(len([command for command in calls
+                                  if command[0][1] == "msiexec.exe"]), 1)
+            self.assertFalse(p.validate({
+                **result, "native48_candidate": True}))
 
     def test_patch_cleanup_denial_preserves_prior_msi_observation(self):
         with TemporaryDirectory() as td:
@@ -456,6 +474,73 @@ class OriginalSignedMSITests(TestCase):
             self.assertEqual(callback.call_count, 1)
             cleanup.assert_called_once_with(fake)
             self.assertEqual(fake.wait.call_args.kwargs["timeout"], 60)
+
+    def test_real_msi_timeout_reaps_the_isolated_wineserver_before_reading_logs(self):
+        with TemporaryDirectory() as td:
+            prefix = Path(td)
+            engine = prefix / "engine" / "wine"
+            fake = mock.Mock()
+            fake.wait.side_effect = subprocess.TimeoutExpired("msiexec.exe", 420)
+            received = []
+            def safe_scan(data):
+                # Raw vendor text is visible only inside a private callback,
+                # never as an installer result or published report.
+                received.append(len(data))
+            with (mock.patch.object(p.subprocess, "Popen", return_value=fake),
+                  mock.patch.object(p, "_terminate_group",
+                                    side_effect=PermissionError("group denied")) as group,
+                  mock.patch.object(p, "_terminate_private_setup_wineserver",
+                                    return_value=True) as server):
+                outcome = p.private_run(
+                    [str(engine), "msiexec.exe", "/i", "ORIGINAL_SIGNED.msi"],
+                    {"WINEPREFIX": str(prefix)}, prefix, 420,
+                    on_diagnostic=safe_scan)
+            self.assertEqual(outcome, "TIMED_OUT_PREFIX_REAPED")
+            group.assert_called_once_with(fake)
+            server.assert_called_once_with(engine, prefix)
+            fake.kill.assert_called_once()
+            self.assertEqual(received, [0])
+            self.assertIn("TIMED_OUT_PREFIX_REAPED", p.STEPS)
+            self.assertNotIn("ORIGINAL_SIGNED.msi", outcome)
+
+    def test_msi_timeout_requires_wineserver_reap_even_if_group_kill_succeeds(self):
+        with TemporaryDirectory() as td:
+            prefix = Path(td)
+            wine = prefix / "engine" / "wine"
+            fake = mock.Mock()
+            fake.wait.side_effect = subprocess.TimeoutExpired("msiexec.exe", 420)
+            callback = mock.Mock()
+            for server_clean, expected in (
+                (False, "TIMED_OUT_CLEANUP_DENIED"),
+                (True, "TIMED_OUT_PREFIX_REAPED"),
+            ):
+                with (mock.patch.object(p.subprocess, "Popen", return_value=fake),
+                      mock.patch.object(p, "_terminate_group") as group,
+                      mock.patch.object(p, "_terminate_private_setup_wineserver",
+                                        return_value=server_clean) as stop):
+                    actual = p.private_run(
+                        [str(wine), "msiexec.exe", "/i", "ORIGINAL_SIGNED.msi"],
+                        {"WINEPREFIX": str(prefix)}, prefix, 420,
+                        on_diagnostic=callback)
+                self.assertEqual(actual, expected)
+                group.assert_called_once_with(fake)
+                stop.assert_called_once_with(wine, prefix)
+            self.assertEqual(callback.call_count, 1)
+            self.assertNotIn("ORIGINAL_SIGNED.msi", actual)
+
+    def test_msi_timeout_refuses_wrong_prefix_without_wineserver_action(self):
+        with TemporaryDirectory() as td:
+            prefix = Path(td)
+            fake = mock.Mock()
+            fake.wait.side_effect = subprocess.TimeoutExpired("msiexec.exe", 420)
+            with (mock.patch.object(p.subprocess, "Popen", return_value=fake),
+                  mock.patch.object(p, "_terminate_group"),
+                  mock.patch.object(p, "_terminate_private_setup_wineserver") as stop):
+                actual = p.private_run(
+                    ["wine", "msiexec.exe", "/p", "original.msp"],
+                    {"WINEPREFIX": str(prefix / "other-prefix")}, prefix, 420)
+            self.assertEqual(actual, "TIMED_OUT_CLEANUP_DENIED")
+            stop.assert_not_called()
 
     def test_private_run_discards_all_original_output(self):
         with TemporaryDirectory() as td:

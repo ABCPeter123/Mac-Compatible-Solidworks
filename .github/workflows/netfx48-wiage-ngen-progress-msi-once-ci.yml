@@ -1,5 +1,14 @@
 name: One-shot authenticated Wiage .NET 4.8 MSI after progress-drained CLR4 NGen
 
+# Run 45256112951: signed Microsoft .NET 4.8 MSI+MSP workflow was green
+# only as a completed diagnostic, NOT as a framework upgrade. Both genuine
+# CLR4 NGen preflights were READY. Original extracted x64 MSI timed out at
+# 420s with last custom action NGEN, no fresh NGen log growth, and
+# TIMED_OUT_CLEANUP_DENIED from Wine's Unix session cleanup. The MSP did not
+# run, and native48_candidate=false. Apply scoped Wine server -k/-w on
+# the authenticated disposable prefix to distinguish an actual cleaned MSI
+# timeout from an unsafe orphan, then obtain safe postflight observations.
+# Do NOT infer 4.8 installation from an MSI timeout or a green CI wrapper.
 # Authentic run 45245248757 (retry 2) proved x64 and x86 Microsoft CLR4
 # ngen.exe executeQueuedItems both SUCCESS on Apple Silicon Wiage 11.13.
 # The original CLR4 survived a Wine restart and ran native-only managed code.
