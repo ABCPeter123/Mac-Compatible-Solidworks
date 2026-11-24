@@ -7,11 +7,13 @@ on:
     paths:
       - 'scripts/netfx40_to_48_signed_msi.py'
       - 'scripts/netfx48_msp_win32_exit.py'
+      - 'scripts/netfx48_msp_wine_trace.py'
       - 'probes/netfx48_msp_win32_status.c'
       - 'scripts/netfx48_msi_service_evidence.py'
       - 'tests/test_netfx48_msi_service_evidence.py'
       - 'tests/test_netfx40_to_48_signed_msi.py'
       - 'tests/test_netfx48_msp_win32_exit.py'
+      - 'tests/test_netfx48_msp_wine_trace.py'
       - 'tests/test_netfx48_signed_msi_workflow.py'
       - '.github/workflows/netfx40-legacy-ci.yml'
       - '.github/workflows/netfx48-signed-msi-contract-ci.yml'
@@ -20,11 +22,13 @@ on:
     paths:
       - 'scripts/netfx40_to_48_signed_msi.py'
       - 'scripts/netfx48_msp_win32_exit.py'
+      - 'scripts/netfx48_msp_wine_trace.py'
       - 'probes/netfx48_msp_win32_status.c'
       - 'scripts/netfx48_msi_service_evidence.py'
       - 'tests/test_netfx48_msi_service_evidence.py'
       - 'tests/test_netfx40_to_48_signed_msi.py'
       - 'tests/test_netfx48_msp_win32_exit.py'
+      - 'tests/test_netfx48_msp_wine_trace.py'
       - 'tests/test_netfx48_signed_msi_workflow.py'
       - '.github/workflows/netfx48-signed-msi-contract-ci.yml'
 
@@ -79,6 +83,7 @@ jobs:
         run: |
           python3 -m unittest discover -s tests -p 'test_netfx40_to_48_signed_msi.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx48_msp_win32_exit.py' -v
+          python3 -m unittest discover -s tests -p 'test_netfx48_msp_wine_trace.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx48_msi_service_evidence.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx48_signed_msi_workflow.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx48_core_host_workflow.py' -v
