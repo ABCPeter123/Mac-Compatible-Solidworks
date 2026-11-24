@@ -51,7 +51,7 @@ class Native40FreshRetryWorkflowTests(TestCase):
         self.assertIn(
             '"Original Microsoft CLR4 prerequisite failed; NGen experiment not run"',
             body)
-        self.assertIn("NETFX48_RANGE", body)
+        self.assertIn("native48_candidate", body)
         self.assertIn("build/netfx40-msxml3-runtime-attempt1.json", body)
         self.assertIn("build/netfx40-msxml3-restart-attempt1.json", body)
         self.assertIn("if: always()", body)
