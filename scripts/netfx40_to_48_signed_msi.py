@@ -19,6 +19,10 @@ import time
 from collections.abc import Callable
 
 from scripts.netfx40_msxml3_restart import validate as valid_native40
+from scripts.netfx48_msp_win32_exit import (
+    blank as blank_win32_patch, parse as parse_win32_patch,
+    valid as valid_win32_patch, patch_status as win32_patch_status,
+)
 from scripts.netfx40_legacy import _terminate_private_setup_wineserver
 from scripts.netfx40_to_48_direct import verify_original_media
 from scripts.netfx40_to_48_intermediate import _env, _release, _set_winver, _terminate_group
@@ -170,6 +174,7 @@ def blank() -> dict:
         "install_profile": "win7", "install_winver": "NOT_RUN",
         "extract": "NOT_RUN", "media": "NOT_RUN",
         "install": "NOT_RUN", "patch": "NOT_RUN",
+        "patch_win32_mode": "DIRECT", "patch_win32": blank_win32_patch(),
         "install_log": blank_msi_log(), "patch_log": blank_msi_log(),
         "patch_exit_lowbyte": "NOT_RUN", "ngen_log": blank_ngen(),
         "ngen_progress": blank_progress(),
@@ -202,6 +207,19 @@ def validate(result: object) -> bool:
             or result["media"] not in MEDIA or result["restart"] not in RESTART
             or not valid_msi_log(result["install_log"])
             or not valid_msi_log(result["patch_log"])
+            or type(result["patch_win32_mode"]) is not str
+            or result["patch_win32_mode"] not in {"DIRECT", "NATIVE"}
+            or not valid_win32_patch(result["patch_win32"])
+            or (result["patch_win32_mode"] == "DIRECT"
+                and result["patch_win32"] != blank_win32_patch())
+            or (result["patch_win32_mode"] == "NATIVE"
+                and result["patch"] != "NOT_RUN"
+                and (result["patch_win32"]["status"] == "NOT_RUN"
+                     or result["patch_exit_lowbyte"] != "UNAVAILABLE"
+                     or win32_patch_status(result["patch_win32"]) != result["patch"]))
+            or (result["patch_win32_mode"] == "NATIVE"
+                and result["patch"] == "NOT_RUN"
+                and result["patch_win32"] != blank_win32_patch())
             or not (
                 (type(result["patch_exit_lowbyte"]) is str
                  and result["patch_exit_lowbyte"] in {"NOT_RUN", "UNAVAILABLE"})
@@ -352,7 +370,12 @@ def private_run(args: list[str], env: dict[str, str], cwd: Path,
             # timeout, even when the immediate Unix process group exited.
             # The shared helper refuses normal or user-owned Wine prefixes,
             # unsafe symlinks and mismatched Wine distributions.
-            original_msi = len(args) >= 2 and args[1] == "msiexec.exe"
+            original_msi = (
+                (len(args) >= 2 and args[1] == "msiexec.exe")
+                or (len(args) == 3
+                    and Path(args[1]).name == "netfx48_msp_win32_status.exe"
+                    and args[2] == "--apply-original-msp")
+            )
             if original_msi:
                 prefix = Path(env.get("WINEPREFIX", ""))
                 if (prefix != cwd
@@ -379,7 +402,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
             prepare_assembly_cache: bool = False,
             msi_timeout_seconds: int = 420,
             pause_native_ngen_queue: bool = False,
-            install_profile: str = "win7") -> dict:
+            install_profile: str = "win7",
+            patch_fixture: Path | None = None) -> dict:
     if type(pause_native_ngen_queue) is not bool:
         raise ValueError("Genuine NGen queue pause must be explicit")
     if type(install_profile) is not str or install_profile not in INSTALL_PROFILES:
@@ -395,6 +419,12 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
         p.resolve(strict=True) for p in
         (wine, prefix, installer, digest, loader, managed)
     )
+    if patch_fixture is not None:
+        if (patch_fixture.is_symlink()
+                or patch_fixture.name != "netfx48_msp_win32_status.exe"
+                or not patch_fixture.is_file()):
+            raise ValueError("Only independently compiled native Win32 MSP fixture")
+        patch_fixture = patch_fixture.resolve(strict=True)
     validate_prefix(prefix)
     verify_original_media(installer, digest)
     if (loader.name != "netfx481_clr_load.exe"
@@ -415,6 +445,18 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
     if root.is_symlink() or root.exists():
         raise ValueError("Original signed MSI extraction must start with empty directory")
     env = _env(wine, prefix)
+    if patch_fixture is not None:
+        # Fixture startup without a Microsoft patch: verify the actual Wine
+        # process and exact bounded 1603 selftest packet before MSI servicing.
+        selftest_packets: list[bytes] = []
+        selftest_status = private_run(
+            [str(wine), str(patch_fixture), "--selftest-1603"],
+            env, prefix, 30, on_diagnostic=selftest_packets.append)
+        selftest = parse_win32_patch(
+            selftest_packets[-1] if selftest_packets else b"",
+            selftest_status, selftest=True)
+        if selftest["status"] != "SELFTEST_PASS":
+            raise ValueError("Original MSP native Win32 startup control failed")
     install_winver = _set_winver(wine, prefix, env, install_profile)
     cache_policy = "PREPARE" if prepare_assembly_cache else "OBSERVE"
     cache_state = "NOT_RUN"
@@ -448,6 +490,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
     restart = "NOT_RUN"
     install_log = blank_msi_log()
     patch_log = blank_msi_log()
+    patch_win32 = blank_win32_patch()
+    patch_win32_mode = "NATIVE" if patch_fixture is not None else "DIRECT"
     patch_exit_lowbyte: int | str = "NOT_RUN"
     ngen_log = blank_ngen()
     ngen_progress = blank_progress()
@@ -501,18 +545,39 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                     # equals the complete Win32 Installer error code.
                     patch_exit_lowbyte = "UNAVAILABLE"
                     observed_patch_exit: list[int] = []
-                    patched = private_run(
-                        [str(wine), "msiexec.exe", "/p",
-                         "C:\\" + TARGET + "\\" + MSP,
-                         "/qn", "/norestart", "EXTUI=1",
-                         "/L*v", "C:\\" + TARGET + "\\" + PATCH_PRIVATE_LOG],
-                        env, prefix, 420,
-                        on_exit_code=observed_patch_exit.append,
-                    )
-                    if observed_patch_exit:
-                        exit_code = observed_patch_exit[-1]
-                        if type(exit_code) is int and 0 <= exit_code <= 255:
-                            patch_exit_lowbyte = exit_code
+                    if patch_fixture is None:
+                        patched = private_run(
+                            [str(wine), "msiexec.exe", "/p",
+                             "C:\\" + TARGET + "\\" + MSP,
+                             "/qn", "/norestart", "EXTUI=1",
+                             "/L*v", "C:\\" + TARGET + "\\" + PATCH_PRIVATE_LOG],
+                            env, prefix, 420,
+                            on_exit_code=observed_patch_exit.append,
+                        )
+                        if observed_patch_exit:
+                            exit_code = observed_patch_exit[-1]
+                            if type(exit_code) is int and 0 <= exit_code <= 255:
+                                patch_exit_lowbyte = exit_code
+                    else:
+                        # Use the self-authored Win32 x64 CreateProcess monitor
+                        # to launch EXACTLY the same signed /p original MSP,
+                        # with same quiet, no-restart, EXTUI and private /L*v.
+                        # The outer Wine process may return 0 while the real
+                        # Microsoft msiexec child returned 1603, 1642, etc.
+                        # Never interpret the wrapper exit as MSP success.
+                        packets: list[bytes] = []
+                        host_status = private_run(
+                            [str(wine), str(patch_fixture), "--apply-original-msp"],
+                            env, prefix, 420, on_diagnostic=packets.append)
+                        if host_status in {"TIMED_OUT_PREFIX_REAPED",
+                                           "TIMED_OUT_CLEANUP_DENIED"}:
+                            patch_win32 = blank_win32_patch(host_status)
+                        elif host_status == "START_FAILED":
+                            patch_win32 = blank_win32_patch("START_FAILED_HOST")
+                        else:
+                            patch_win32 = parse_win32_patch(
+                                packets[-1] if packets else b"", host_status)
+                        patched = win32_patch_status(patch_win32)
                     # Read and delete original MSI's private MSP log locally.
                     # Never copy lines, package names, file paths or commands.
                     patch_log = classify_private_msi_log(
@@ -533,6 +598,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                   "native40_persistent": True, "install_profile": install_profile, "install_winver": install_winver,
                   "extract": extracted, "media": media, "install": installed,
                   "patch": patched, "install_log": install_log,
+                  "patch_win32_mode": patch_win32_mode,
+                  "patch_win32": patch_win32,
                   "patch_log": patch_log,
                   "patch_exit_lowbyte": patch_exit_lowbyte,
                   "ngen_log": ngen_log, "ngen_progress": ngen_progress,
@@ -561,6 +628,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
         "msi_timeout_seconds": msi_timeout_seconds,
         "install_profile": install_profile, "install_winver": install_winver, "extract": extracted, "media": media,
         "install": installed, "patch": patched, "install_log": install_log,
+        "patch_win32_mode": patch_win32_mode, "patch_win32": patch_win32,
         "patch_log": patch_log, "patch_exit_lowbyte": patch_exit_lowbyte,
         "ngen_log": ngen_log, "ngen_progress": ngen_progress,
         "ngen_queue_policy": queue_policy, "ngen_queue": queue_report,
@@ -599,6 +667,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--service-fixture", type=Path)
     parser.add_argument("--prepare-assembly-cache", action="store_true")
     parser.add_argument("--pause-native-ngen-queue", action="store_true")
+    parser.add_argument("--patch-fixture", type=Path,
+                        help="Only self-authored Win32 x64 full original MSP exit fixture")
     parser.add_argument("--install-profile", choices=sorted(INSTALL_PROFILES),
                         default="win7")
     parser.add_argument("--msi-timeout-seconds", type=int,
@@ -612,7 +682,8 @@ def main(argv: list[str] | None = None) -> int:
                      prepare_assembly_cache=a.prepare_assembly_cache,
                      pause_native_ngen_queue=a.pause_native_ngen_queue,
                      msi_timeout_seconds=a.msi_timeout_seconds,
-                     install_profile=a.install_profile)
+                     install_profile=a.install_profile,
+                     patch_fixture=a.patch_fixture)
     if a.output.is_symlink():
         raise ValueError("Linked experiment report")
     a.output.parent.mkdir(parents=True, exist_ok=True)
