@@ -19,6 +19,7 @@ import time
 from collections.abc import Callable
 
 from scripts.netfx40_msxml3_restart import validate as valid_native40
+from scripts.netfx40_legacy import _terminate_private_setup_wineserver
 from scripts.netfx40_to_48_direct import verify_original_media
 from scripts.netfx40_to_48_intermediate import _env, _release, _set_winver, _terminate_group
 from scripts.netfx40_msi_evidence import (
@@ -55,7 +56,7 @@ MSI_TIMEOUTS = {420, 1200}
 
 STEPS = {
     "NOT_RUN", "SUCCESS", "EXIT_NONZERO", "TIMED_OUT",
-    "TIMED_OUT_CLEANUP_DENIED", "START_FAILED",
+    "TIMED_OUT_CLEANUP_DENIED", "TIMED_OUT_PREFIX_REAPED", "START_FAILED",
 }
 LOG_STATES = {"NOT_RUN", "NO_LOG", "CLASSIFIED", "TOO_LARGE", "UNSAFE", "UNREADABLE"}
 PRIVATE_LOG = "netfx48-msi-install-private.log"
@@ -302,24 +303,38 @@ def private_run(args: list[str], env: dict[str, str], cwd: Path,
                         if time.monotonic() >= deadline:
                             raise
         except subprocess.TimeoutExpired:
-            # Original Wine installers can spawn grandchildren. Never leave
-            # a detached still-running original MSI process *group* behind.
+            # Original Wine installers can spawn grandchildren outside the
+            # launcher session. Reaping only the Unix process group is not
+            # proof that the original Windows Installer service has stopped.
+            group_denied = False
             try:
                 _terminate_group(child)
             except PermissionError:
-                # macOS can deny SIGKILL to a Wine process group even after
-                # the group accepted SIGTERM. Do not conceal the real MSI
-                # timeout behind that host cleanup error.
+                group_denied = True
                 try:
                     child.kill()
                     child.wait(timeout=5)
                 except (OSError, subprocess.TimeoutExpired):
                     pass
+            # Signed .NET 4.8 MSI/MSP operations are run only through the
+            # authenticated Wine executable in a marked CI prefix. Shut down
+            # its *own* wineserver and wait for its clients after ANY MSI
+            # timeout, even when the immediate Unix process group exited.
+            # The shared helper refuses normal or user-owned Wine prefixes,
+            # unsafe symlinks and mismatched Wine distributions.
+            original_msi = len(args) >= 2 and args[1] == "msiexec.exe"
+            if original_msi:
+                prefix = Path(env.get("WINEPREFIX", ""))
+                if (prefix != cwd
+                        or not _terminate_private_setup_wineserver(
+                            Path(args[0]), prefix)):
+                    return "TIMED_OUT_CLEANUP_DENIED"
+            elif group_denied:
                 return "TIMED_OUT_CLEANUP_DENIED"
             if on_diagnostic is not None:
                 sink.seek(0)
                 on_diagnostic(sink.read(8 * 1024 * 1024 + 1))
-            return "TIMED_OUT"
+            return "TIMED_OUT_PREFIX_REAPED" if original_msi else "TIMED_OUT"
         if on_diagnostic is not None:
             sink.seek(0)
             on_diagnostic(sink.read(8 * 1024 * 1024 + 1))
