@@ -1,50 +1,24 @@
 name: One-shot authenticated Wiage .NET 4.8 MSI after progress-drained CLR4 NGen
 
-# Current original Microsoft servicing gate, November 24, 2026.
-# Source-validated PR #261: bounded full-stream classification of the original
-# MSP's private WINEDEBUG trace, replacing the last-8-MiB sample that missed
-# Wine err:msi entirely in authenticated run 45495950145. Preserve original
-# Microsoft MSI and MSP bytes and native Win32 DWORD exit gate unchanged.
-# Original Win32 1603 remains the blocker until independently cured.
-# This authenticated one-shot tests whether a fixed-category first-failure
-# action can be observed across complete Wine MSI execution and rollback.
-# Authenticated Apple Silicon run 45426863980 attempt 2: both genuine
-# original Microsoft CLR4 x64+x86 NGen preflights SUCCESS without retry.
-# Original signed Microsoft .NET4.8 x64 MSI SUCCESS; changed real CLR64,
-# native-only Microsoft managed code PASS after clean Wine restart, genuine
-# Release in NETFX48_RANGE. The unmodified x64 MSP returned full Win32
-# DWORD 00000643 = installer fatal error 1603, not an inferred POSIX byte.
-# Private original MSP verbose log lacked a failing Return value 3 marker,
-# but classified an NGen/X64 custom-action hint and SERVICE_MISSING. No
-# specific service or NGen operation has been proved to cause the failure.
-# Authenticated attempt 2 of run 45441804424: genuine original CLR4 NGen
-# x64+x86 PASS; original x64 signed MSI SUCCESS; restarted original CLR
-# native-managed PASS; original x64 signed MSP full Win32 1603 persists.
-# Its private err+msi trace had MSI errors but no recognized script action
-# and no fixed known error signal. The preceding NGen/SERVICE hints are not
-# causal evidence. Merged PR #259 now adds bounded Wine internal MSI-source
-# fallback classes, distinct regtlb and custom-action pipe/return signals.
-# Re-run solely to classify authentic MSP errors; no installer mutation,
-# fake service, fake Release, NGen suppression, or acceptance-gate bypass.
-# Authenticated run 45469551065: genuine .NET 4.8 signed x64 MSI SUCCESS,
-# original CLR x64 native-only managed PASS after restart, original signed
-# x64 MSP still full Win32 1603. Private err+msi saw only the generic
-# ITERATE_Actions error, with no first forward script action.
-# PR #260 added temporary private trace+msi only around the unchanged
-# original signed MSP and fixed-category classification of last observed
-# non-final MSI action. Stderr classification reads the final bounded 8 MiB;
-# no raw trace, action text, Microsoft binary or private path is exported.
-# An observed trace action is not proof of 1603 causation or MSP success.
-# New original native MSP probe (PR #256) captures separate PRIVATE Wine
-# err+msi stderr and classifies the first forward Wine installer script
-# failure separately from a rollback script error. It emits only fixed
-# finite categories; no vendor log text, user path, SIDs or original media.
-# Original signed Microsoft x64 MSI/MSP unchanged, 420s servicing cap,
-# original x86+x64 NGen success mandatory, at most one progress-gated
-# genuine NGen retry, no NGen pause or fabricated installation state.
-# Win32 original MSP exact-success, restarted genuine CLR, Release, and
-# native-only managed gates stay strict. .NET4.8.1 and SOLIDWORKS still
-# unverified and blocked until complete signed .NET4.8 servicing passes.
+# Verified original Microsoft servicing baseline (November 24, 2026):
+# Authenticated Apple Silicon run 45502751553 attempt 2 passed genuine
+# CLR4/NGen x64+x86 preflights, unmodified signed .NET4.8 x64 MSI, genuine
+# CLR64 change and native-only managed execution after a Wine restart.
+# Its unmodified original x64 MSP returned exact Win32 00000643 / 1603.
+# The corrected private full-stream Wine trace (PR #261) classified
+# MSI_UNATTRIBUTED_SCRIPT_ENGINE, but no first failing script action;
+# non-final action class UNKNOWN and the NGen/service log hints are noncausal.
+#
+# PR #262 allows ONE fresh-prefix genuine CLR4 retry after a verified 1603
+# with NO real CLR installed; all original NGen/MSI/MSP gates remain strict.
+# Merged PR #264 now adds a READ-ONLY native Windows Installer ProductCode
+# registration and LocalPackage cache query BEFORE the unchanged MSP launch.
+# ProductCode, cache paths, source MSI, GUIDs and raw traces remain private;
+# only fixed finite registration enums may enter the existing Wine report.
+# This test distinguishes missing MSI registration from patch execution
+# failure. It does not alter the original vendor MSI/MSP or activation, and
+# it cannot promote a Win32 1603 to complete .NET4.8 servicing.
+# Genuine complete .NET4.8/.NET4.8.1 and working SOLIDWORKS CAD unverified.
 on:
   push:
     branches: [main]
