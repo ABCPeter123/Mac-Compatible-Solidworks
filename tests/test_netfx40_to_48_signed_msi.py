@@ -50,7 +50,8 @@ class OriginalSignedMSITests(TestCase):
                  post_scm=None, prepare_cache=False, ngen_bytes=None,
                  msi_timeout_seconds=420, pause_queue=False,
                  pause_failure=None, resume_failure=None,
-                 patch_log_bytes=None, patch_process_code=67):
+                 patch_log_bytes=None, patch_process_code=67,
+                 install_profile="win7"):
         calls = []
         if pause_queue:
             prefix = paths[1]
@@ -123,7 +124,8 @@ class OriginalSignedMSITests(TestCase):
                 service_fixture=service_path if scm else None,
                 prepare_assembly_cache=prepare_cache,
                 msi_timeout_seconds=msi_timeout_seconds,
-                pause_native_ngen_queue=pause_queue)
+                pause_native_ngen_queue=pause_queue,
+                install_profile=install_profile)
         self.assertTrue(p.validate(result))
         self.assertEqual(result["solidworks_compatibility"], "NOT_DEMONSTRATED")
         self.assertFalse(result["framework481_confirmed"])
@@ -251,6 +253,47 @@ class OriginalSignedMSITests(TestCase):
                     {}, Path(td), 15, on_exit_code=lowbytes.append)
             self.assertEqual(outcome, "EXIT_NONZERO")
             self.assertEqual(lowbytes, [106])
+
+    def test_original_win10_profile_is_real_winver_switch_not_fake_clr(self):
+        with TemporaryDirectory() as td:
+            paths = self.fixture(Path(td))
+            result, calls = self.run_case(
+                paths, install_profile="win10", patch="EXIT_NONZERO")
+            self.assertTrue(p.validate(result))
+            self.assertEqual(result["install_profile"], "win10")
+            self.assertEqual(result["install_winver"], "APPLIED")
+            self.assertEqual(result["win10"], "APPLIED")
+            self.assertEqual(result["install"], "SUCCESS")
+            self.assertEqual(result["patch"], "EXIT_NONZERO")
+            self.assertEqual(result["restart"], "COMPLETED")
+            self.assertEqual(result["loader"], "LOADED")
+            self.assertEqual(result["native_only_managed"], "PASS")
+            self.assertFalse(result["native48_candidate"])
+            self.assertNotIn("win7", str(result["install_profile"]))
+            self.assertFalse(p.validate({**result,
+                                         "install_profile": "win11"}))
+            self.assertFalse(p.validate({**result,
+                                         "install_winver": "NOT_RUN"}))
+            self.assertEqual(len(calls), 3)
+        with TemporaryDirectory() as td:
+            result, _ = self.run_case(
+                self.fixture(Path(td)), install_profile="win10")
+            self.assertTrue(result["native48_candidate"])
+            self.assertTrue(p.validate(result))
+
+    def test_original_msi_winver_profile_refuses_invalid_modes(self):
+        with TemporaryDirectory() as td:
+            paths = self.fixture(Path(td))
+            for profile in ("win11", "winxp", "private-version", None,
+                            10, True, [], {}):
+                with self.subTest(profile=profile):
+                    with self.assertRaises(ValueError):
+                        self.run_case(paths, install_profile=profile)
+            valid = p.blank()
+            for profile in (None, [], {}, "win11"):
+                with self.subTest(profile=profile):
+                    self.assertFalse(p.validate({**valid,
+                                                 "install_profile": profile}))
 
     def test_native_original_scm_measurement_cannot_fabricate_48_success(self):
         with TemporaryDirectory() as td:
