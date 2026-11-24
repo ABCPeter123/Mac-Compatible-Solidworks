@@ -1,5 +1,15 @@
 name: One-shot authenticated Wiage .NET 4.8 MSI after progress-drained CLR4 NGen
 
+# Run 45296688430 (authentic Apple Silicon, verified after cleanup fix):
+# the original signed x64 MSI returned SUCCESS, the CLR64 payload changed,
+# Microsoft native-only managed execution PASS, loader LOADED, and the real
+# registry Release entered NETFX48_RANGE. However, the authentic original MSP
+# returned EXIT_NONZERO, so restart was NOT_RUN and native48_candidate=False.
+# This experiment retains identical vendor MSI/MSP commands and strict
+# installation gates while adding a PRIVATE MSP verbose log with finite
+# failure classification and the host process exit low byte. The low byte is
+# not necessarily the complete Win32 MSI exit code, and is not success.
+# All private original Microsoft log text is deleted on the runner.
 # Run 45256112951: signed Microsoft .NET 4.8 MSI+MSP workflow was green
 # only as a completed diagnostic, NOT as a framework upgrade. Both genuine
 # CLR4 NGen preflights were READY. Original extracted x64 MSI timed out at
