@@ -278,7 +278,7 @@ class Signed48AfterProgressNgenTests(unittest.TestCase):
         wine_trace = (ROOT / "scripts/netfx48_msp_wine_trace.py").read_text(
             encoding="utf-8")
         for item in (
-            '"WINEDEBUG": "-all,err+msi"',
+            '"WINEDEBUG": "-all,trace+msi,err+msi"',
             '"--apply-original-msp"',
             "on_stderr=wine_errors.append",
             "classify_msp_wine_trace(",
