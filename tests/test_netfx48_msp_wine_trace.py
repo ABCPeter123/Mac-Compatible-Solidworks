@@ -221,6 +221,47 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
         no_error = t.classify(raw.split(b'0011:err:msi:')[0])
         self.assertEqual(no_error, t.blank("NO_MSI_ERRORS"))
 
+    def test_native_registration_before_original_msp_is_fixed_enum_only(self):
+        header = (
+            b"SWCOMPAT_MSI_REG_SCHEMA=1\n"
+            b"SWCOMPAT_MSI_REG_STATUS=OBSERVED\n"
+            b"SWCOMPAT_MSI_REG_PRODUCT=INSTALLED\n"
+            b"SWCOMPAT_MSI_REG_CACHE=MISSING\n"
+        )
+        trace = (
+            b'011c:err:msi:ITERATE_Actions Execution halted, '
+            b'action L"InstallFinalize" returned 1603\n'
+        )
+        report = t.classify_stream(BytesIO(header + trace))
+        self.assertTrue(t.valid(report))
+        self.assertEqual(report["signals"], [
+            "MSI_REG_CACHE_MISSING",
+            "MSI_REG_PRODUCT_INSTALLED",
+            "MSI_UNATTRIBUTED_SCRIPT_ENGINE",
+        ])
+        self.assertNotIn("ProductCode", str(report))
+        self.assertNotIn("swcompat-original", str(report))
+        # A vendor-supplied line with invalid enum is never exported.
+        poisoned = header.replace(b"INSTALLED", b"PRIVATE-PRODUCT-ID")
+        result = t.classify_stream(BytesIO(poisoned + trace))
+        self.assertTrue(t.valid(result))
+        self.assertNotIn("MSI_REG_PRODUCT_INSTALLED", result["signals"])
+        self.assertNotIn("PRIVATE", str(result))
+
+    def test_signed_msi_registration_unavailable_does_not_fabricate_success(self):
+        header = (
+            b"SWCOMPAT_MSI_REG_SCHEMA=1\n"
+            b"SWCOMPAT_MSI_REG_STATUS=OPEN_FAILED\n"
+            b"SWCOMPAT_MSI_REG_PRODUCT=UNKNOWN\n"
+            b"SWCOMPAT_MSI_REG_CACHE=UNKNOWN\n"
+        )
+        report = t.classify_stream(BytesIO(header))
+        self.assertEqual(report["status"], "CLASSIFIED")
+        self.assertEqual(report["signals"], ["MSI_REG_QUERY_FAILED"])
+        self.assertTrue(t.valid(report))
+        no_registration = t.classify_stream(BytesIO(b'0009:err:msi:ITERATE_Actions Failed\n'))
+        self.assertNotIn("MSI_REG_QUERY_FAILED", no_registration["signals"])
+
     def test_stream_scans_early_original_msp_error_beyond_eight_megabyte_tail(self):
         early = (
             b'0001:trace:msi:ACTION_PerformAction Performing action '
