@@ -51,6 +51,49 @@ class WineMsiErrorTests(unittest.TestCase):
         self.assertNotIn("private", str(result))
         self.assertNotIn("Regtlb", str(result))
 
+    def test_real_wine_clr4_quoted_regtlib_deferred_action_phase_and_rollback(self):
+        # Genuine Wine MSI emits quoted commands inside a bracketed
+        # deferred-action name. Everything here is synthetic private data.
+        data = (
+            b'015c:err:msi:execute_script Execution of script 0 halted; '
+            b'action L"[\\"C:\\PRIVATE\\regtlibv12.exe\\" '
+            b'\\"C:\\PRIVATE\\JScript.tlb\\";11<=>S-1-5-21-SECRET'
+            b'<=>{PRIVATE-GUID}]CA_Regtlb_JScript_amd64" returned 1603\n'
+            b'015c:err:msi:execute_script Execution of script 2 halted; '
+            b'action L"[SchedServiceConfig<=>S-1-5-21-SECRET'
+            b'<=>{PRIVATE-GUID}]RollbackServiceConfig" returned 1603\n'
+        )
+        result = w.parse(data)
+        self.assertTrue(w.validate(result))
+        self.assertEqual(result["msi_error_lines"], 2)
+        self.assertEqual(result["first_failed_script_phase"], "INSTALL")
+        self.assertEqual(result["first_install_failed_action"], "CUSTOM_ACTION")
+        self.assertEqual(result["first_failed_action"], "CUSTOM_ACTION")
+        self.assertEqual(result["install_script_failures"], 1)
+        self.assertEqual(result["rollback_script_failures"], 1)
+        self.assertIn("MSI_ACTION_CUSTOM", result["classes"])
+        self.assertIn("OTHER_MSI_ERROR", result["classes"])
+        self.assertEqual(result["service_action_failures"], [])
+        for private in ("PRIVATE", "SECRET", "JScript", "Regtlb", "SchedService"):
+            self.assertNotIn(private, str(result))
+
+    def test_malformed_quoted_deferred_actions_cannot_fabricate_error(self):
+        # Missing last quote or overlong action must not be interpreted as
+        # a real original Microsoft installation failure signature.
+        for raw in (
+            b'0011:err:msi:execute_script Execution of script 0 halted; '
+            b'action L"[\\"C:\\PRIVATE\\file.exe\\";0<=>SECRET]CA_Regtlb returned 1603\n',
+            b'0011:err:msi:execute_script Execution of script 0 halted; '
+            b'action L"[' + b'X' * 2500 + b']CA_Regtlb_amd64" returned 1603\n',
+        ):
+            with self.subTest(length=len(raw)):
+                result = w.parse(raw)
+                self.assertTrue(w.validate(result))
+                self.assertEqual(result["first_failed_action"], "NOT_IDENTIFIED")
+                self.assertEqual(result["install_script_failures"], 0)
+                self.assertNotIn("PRIVATE", str(result))
+                self.assertNotIn("SECRET", str(result))
+
     def test_specific_installfiles_or_registry_service_failure_precedes_finalization(self):
         raw = (
             b"0120:err:msi:ACTION_InstallFiles compressed file wasn't installed (L'PRIVATE')\n"

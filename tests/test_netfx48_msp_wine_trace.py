@@ -31,6 +31,67 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
         self.assertNotIn("GUID", str(result))
         self.assertNotIn("SchedServiceConfig", str(result))
 
+    def test_actual_wine_quoted_command_inside_deferred_msi_action_is_parsed(self):
+        # Wine MSI commonly logs original deferred actions with nested
+        # executable/TLB quotes, a private SID, and a trailing CA identifier.
+        # These are synthetic placeholders: no original vendor path/data.
+        trace = (
+            b'015c:err:msi:execute_script Execution of script 0 halted; '
+            b'action L"[\\"C:\\PRIVATE_PATH\\Framework64\\regtlibv12.exe\\" '
+            b'\\"C:\\PRIVATE_PATH\\Microsoft.JScript.tlb\\";11<=>S-1-5-21-SECRET'
+            b'<=>{PRIVATE-GUID}]CA_Regtlb_JScript_amd64" returned 1603\n'
+            b'015c:err:msi:execute_script Execution of script 2 halted; '
+            b'action L"[SchedServiceConfig<=>S-1-5-21-SECRET'
+            b'<=>{PRIVATE-GUID}]RollbackServiceConfig" returned 1603\n'
+        )
+        result = t.classify(trace)
+        self.assertEqual(result["status"], "CLASSIFIED")
+        self.assertEqual(result["first_forward_action"], "REGISTRY")
+        self.assertEqual(result["first_forward_return"], "WIN32_1603")
+        self.assertEqual(result["first_rollback_action"], "SERVICE")
+        self.assertEqual(result["first_rollback_return"], "WIN32_1603")
+        self.assertEqual(result["signals"], [
+            "INSTALL_SCRIPT_HALTED",
+            "MSI_SERVICE_OPERATION_FAILURE",
+            "ROLLBACK_SCRIPT_HALTED",
+        ])
+        self.assertTrue(t.valid(result))
+        for private in ("PRIVATE_PATH", "PRIVATE-GUID", "SECRET",
+                        "JScript", "regtlibv12", "SchedServiceConfig"):
+            self.assertNotIn(private, str(result))
+
+    def test_payload_text_cannot_override_trailing_action_name(self):
+        # Private command text can mention NGen while the actual action is
+        # registry registration. A classifier must use the trailing name.
+        raw = (
+            b'0009:err:msi:execute_script Execution of script 0 halted; '
+            b'action L"[\\"C:\\PRIVATE\\ngen.exe\\" '
+            b'\\"C:\\PRIVATE\\thing.tlb\\";11<=>SECRET]'
+            b'CA_Regtlb_amd64" returned 1603\n'
+        )
+        result = t.classify(raw)
+        self.assertEqual(result["first_forward_action"], "REGISTRY")
+        self.assertNotEqual(result["first_forward_action"], "NGEN")
+        self.assertTrue(t.valid(result))
+        self.assertNotIn("SECRET", str(result))
+        no_identifier = t.classify(
+            b'0009:err:msi:execute_script Execution of script 0 halted; '
+            b'action L"[C:\\PRIVATE\\ngen.exe]" returned 1603\n')
+        self.assertEqual(no_identifier["first_forward_action"], "UNKNOWN")
+        self.assertTrue(t.valid(no_identifier))
+
+    def test_oversize_deferred_action_is_not_fabricated_or_leaked(self):
+        oversized = (
+            b'003c:err:msi:execute_script Execution of script 0 halted; '
+            b'action L"[' + b'P' * 2500 +
+            b']CA_Regtlb_amd64" returned 1603\n'
+        )
+        result = t.classify(oversized)
+        self.assertEqual(result["first_forward_action"], "NOT_SEEN")
+        self.assertEqual(result["signals"], [])
+        self.assertTrue(t.valid(result))
+        self.assertNotIn("PPPP", str(result))
+
     def test_first_forward_error_wins_over_later_finalization_cascade(self):
         raw = (
             b'1111:err:msi:execute_script Execution of script 0 halted; '
