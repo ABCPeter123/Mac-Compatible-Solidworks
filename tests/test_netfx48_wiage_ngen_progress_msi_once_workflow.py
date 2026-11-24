@@ -34,7 +34,8 @@ class Signed48AfterProgressNgenTests(unittest.TestCase):
             "signed_msi_timeout_seconds: 420",
             "prepare_48_assembly_cache: true",
             "pause_native_ngen_queue: false",
-            "pause_after_verified_native40_ngen: true",
+            "pause_after_verified_native40_ngen: false",
+            "signed_msi_win10_profile: true",
             "cancel-in-progress: false",
         ):
             with self.subTest(expected=expected):
@@ -75,7 +76,7 @@ class Signed48AfterProgressNgenTests(unittest.TestCase):
     def test_genuine_queue_pause_can_only_follow_proven_original_native_clr4_drain(self):
         caller = CALLER.read_text(encoding="utf-8")
         reusable = REUSE.read_text(encoding="utf-8")
-        self.assertIn("pause_after_verified_native40_ngen: true", caller)
+        self.assertIn("pause_after_verified_native40_ngen: false", caller)
         self.assertIn("pause_native_ngen_queue: false", caller)
         self.assertEqual(reusable.count("pause_after_verified_native40_ngen:"), 2)
         guard = reusable.split(
@@ -120,6 +121,55 @@ class Signed48AfterProgressNgenTests(unittest.TestCase):
         self.assertIn('result["ngen_queue"]["status"] == "COMPLETE"', native)
         self.assertNotIn("WINEDLLOVERRIDES=ngen.exe=d", native)
         self.assertNotIn("REINSTALLMODE=vomus", native)
+
+    def test_win10_msi_profile_is_pinned_to_real_clr4_preflight_no_pause(self):
+        caller = CALLER.read_text(encoding="utf-8")
+        reusable = REUSE.read_text(encoding="utf-8")
+        self.assertIn("signed_msi_win10_profile: true", caller)
+        self.assertIn("pause_after_verified_native40_ngen: false", caller)
+        self.assertEqual(reusable.count("signed_msi_win10_profile:"), 2)
+        guard = reusable.split(
+            "- name: Reject signed .NET 4.8 Win10 profile outside verified "
+            "original CLR4 servicing", 1)[1].split(
+            "- name: Reject Microsoft NGen post-preflight queue pause", 1)[0]
+        for precondition in (
+            "inputs.signed_msi_win10_profile",
+            "!inputs.progress_gated_native40_ngen",
+            "!inputs.drain_native40_ngen",
+            "!inputs.ngen_host_stack64",
+            "!inputs.try_48_msi",
+            "inputs.host_provenance_only",
+            "inputs.wine_baseline != 'wiage-11.13'",
+            "!inputs.use_macos26_runner",
+            "inputs.pause_native_ngen_queue",
+            "inputs.pause_after_verified_native40_ngen",
+            "inputs.try_48_direct",
+            "inputs.try_48_intermediate",
+            "inputs.try_48_payload_host",
+            "inputs.try_40_core_msi_recovery",
+            "inputs.probe_native40_ngen_if_ready",
+            "inputs.signed_msi_timeout_seconds != 420",
+            "exit 1",
+        ):
+            with self.subTest(precondition=precondition):
+                self.assertIn(precondition, guard)
+        msi = reusable.split(
+            "- name: Extract authenticated original .NET 4.8 x64 MSI and MSP "
+            "after genuine CLR4.0", 1)[1].split(
+            "- name: Gate 4.8.1 on authenticated original MSI", 1)[0]
+        self.assertIn(
+            "SWCOMPAT_MSI_WIN10: ${{ inputs.signed_msi_win10_profile }}", msi)
+        self.assertIn("cache_flags+=(--install-profile win10)", msi)
+        self.assertIn('"\u0024{cache_flags[@]}"', msi)
+        self.assertIn("--native40-report build/netfx40-msxml3-restart.json", msi)
+        native = (ROOT / "scripts/netfx40_to_48_signed_msi.py").read_text(
+            encoding="utf-8")
+        self.assertIn('install_profile: str = "win7"', native)
+        self.assertIn('_set_winver(wine, prefix, env, install_profile)', native)
+        self.assertIn('install_profile=a.install_profile', native)
+        self.assertIn('result["patch"] == "SUCCESS"', native)
+        self.assertIn('result["native40_persistent"]', native)
+        self.assertIn('result["restart"] == "COMPLETED"', native)
 
     def test_drain_runs_before_original_msi_and_has_bounded_runtime(self):
         workflow = REUSE.read_text(encoding="utf-8")
