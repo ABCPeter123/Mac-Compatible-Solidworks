@@ -175,12 +175,13 @@ def _classify_lines(lines: Iterable[str]) -> dict:
     unattributed_sources: set[str] = set()
     last_nonfinal: str | None = None
     finalize_seen = False
+    terminal_error_seen = False
     found = False
     for line in lines:
         if len(line) > MAX_LINE:
             continue
         observed = TRACE_ACTION.search(line)
-        if observed:
+        if observed and not terminal_error_seen:
             name = observed.group(1)
             if name in FINAL_ACTIONS:
                 finalize_seen = True
@@ -190,6 +191,12 @@ def _classify_lines(lines: Iterable[str]) -> dict:
         if match is None:
             continue
         found = True
+        # Preserve action context BEFORE the first terminal MSI failure.
+        # Rollback actions after this point must not replace that context.
+        if (not terminal_error_seen and
+                (match.group(1).casefold() in {"iterate_actions", "execute_script"}
+                 and ("Execution halted" in line or "halted;" in line))):
+            terminal_error_seen = True
         unattributed_sources.add(_unattributed_source(match.group(1)))
         for signal, rule in SIGNAL_MATCH.items():
             if rule.search(line):
