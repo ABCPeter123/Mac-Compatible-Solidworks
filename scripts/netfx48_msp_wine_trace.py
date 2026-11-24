@@ -11,6 +11,8 @@ import re
 from collections.abc import Iterable
 from typing import BinaryIO
 
+from scripts.netfx48_msi_registration import parse as parse_msi_registration
+
 MAX_BYTES = 8 * 1024 * 1024
 MAX_LINE = 8192
 # Bounded disk-backed scan of verbose trace+msi, never an in-memory vendor log.
@@ -58,6 +60,10 @@ SIGNALS = {
     "MSI_UNATTRIBUTED_OTHER",
     "MSI_TRACE_FINALIZE_OBSERVED",
     "MSI_TRACE_NONFINAL_UNKNOWN",
+    "MSI_REG_PRODUCT_INSTALLED", "MSI_REG_PRODUCT_NOT_INSTALLED",
+    "MSI_REG_PRODUCT_OTHER", "MSI_REG_PRODUCT_UNKNOWN",
+    "MSI_REG_CACHE_PRESENT", "MSI_REG_CACHE_MISSING", "MSI_REG_CACHE_UNKNOWN",
+    "MSI_REG_QUERY_FAILED",
 } | {"MSI_TRACE_NONFINAL_" + action for action in ACTIONS
      if action not in {"NOT_SEEN", "UNKNOWN"}}
 SIGNAL_MATCH = {
@@ -254,6 +260,11 @@ def classify_stream(stream: BinaryIO) -> dict:
     """
     total_bytes = 0
     total_lines = 0
+    registration: dict[str, str] = {}
+    reg_prefixes = (
+        "SWCOMPAT_MSI_REG_SCHEMA=", "SWCOMPAT_MSI_REG_STATUS=",
+        "SWCOMPAT_MSI_REG_PRODUCT=", "SWCOMPAT_MSI_REG_CACHE=",
+    )
 
     def safe_lines() -> Iterable[str]:
         nonlocal total_bytes, total_lines
@@ -280,11 +291,42 @@ def classify_stream(stream: BinaryIO) -> dict:
                     if total_bytes > MAX_STREAM_BYTES:
                         raise OverflowError("Private original MSP trace exceeds scan budget")
                 continue
-            yield line.decode("utf-8", errors="replace")
+            decoded = line.decode("utf-8", errors="replace")
+            # Native fixture emits four public fixed enum lines on private
+            # stderr before launching the unchanged original Microsoft MSP.
+            if len(decoded) <= 100:
+                for prefix in reg_prefixes:
+                    if decoded.startswith(prefix) and prefix not in registration:
+                        registration[prefix] = decoded
+                        break
+            yield decoded
 
     try:
         stream.seek(0)
-        return _classify_lines(safe_lines())
+        report = _classify_lines(safe_lines())
+        if len(registration) == len(reg_prefixes):
+            payload = "".join(registration[p] for p in reg_prefixes).encode("ascii")
+            reg = parse_msi_registration(payload, "SUCCESS")
+            if reg["status"] == "OBSERVED":
+                product = {
+                    "INSTALLED": "MSI_REG_PRODUCT_INSTALLED",
+                    "ABSENT": "MSI_REG_PRODUCT_NOT_INSTALLED",
+                }.get(reg["product"], "MSI_REG_PRODUCT_OTHER"
+                      if reg["product"] in {"OTHER", "ADVERTISED"}
+                      else "MSI_REG_PRODUCT_UNKNOWN")
+                cache = {
+                    "PRESENT": "MSI_REG_CACHE_PRESENT",
+                    "MISSING": "MSI_REG_CACHE_MISSING",
+                }.get(reg["cache"], "MSI_REG_CACHE_UNKNOWN")
+                if report["status"] == "NO_MSI_ERRORS":
+                    report = blank("CLASSIFIED")
+                report["signals"] = sorted(set(report["signals"]) | {product, cache})
+            elif reg["status"] in {"OPEN_FAILED", "QUERY_FAILED"}:
+                if report["status"] == "NO_MSI_ERRORS":
+                    report = blank("CLASSIFIED")
+                report["signals"] = sorted(set(report["signals"]) | {"MSI_REG_QUERY_FAILED"})
+        assert valid(report)
+        return report
     except OverflowError:
         return blank("TOO_LARGE")
     except (OSError, ValueError, UnicodeError, TypeError):
