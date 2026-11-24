@@ -23,8 +23,8 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
             "first_forward_return": "WIN32_1603",
             "first_rollback_action": "SERVICE",
             "first_rollback_return": "WIN32_1603",
-            "signals": ["INSTALL_SCRIPT_HALTED", "ROLLBACK_SCRIPT_HALTED",
-                        "MSI_SERVICE_OPERATION_FAILURE"],
+            "signals": ["INSTALL_SCRIPT_HALTED", "MSI_SERVICE_OPERATION_FAILURE",
+                        "ROLLBACK_SCRIPT_HALTED"],
         })
         self.assertNotIn("SECRET", str(result))
         self.assertNotIn("PRIVATE_PATH", str(result))
