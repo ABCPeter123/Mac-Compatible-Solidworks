@@ -162,6 +162,11 @@ class OriginalSignedMSITests(TestCase):
                 patch_log_bytes=private_bytes)
             self.assertEqual(result["install"], "SUCCESS")
             self.assertEqual(result["patch"], "EXIT_NONZERO")
+            # Runtime must be checked after a clean Wine reboot even if
+            # the original signed patch failed and cannot authorize 4.8.
+            self.assertEqual(result["restart"], "COMPLETED")
+            self.assertEqual(result["loader"], "LOADED")
+            self.assertEqual(result["native_only_managed"], "PASS")
             # POSIX status 106 is also 1642 modulo 256. Do NOT claim
             # Windows Installer's full 1642 without an independent source.
             self.assertEqual(result["patch_exit_lowbyte"], 106)
@@ -281,6 +286,7 @@ class OriginalSignedMSITests(TestCase):
                 changed=True, release="NETFX48_RANGE")
             self.assertEqual(result["install"], "TIMED_OUT_PREFIX_REAPED")
             self.assertEqual(result["patch"], "NOT_RUN")
+            self.assertEqual(result["restart"], "NOT_RUN")
             self.assertEqual(result["scm_postflight"]["status"], "COMPLETE")
             self.assertEqual(result["win10"], "APPLIED")
             self.assertFalse(result["native48_candidate"])
