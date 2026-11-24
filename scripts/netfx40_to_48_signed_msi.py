@@ -534,7 +534,13 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
         if not validate(result):
             raise ValueError("Invalid fail-closed signed MSI timeout report")
         return result
-    if installed == "SUCCESS" and patched == "SUCCESS" and win10 == "APPLIED":
+    # Distinguish a genuinely persistent 4.8 CLR from the state left only in
+    # a running Wine session. A completed-but-failed original MSP can still
+    # leave native CLR4.8 files and a Release marker. Reboot that disposable
+    # prefix and measure the actual original runtime, but keep the signed
+    # MSP-success gate STRICT: a failed patch is never a complete 4.8 install.
+    if (installed == "SUCCESS" and patched in {"SUCCESS", "EXIT_NONZERO"}
+            and win10 == "APPLIED"):
         restart = wineboot_restart(wine, prefix, timeout=90)
 
     after = snapshot(prefix)
