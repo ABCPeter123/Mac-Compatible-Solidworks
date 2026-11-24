@@ -1,79 +1,25 @@
 name: One-shot authenticated Wiage .NET 4.8 MSI after progress-drained CLR4 NGen
 
-# Run 45329350922 (attempt 1) did NOT reach original signed MSI/MSP.
-# The genuine original x64 Microsoft NGen preflight returned nonzero after
-# seven positive log-growth windows. Attempt 2 was cancelled before MSI/MSP.
-# PR #250 adds a strict one-time original NGen retry only when a clean
-# nonzero exit followed fresh native-image log growth, with no detected
-# Wine failures. Enable that bounded retry on this authenticated one-shot
-# while leaving x64 and x86 real NGen SUCCESS mandatory. This is necessary
-# to reach the genuine MSP Win32 exit monitor from PR #249. No original
-# Microsoft executables, installer switches or release gates are modified.
-# Run 45316025486: Win10 A/B likewise original signed x64 MSI SUCCESS,
-# native Microsoft CLR4.8 LOADED and managed PASS after restart, but MSP
-# again EXIT_NONZERO, host low byte 67, private NGEN/X64 action category.
-# The ordinary Wine host return is truncated to a POSIX byte. Native MSVC
-# self-authored Win32 CreateProcessW/GetExitCodeProcess monitor now executes
-# the SAME original signed x64 MSP /p and captures a full 32-bit Windows
-# installer exit DWORD. No vendor media, product IDs or raw logs are printed.
-# Original signed MSI, genuine NGen preflight, strict patch success and
-# native-only .NET4.8 and .NET4.8.1 gates remain exactly enforced.
-# Run 45307363167: genuine Microsoft x64 and x86 NGen preflights PASS,
-# genuine NGen queue pause x64/x86 SUCCESS, signed Microsoft x64 4.8 MSI
-# SUCCESS, but original MSP EXIT_NONZERO again (patch NGEN/X64,
-# process exit low byte 67). Original queue continue x64/x86 both
-# EXIT_NONZERO after servicing; native48_candidate false. Pausing the
-# real NGen queues did NOT solve the original MSP failure. Disable that
-# experiment and instead A/B the original signed MSI and MSP under Wine's
-# Windows 10 compatibility profile, retaining the authentic same media,
-# original custom actions, x64/x86 preflight and strict MSP+runtime gates.
-# No Windows 4.8 registry, native CLR or Microsoft bytes are fabricated.
-# Run 45302194715: original Microsoft x64 4.8 MSI SUCCESS. CLR64 genuine
-# PE changed, NETFX48_RANGE Release, native-only managed PASS after a clean
-# Wine restart. Original signed MSP returned EXIT_NONZERO with host low byte
-# 67 and private patch log's last custom action NGEN/X64. Both x64 and x86
-# native optimization services were present. The failed MSP is NOT ignored:
-# native48_candidate remained False and no 4.8.1 or SOLIDWORKS followed.
-# NEW CONTROL: after original Microsoft x64 AND x86 NGen preflight SUCCESS,
-# issue original ngen.exe queue pause for BOTH architectures, run unchanged
-# hash-verified Microsoft x64 MSI+MSP, and issue original queue continue for
-# BOTH. Any pause/resume failure blocks native48_candidate. This isolates
-# genuine native-image queue concurrency without suppressing installer
-# custom actions, patch exit checks, strict Release or native managed tests.
-# Run 45296688430 (authentic Apple Silicon, verified after cleanup fix):
-# the original signed x64 MSI returned SUCCESS, the CLR64 payload changed,
-# Microsoft native-only managed execution PASS, loader LOADED, and the real
-# registry Release entered NETFX48_RANGE. However, the authentic original MSP
-# returned EXIT_NONZERO, so restart was NOT_RUN and native48_candidate=False.
-# This experiment retains identical vendor MSI/MSP commands and strict
-# installation gates while adding a PRIVATE MSP verbose log with finite
-# failure classification and the host process exit low byte. The low byte is
-# not necessarily the complete Win32 MSI exit code, and is not success.
-# All private original Microsoft log text is deleted on the runner.
-# Run 45256112951: signed Microsoft .NET 4.8 MSI+MSP workflow was green
-# only as a completed diagnostic, NOT as a framework upgrade. Both genuine
-# CLR4 NGen preflights were READY. Original extracted x64 MSI timed out at
-# 420s with last custom action NGEN, no fresh NGen log growth, and
-# TIMED_OUT_CLEANUP_DENIED from Wine's Unix session cleanup. The MSP did not
-# run, and native48_candidate=false. Apply scoped Wine server -k/-w on
-# the authenticated disposable prefix to distinguish an actual cleaned MSI
-# timeout from an unsafe orphan, then obtain safe postflight observations.
-# Do NOT infer 4.8 installation from an MSI timeout or a green CI wrapper.
-# Authentic run 45245248757 (retry 2) proved x64 and x86 Microsoft CLR4
-# ngen.exe executeQueuedItems both SUCCESS on Apple Silicon Wiage 11.13.
-# The original CLR4 survived a Wine restart and ran native-only managed code.
-# An earlier signed 4.8 x64 MSI/patch attempt stalled during custom-action
-# NGen servicing. This one-shot tests the documented prerequisite on the
-# SAME authenticated, disposable prefix, using only original Microsoft NGen,
-# MSI and MSP from hash-verified original Microsoft media.
-#
-# NGen may receive up to two 180-second grace windows, each only if its
-# original private log grew during the preceding window. 540s absolute
-# maximum PER architecture, 420s original signed MSI budget and 55m job cap.
-# A failed x64 or x86 NGen stops BEFORE any original 4.8 MSI operation.
-# Genuine original signed MSI+MSP success, installed CLR, registry and
-# managed runtime verification must all pass before any .NET 4.8.1 upgrade.
-# Never export vendor media or logs, forge Release, or suppress MSI actions.
+# Current original Microsoft servicing gate, November 24, 2026.
+# Authenticated Apple Silicon run 45426863980 attempt 2: both genuine
+# original Microsoft CLR4 x64+x86 NGen preflights SUCCESS without retry.
+# Original signed Microsoft .NET4.8 x64 MSI SUCCESS; changed real CLR64,
+# native-only Microsoft managed code PASS after clean Wine restart, genuine
+# Release in NETFX48_RANGE. The unmodified x64 MSP returned full Win32
+# DWORD 00000643 = installer fatal error 1603, not an inferred POSIX byte.
+# Private original MSP verbose log lacked a failing Return value 3 marker,
+# but classified an NGen/X64 custom-action hint and SERVICE_MISSING. No
+# specific service or NGen operation has been proved to cause the failure.
+# New original native MSP probe (PR #256) captures separate PRIVATE Wine
+# err+msi stderr and classifies the first forward Wine installer script
+# failure separately from a rollback script error. It emits only fixed
+# finite categories; no vendor log text, user path, SIDs or original media.
+# Original signed Microsoft x64 MSI/MSP unchanged, 420s servicing cap,
+# original x86+x64 NGen success mandatory, at most one progress-gated
+# genuine NGen retry, no NGen pause or fabricated installation state.
+# Win32 original MSP exact-success, restarted genuine CLR, Release, and
+# native-only managed gates stay strict. .NET4.8.1 and SOLIDWORKS still
+# unverified and blocked until complete signed .NET4.8 servicing passes.
 on:
   push:
     branches: [main]
