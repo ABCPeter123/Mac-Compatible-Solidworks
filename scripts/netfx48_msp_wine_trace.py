@@ -38,6 +38,10 @@ SIGNALS = {
     "MSI_CABINET_FAILURE", "MSI_CUSTOM_DLL_FAILURE",
     "MSI_CUSTOM_ACTION_PIPE_FAILURE", "MSI_CUSTOM_ACTION_RETURN_INVALID",
     "MSI_SERVICE_OPERATION_FAILURE", "MSI_PATCH_FAILURE",
+    "MSI_UNATTRIBUTED_SCRIPT_ENGINE", "MSI_UNATTRIBUTED_PATCH_ENGINE",
+    "MSI_UNATTRIBUTED_DATABASE", "MSI_UNATTRIBUTED_FILE_ENGINE",
+    "MSI_UNATTRIBUTED_CUSTOM_ACTION", "MSI_UNATTRIBUTED_SERVICE",
+    "MSI_UNATTRIBUTED_OTHER",
 }
 SIGNAL_MATCH = {
     "MSI_CABINET_FAILURE": re.compile(
@@ -59,6 +63,31 @@ SIGNAL_MATCH = {
         r"(?i)\b(?:apply_patch|patching|patch_package)\b"
     ),
 }
+
+
+# Only a fixed enum derived from Wine's own MSI function symbol can leave
+# the private stderr buffer. This fallback is used when no actionable Wine
+# signal or forward/rollback script action was detected. It NEVER names a
+# failing Microsoft action, and is not proof of installer causation.
+_UNATTRIBUTED_SOURCE = (
+    ("MSI_UNATTRIBUTED_SCRIPT_ENGINE",
+     re.compile(r"(?i)^(?:execute_script|iterate_actions)$")),
+    ("MSI_UNATTRIBUTED_PATCH_ENGINE",
+     re.compile(r"(?i)^(?:apply_patch|patching|patch_package|patch_set_offsets)$")),
+    ("MSI_UNATTRIBUTED_DATABASE",
+     re.compile(r"(?i)^(?:int_to_table_storage|msidb_.*|table_.*)$")),
+    ("MSI_UNATTRIBUTED_FILE_ENGINE",
+     re.compile(r"(?i)^(?:action_installfiles|extract_cabinet_stream|ready_media)$")),
+    ("MSI_UNATTRIBUTED_CUSTOM_ACTION",
+     re.compile(r"(?i)^(?:custom_.*|__wine_msi_call_dll_function)$")),
+    ("MSI_UNATTRIBUTED_SERVICE",
+     re.compile(r"(?i)^(?:action_(?:installservices|startservices|stopservices|servicecontrol)|service_.*)$")),
+)
+
+
+def _unattributed_source(function: str) -> str:
+    return next((label for label, rule in _UNATTRIBUTED_SOURCE
+                 if rule.fullmatch(function)), "MSI_UNATTRIBUTED_OTHER")
 
 
 def blank(status: str = "NOT_RUN") -> dict:
@@ -133,6 +162,7 @@ def classify(raw: bytes) -> dict:
         return blank("UNREADABLE")
     report = blank("CLASSIFIED")
     signals: set[str] = set()
+    unattributed_sources: set[str] = set()
     found = False
     for line in text.splitlines():
         if len(line) > MAX_LINE:
@@ -141,6 +171,7 @@ def classify(raw: bytes) -> dict:
         if match is None:
             continue
         found = True
+        unattributed_sources.add(_unattributed_source(match.group(1)))
         for signal, rule in SIGNAL_MATCH.items():
             if rule.search(line):
                 signals.add(signal)
@@ -161,6 +192,10 @@ def classify(raw: bytes) -> dict:
                     signals.add("ROLLBACK_SCRIPT_HALTED")
     if not found:
         return blank("NO_MSI_ERRORS")
+    # Only surface the coarse Wine error sources if more specific, bounded
+    # classifications were unavailable. This preserves prior evidence shapes.
+    if not signals:
+        signals.update(unattributed_sources)
     report["signals"] = sorted(signals)
     assert valid(report)
     return report
