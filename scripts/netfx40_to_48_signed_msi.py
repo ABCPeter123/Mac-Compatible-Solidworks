@@ -19,6 +19,11 @@ import time
 from collections.abc import Callable
 
 from scripts.netfx40_msxml3_restart import validate as valid_native40
+from scripts.netfx48_msp_wine_trace import (
+    blank as blank_msp_wine_trace,
+    classify as classify_msp_wine_trace,
+    valid as valid_msp_wine_trace,
+)
 from scripts.netfx48_msp_win32_exit import (
     blank as blank_win32_patch, parse as parse_win32_patch,
     valid as valid_win32_patch, patch_status as win32_patch_status,
@@ -175,6 +180,7 @@ def blank() -> dict:
         "extract": "NOT_RUN", "media": "NOT_RUN",
         "install": "NOT_RUN", "patch": "NOT_RUN",
         "patch_win32_mode": "DIRECT", "patch_win32": blank_win32_patch(),
+        "patch_wine_trace": blank_msp_wine_trace(),
         "install_log": blank_msi_log(), "patch_log": blank_msi_log(),
         "patch_exit_lowbyte": "NOT_RUN", "ngen_log": blank_ngen(),
         "ngen_progress": blank_progress(),
@@ -210,6 +216,14 @@ def validate(result: object) -> bool:
             or type(result["patch_win32_mode"]) is not str
             or result["patch_win32_mode"] not in {"DIRECT", "NATIVE"}
             or not valid_win32_patch(result["patch_win32"])
+            or not valid_msp_wine_trace(result["patch_wine_trace"])
+            or (result["patch_win32_mode"] == "DIRECT"
+                and result["patch_wine_trace"] != blank_msp_wine_trace())
+            or (result["patch"] == "NOT_RUN"
+                and result["patch_wine_trace"] != blank_msp_wine_trace())
+            or (result["patch_win32_mode"] == "NATIVE"
+                and result["patch"] != "NOT_RUN"
+                and result["patch_wine_trace"]["status"] == "NOT_RUN")
             or (result["patch_win32_mode"] == "DIRECT"
                 and result["patch_win32"] != blank_win32_patch())
             or (result["patch_win32_mode"] == "NATIVE"
@@ -320,17 +334,20 @@ def verify_extracted_media(root: Path) -> str:
 def private_run(args: list[str], env: dict[str, str], cwd: Path,
                 timeout: int, *, progress: Callable[[], None] | None = None,
                 on_diagnostic: Callable[[bytes], None] | None = None,
+                on_stderr: Callable[[bytes], None] | None = None,
                 on_exit_code: Callable[[int], None] | None = None) -> str:
     """Keep vendor output private; optionally classify bounded captured bytes.
 
     The callback runs only after the installer is reaped and never receives
     more than 8 MiB plus one truncation sentinel byte. Nothing is printed.
     """
-    with tempfile.TemporaryFile() as sink:
+    with (tempfile.TemporaryFile() as sink,
+          tempfile.TemporaryFile() as stderr_sink):
         try:
             child = subprocess.Popen(
                 args, env=env, cwd=cwd, stdin=subprocess.DEVNULL,
-                stdout=sink, stderr=sink, start_new_session=True,
+                stdout=sink, stderr=(stderr_sink if on_stderr is not None
+                                     else sink), start_new_session=True,
             )
         except OSError:
             return "START_FAILED"
@@ -387,10 +404,16 @@ def private_run(args: list[str], env: dict[str, str], cwd: Path,
             if on_diagnostic is not None:
                 sink.seek(0)
                 on_diagnostic(sink.read(8 * 1024 * 1024 + 1))
+            if on_stderr is not None:
+                stderr_sink.seek(0)
+                on_stderr(stderr_sink.read(8 * 1024 * 1024 + 1))
             return "TIMED_OUT_PREFIX_REAPED" if original_msi else "TIMED_OUT"
         if on_diagnostic is not None:
             sink.seek(0)
             on_diagnostic(sink.read(8 * 1024 * 1024 + 1))
+        if on_stderr is not None:
+            stderr_sink.seek(0)
+            on_stderr(stderr_sink.read(8 * 1024 * 1024 + 1))
         if on_exit_code is not None:
             on_exit_code(code)
     return "SUCCESS" if code == 0 else "EXIT_NONZERO"
@@ -491,6 +514,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
     install_log = blank_msi_log()
     patch_log = blank_msi_log()
     patch_win32 = blank_win32_patch()
+    patch_wine_trace = blank_msp_wine_trace()
     patch_win32_mode = "NATIVE" if patch_fixture is not None else "DIRECT"
     patch_exit_lowbyte: int | str = "NOT_RUN"
     ngen_log = blank_ngen()
@@ -566,9 +590,20 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                         # Microsoft msiexec child returned 1603, 1642, etc.
                         # Never interpret the wrapper exit as MSP success.
                         packets: list[bytes] = []
+                        wine_errors: list[bytes] = []
+                        # Change only Wine's *diagnostic* channel for this
+                        # genuine signed MSP, not the original MSI/MSP bytes,
+                        # switches, services, native runtime or installation
+                        # action. Separate stderr prevents Wine logging from
+                        # corrupting the strict 3-line Win32 DWORD packet.
+                        patch_env = {**env, "WINEDEBUG": "-all,err+msi"}
                         host_status = private_run(
                             [str(wine), str(patch_fixture), "--apply-original-msp"],
-                            env, prefix, 420, on_diagnostic=packets.append)
+                            patch_env, prefix, 420,
+                            on_diagnostic=packets.append,
+                            on_stderr=wine_errors.append)
+                        patch_wine_trace = classify_msp_wine_trace(
+                            wine_errors[-1] if wine_errors else b"")
                         if host_status in {"TIMED_OUT_PREFIX_REAPED",
                                            "TIMED_OUT_CLEANUP_DENIED"}:
                             patch_win32 = blank_win32_patch(host_status)
@@ -600,6 +635,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                   "patch": patched, "install_log": install_log,
                   "patch_win32_mode": patch_win32_mode,
                   "patch_win32": patch_win32,
+                  "patch_wine_trace": patch_wine_trace,
                   "patch_log": patch_log,
                   "patch_exit_lowbyte": patch_exit_lowbyte,
                   "ngen_log": ngen_log, "ngen_progress": ngen_progress,
@@ -629,6 +665,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
         "install_profile": install_profile, "install_winver": install_winver, "extract": extracted, "media": media,
         "install": installed, "patch": patched, "install_log": install_log,
         "patch_win32_mode": patch_win32_mode, "patch_win32": patch_win32,
+        "patch_wine_trace": patch_wine_trace,
         "patch_log": patch_log, "patch_exit_lowbyte": patch_exit_lowbyte,
         "ngen_log": ngen_log, "ngen_progress": ngen_progress,
         "ngen_queue_policy": queue_policy, "ngen_queue": queue_report,
