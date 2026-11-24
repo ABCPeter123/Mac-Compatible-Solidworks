@@ -98,7 +98,8 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
         self.assertEqual(result["first_rollback_action"], "SERVICE")
         self.assertEqual(result["signals"], [
             "INSTALL_SCRIPT_HALTED", "MSI_CUSTOM_ACTION_PIPE_FAILURE",
-            "MSI_CUSTOM_ACTION_RETURN_INVALID", "ROLLBACK_SCRIPT_HALTED",
+            "MSI_CUSTOM_ACTION_RETURN_INVALID", "MSI_SERVICE_OPERATION_FAILURE",
+            "ROLLBACK_SCRIPT_HALTED",
         ])
         for private in ("PRIVATE_SID", "PRIVATE_GUID", "PRIVATE_PATH"):
             self.assertNotIn(private, str(result))
