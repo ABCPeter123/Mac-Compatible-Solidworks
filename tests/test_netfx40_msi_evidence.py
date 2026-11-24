@@ -51,6 +51,36 @@ class InnerMSIFailureEvidenceTests(unittest.TestCase):
         self.assertNotIn("ACCESS_DENIED", result["errors"])
         self.assertNotIn("someone", str(result))
 
+    def test_signed_msp_documented_return_classes_without_host_lowbyte_inference(self):
+        for number, expected in (
+            (1605, "UNKNOWN_PRODUCT"),
+            (1612, "INSTALL_SOURCE_ABSENT"),
+            (1619, "MSI_PACKAGE_OPEN_FAILED"),
+            (1620, "MSI_PACKAGE_INVALID"),
+            (1635, "PATCH_PACKAGE_OPEN_FAILED"),
+            (1636, "PATCH_PACKAGE_INVALID"),
+            (1642, "PATCH_TARGET_NOT_FOUND"),
+        ):
+            with self.subTest(number=number):
+                private_log = (
+                    "MSI (s) [11:00:00]: MainEngineThread is returning "
+                    f"{number}\\nPRIVATE_USER_PATH"
+                ).encode()
+                result = e.classify_msi_log(private_log)
+                self.assertTrue(result["readable"])
+                self.assertEqual(result["errors"], [expected])
+                self.assertNotIn("PRIVATE_USER_PATH", str(result))
+                self.assertNotIn(str(number), str(result))
+        # No global guessing from a bare number, or from the POSIX lowbyte
+        # 106 that is also 1642 modulo 256.
+        for raw in (b"Host process returned 106",
+                    b"Last seen code 1642, status unknown",
+                    b"MainEngineThread is returning 106"):
+            self.assertEqual(e.classify_msi_log(raw)["errors"], [])
+        self.assertEqual(
+            e.classify_msi_log(b"Error 1642 at private vendor path")["errors"],
+            ["PATCH_TARGET_NOT_FOUND"])
+
     def test_text_encoding_and_oversize(self):
         text = "Action ended 08:12:14: StartServices. Return value 3."
         self.assertEqual(e.classify_msi_log(text.encode("utf-16"))["action"], "SERVICE")
