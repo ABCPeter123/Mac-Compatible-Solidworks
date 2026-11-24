@@ -85,12 +85,12 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
         # action that later returns 1603, and from rollback side effects.
         raw = (
             b'015c:err:msi:custom_client_thread failed to write to '
-            b'custom action client pipe: 232 PRIVATE_SID\\n'
-            b'015c:err:msi:custom_get_thread_return Invalid Return Code 232\\n'
+            b'custom action client pipe: 232 PRIVATE_SID\n'
+            b'015c:err:msi:custom_get_thread_return Invalid Return Code 232\n'
             b'015c:err:msi:execute_script Execution of script 0 halted; '
-            b'action L"CA_Regasm_PRIVATE_GUID" returned 1603\\n'
+            b'action L"CA_Regasm_PRIVATE_GUID" returned 1603\n'
             b'015c:err:msi:execute_script Execution of script 2 halted; '
-            b'action L"RollbackServiceConfig_PRIVATE_PATH" returned 1603\\n'
+            b'action L"RollbackServiceConfig_PRIVATE_PATH" returned 1603\n'
         )
         result = t.classify(raw)
         self.assertTrue(t.valid(result))
@@ -106,7 +106,7 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
     def test_plain_type_library_action_is_distinct_from_other_registry_action(self):
         raw = (
             b'015c:err:msi:execute_script Execution of script 0 halted; '
-            b'action L"CA_Regtlb_amd64" returned 1603\\n'
+            b'action L"CA_Regtlb_amd64" returned 1603\n'
         )
         self.assertEqual(t.classify(raw)["first_forward_action"], "TYPE_LIBRARY")
         self.assertTrue(t.valid(t.classify(raw)))
