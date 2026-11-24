@@ -2121,6 +2121,11 @@ jobs:
             build/netfx40-msxml3-prerequisite.json
             build/netfx40-msxml3-runtime.json
             build/netfx40-msxml3-restart.json
+            # Both original failure and verified clean retry remain auditable.
+            build/netfx40-msxml3-runtime-attempt1.json
+            build/netfx40-msxml3-restart-attempt1.json
+            build/netfx40-prefix-readiness-retry.json
+            build/netfx40-msxml3-prerequisite-retry.json
             build/netfx40-msxml3-original-extract.json
             build/netfx40-msxml3-original-table.json
             build/netfx40-original-core-msi-recovery.json
