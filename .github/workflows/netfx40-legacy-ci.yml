@@ -338,6 +338,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx48_scm_service_probe.py' -v
           python -m unittest discover -s tests -p 'test_netfx48_blockif_trace.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_to_48_direct.py' -v
+          python -m unittest discover -s tests -p 'test_netfx48_msi_registration.py' -v
 
   authentic-netfx40-windows:
     name: Authenticate original Microsoft .NET 4.0 and compile CLR probes
