@@ -181,6 +181,45 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
         ])
         self.assertTrue(t.valid(two))
 
+    def test_trace_action_prior_to_finalize_is_only_observational_context(self):
+        # Wine action.c traces action dispatch before the generic finalizer
+        # logs 1603. The action context does not establish causation.
+        raw = (
+            b'0011:trace:msi:ACTION_PerformAction Performing action '
+            b'(L"CA_Regtlb_Synthetic_amd64")\n'
+            b'0011:trace:msi:ACTION_PerformAction Performing action '
+            b'(L"InstallFinalize")\n'
+            b'0011:err:msi:ITERATE_Actions Execution halted, '
+            b'action L"InstallFinalize" returned 1603\n'
+        )
+        report = t.classify(raw)
+        self.assertTrue(t.valid(report))
+        self.assertEqual(report["first_forward_action"], "NOT_SEEN")
+        self.assertEqual(report["signals"], [
+            "MSI_TRACE_FINALIZE_OBSERVED",
+            "MSI_TRACE_NONFINAL_TYPE_LIBRARY",
+            "MSI_UNATTRIBUTED_SCRIPT_ENGINE",
+        ])
+        self.assertNotIn("Regtlb", str(report))
+        self.assertNotIn("Synthetic", str(report))
+
+    def test_trace_action_category_ignores_private_nested_command_payload(self):
+        raw = (
+            b'0011:trace:msi:ACTION_PerformAction Performing action '
+            b'(L"[\\"C:\\PRIVATE\\ngen.exe\\";11<=>S-1-5-21-SECRET]'
+            b'CA_Regtlb_private_amd64")\n'
+            b'0011:err:msi:ITERATE_Actions Execution halted, '
+            b'action L"InstallFinalize" returned 1603\n'
+        )
+        report = t.classify(raw)
+        self.assertTrue(t.valid(report))
+        self.assertIn("MSI_TRACE_NONFINAL_TYPE_LIBRARY", report["signals"])
+        self.assertNotIn("MSI_TRACE_NONFINAL_NGEN", report["signals"])
+        for private in ("PRIVATE", "SECRET", "Regtlb"):
+            self.assertNotIn(private, str(report))
+        no_error = t.classify(raw.split(b'0011:err:msi:')[0])
+        self.assertEqual(no_error, t.blank("NO_MSI_ERRORS"))
+
     def test_no_wine_msi_errors_is_not_framework_success(self):
         for raw in (b"", b'0000:fixme:msi:install_secret PRIVATE\n',
                     b'0000:err:ole:private_path\n'):
