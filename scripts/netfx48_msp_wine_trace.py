@@ -24,7 +24,10 @@ ACTION_CLASS = {
     "SERVICE": re.compile(r"(?i)service|schedservice|msdtc|svcctl"),
     "ASSEMBLY": re.compile(r"(?i)assembl|fusion|gac"),
     "CABINET": re.compile(r"(?i)cabinet|extract_cabinet|installfiles"),
-    "REGISTRY": re.compile(r"(?i)registr|regsvcs|regasm|regsvr|regtlb|typelib"),
+    # Distinguish COM type-library registration from unrelated registry actions.
+    # Only a fixed class is reported, never the original Microsoft action name.
+    "TYPE_LIBRARY": re.compile(r"(?i)regtlb|typelib"),
+    "REGISTRY": re.compile(r"(?i)registr|regsvcs|regasm|regsvr"),
     "CUSTOM": re.compile(r"(?i)custom.?action|(?:^|[^a-z])ca_"),
 }
 ACTIONS = set(ACTION_CLASS) | {"UNKNOWN", "NOT_SEEN"}
@@ -33,6 +36,7 @@ RETURNS = {"NOT_SEEN", "WIN32_1603", "OTHER_NONZERO", "ZERO"}
 SIGNALS = {
     "INSTALL_SCRIPT_HALTED", "ROLLBACK_SCRIPT_HALTED",
     "MSI_CABINET_FAILURE", "MSI_CUSTOM_DLL_FAILURE",
+    "MSI_CUSTOM_ACTION_PIPE_FAILURE", "MSI_CUSTOM_ACTION_RETURN_INVALID",
     "MSI_SERVICE_OPERATION_FAILURE", "MSI_PATCH_FAILURE",
 }
 SIGNAL_MATCH = {
@@ -41,6 +45,12 @@ SIGNAL_MATCH = {
     ),
     "MSI_CUSTOM_DLL_FAILURE": re.compile(
         r"(?i)\b(?:__wine_msi_call_dll_function|custom_action_server)\b"
+    ),
+    "MSI_CUSTOM_ACTION_PIPE_FAILURE": re.compile(
+        r"(?i)\bcustom_client_thread\b.*\bfailed to write\b.*\bpipe\b"
+    ),
+    "MSI_CUSTOM_ACTION_RETURN_INVALID": re.compile(
+        r"(?i)\bcustom_get_thread_return\b.*\binvalid return code\b"
     ),
     "MSI_SERVICE_OPERATION_FAILURE": re.compile(
         r"(?i)(?:servicecontrol|serviceconfig|startservices|installservices|schedservice)"
