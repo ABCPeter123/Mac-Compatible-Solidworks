@@ -205,7 +205,10 @@ class Signed48AfterProgressNgenTests(unittest.TestCase):
         self.assertIn("SWCOMPAT_MSP_WIN32: ${{ inputs.signed_msp_win32_exit }}", msi)
         self.assertIn("cache_flags+=(--patch-fixture build/netfx48_msp_win32_status.exe)", msi)
         self.assertNotIn("REINSTALLMODE=", msi)
-        self.assertEqual(reusable.count("signed_msp_reinstall:"), 2)
+        # Reusable caller only: keep workflow_dispatch within 25 inputs.
+        self.assertEqual(reusable.count("signed_msp_reinstall:"), 1)
+        self.assertIn("signed_msp_reinstall:", reusable.split("  workflow_dispatch:")[0])
+        self.assertNotIn("signed_msp_reinstall:", reusable.split("  workflow_dispatch:")[1])
         self.assertIn("inputs.signed_msp_reinstall && !inputs.signed_msp_win32_exit", reusable)
         self.assertIn("SWCOMPAT_MSP_REINSTALL: ${{ inputs.signed_msp_reinstall }}", msi)
         self.assertIn('if [[ "$SWCOMPAT_MSP_REINSTALL" == "true" ]]', msi)
