@@ -25,9 +25,35 @@ MARKER = ".swcompat-netfx481-disposable"
 def decision(original: object, restarted: object) -> str:
     if not valid_original(original) or not valid_restart(restarted):
         return "DENIED"
-    if (restarted["persistent_native_managed"] is True
-            and restarted["native_only_managed"] == "PASS"
-            and original["candidate_native40"] is True):
+    # Native Microsoft managed code after a *real Wine restart* is the
+    # prerequisite for later NGen research. A bootstrapper process can time
+    # out after successfully committing original CLR binaries and still be
+    # cleaned up safely. Do not erase and reinstall that verified runtime.
+    #
+    # This is NOT a claim that timed-out Microsoft setup returned success:
+    # preserve the original TIMEOUT report and the separate signed MSI/MSP
+    # strict native Win32 return-code gates downstream.
+    original_native = (
+        original["clr64_after"] == "PE_AMD64"
+        and original["mscorlib64_after"] == "PE_AMD64"
+        and original["native_loader"] == "LOADED"
+        and original["managed_functionality"] == "PASS"
+    )
+    completed_install = (
+        original["installer_status"] == "EXIT_CAPTURED"
+        and original["candidate_native40"] is True
+    )
+    recovered_timeout = (
+        original["installer_status"] == "TIMEOUT"
+        and original["installer_cleanup"] == "PREFIX_REAPED"
+        and original["candidate_native40"] is False
+    )
+    if (original_native
+            and (completed_install or recovered_timeout)
+            and restarted["status"] == "RESTART_COMPLETED"
+            and restarted["restart"] == "COMPLETED"
+            and restarted["persistent_native_managed"] is True
+            and restarted["native_only_managed"] == "PASS"):
         return "ALREADY_VERIFIED"
     if not (
         original["installer_status"] == "EXIT_CAPTURED"
