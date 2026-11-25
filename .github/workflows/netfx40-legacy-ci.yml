@@ -230,11 +230,6 @@ on:
         type: boolean
         required: false
         default: false
-      signed_msp_reinstall:
-        description: 'Explicit Microsoft silent MSP REINSTALL=ALL REINSTALLMODE=ecmus, native monitor only'
-        type: boolean
-        required: false
-        default: false
       signed_msi_timeout_seconds:
         description: 'Original signed .NET 4.8 x64 MSI timeout (seconds)'
         type: choice
