@@ -339,6 +339,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx48_blockif_trace.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_to_48_direct.py' -v
           python -m unittest discover -s tests -p 'test_netfx48_msi_registration.py' -v
+          python -m unittest discover -s tests -p 'test_netfx48_msp_patch_sequence.py' -v
 
   authentic-netfx40-windows:
     name: Authenticate original Microsoft .NET 4.0 and compile CLR probes
@@ -649,6 +650,14 @@ jobs:
               $registrationSelftest -notcontains 'SWCOMPAT_MSI_REG_PRODUCT=INSTALLED' -or
               $registrationSelftest -notcontains 'SWCOMPAT_MSI_REG_CACHE=PRESENT') {
             throw "Original MSI read-only registration fixture selftest failed"
+          }
+          $sequence = & build\netfx48_msp_win32_status.exe --selftest-msi-sequence
+          if ($LASTEXITCODE -ne 0 -or
+              $sequence -notcontains 'SWCOMPAT_MSI_SEQ_SCHEMA=1' -or
+              $sequence -notcontains 'SWCOMPAT_MSI_SEQ_STATUS=SELFTEST' -or
+              $sequence -notcontains 'SWCOMPAT_MSI_SEQ_USER=APPLICABLE' -or
+              $sequence -notcontains 'SWCOMPAT_MSI_SEQ_MACHINE=PRODUCT_UNKNOWN') {
+            throw "Read-only native signed MSP sequencing fixture selftest failed"
           }
           $mspSelftest = & build\netfx48_msp_win32_status.exe --selftest-1603
           if ($LASTEXITCODE -ne 0 -or
