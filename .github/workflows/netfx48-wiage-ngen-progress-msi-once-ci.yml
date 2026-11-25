@@ -9,6 +9,12 @@ name: One-shot authenticated Wiage .NET 4.8 MSI after progress-drained CLR4 NGen
 # MSI_UNATTRIBUTED_SCRIPT_ENGINE, but no first failing script action;
 # non-final action class UNKNOWN and the NGen/service log hints are noncausal.
 #
+# Run 45527110314 selected explicit native silent reinstall, but its genuine
+# original x64 MSI timed out after 420s (safely reaped) BEFORE the MSP ran.
+# Keep every other experimental variable fixed. Permit the already bounded
+# 1200s MSI budget in this specific native reinstall arm, with a 70-minute
+# host-job ceiling. The original MSI must actually finish successfully;
+# partial CLR/managed PASS never permits MSP execution. MSP stays at 420s.
 # Authentic run 45522878087 verified MSI_SEQ_MACHINE_APPLICABLE for the
 # original signed MSP and still returned native Win32 1603 under the
 # baseline quiet /p command. MSI product registration and cache are present.
@@ -85,7 +91,7 @@ jobs:
       ngen_host_stack64: true
       progress_gated_native40_ngen: true
       retry_growing_native40_ngen_nonzero: true
-      signed_msi_timeout_seconds: 420
+      signed_msi_timeout_seconds: 1200
       prepare_48_assembly_cache: true
       pause_native_ngen_queue: false
       pause_after_verified_native40_ngen: false
