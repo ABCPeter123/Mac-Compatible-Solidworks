@@ -1222,7 +1222,7 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
-          from scripts.netfx40_prefix_readiness import validate as valid_prefix
+          from scripts.netfx40_prefix_readiness import valid as valid_prefix
           from scripts.netfx40_msxml3_prerequisite import validate as valid_msxml
           pre = json.loads(Path("build/netfx40-prefix-readiness-retry.json").read_text())
           xml = json.loads(Path("build/netfx40-msxml3-prerequisite-retry.json").read_text())
