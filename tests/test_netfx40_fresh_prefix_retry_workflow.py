@@ -64,7 +64,7 @@ class Native40FreshRetryWorkflowTests(TestCase):
             "attribution", start)
         block = body[start:end]
         snippets = re.findall(
-            r"(?ms)^          python3 - <<'PY'\\n(.*?)^          PY$",
+            r"(?ms)^          python3 - <<'PY'\n(.*?)^          PY$",
             block,
         )
         self.assertEqual(len(snippets), 2, "Both preflight/restart verifiers required")
