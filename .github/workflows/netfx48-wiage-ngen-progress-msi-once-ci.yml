@@ -9,6 +9,13 @@ name: One-shot authenticated Wiage .NET 4.8 MSI after progress-drained CLR4 NGen
 # MSI_UNATTRIBUTED_SCRIPT_ENGINE, but no first failing script action;
 # non-final action class UNKNOWN and the NGen/service log hints are noncausal.
 #
+# Authenticated run 45516726602 encountered genuine original CLR4 setup
+# Win32 1603 with no CLR, correctly selected one fresh disposable prefix,
+# but stopped at a Python ImportError before the second original setup:
+# netfx40_prefix_readiness exports valid(), not validate(). Merged PR #266
+# repairs that import and compiles/resolves both retry heredoc APIs in CI.
+# This retry uses UNMODIFIED original media and preserves exact original
+# signed 4.8 MSI/MSP Windows Installer success gates.
 # PR #265 corrects a false-negative in that gate: run 45512909191
 # installed genuine CLR4 x64, native managed PASS and persisted across a
 # completed Wine restart, but the original bootstrapper timed out and its
