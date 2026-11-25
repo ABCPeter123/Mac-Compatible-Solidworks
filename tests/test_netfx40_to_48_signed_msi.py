@@ -53,7 +53,8 @@ class OriginalSignedMSITests(TestCase):
                  pause_failure=None, resume_failure=None,
                  patch_log_bytes=None, patch_process_code=67,
                  install_profile="win7", native_patch_probe=False,
-                 native_patch_code=1603, wine_error_bytes=None):
+                 native_patch_code=1603, wine_error_bytes=None,
+                 patch_reinstall=False):
         calls = []
         patch_fixture = None
         if native_patch_probe:
@@ -83,7 +84,9 @@ class OriginalSignedMSITests(TestCase):
                             b"SWCOMPAT_MSP_WIN32_STATUS=SELFTEST\n"
                             b"SWCOMPAT_MSP_WIN32_EXIT_HEX=00000643\n")
                     return "SUCCESS"
-                if cmd[2] == "--apply-original-msp":
+                if cmd[2] in {"--apply-original-msp", "--apply-original-msp-reinstall"}:
+                    self.assertEqual(cmd[2], "--apply-original-msp-reinstall"
+                                     if patch_reinstall else "--apply-original-msp")
                     self.assertEqual(env.get("WINEDEBUG"), "-all,trace+msi,err+msi")
                     self.assertIsNone(on_stderr)
                     if on_stderr_report is not None:
@@ -161,7 +164,7 @@ class OriginalSignedMSITests(TestCase):
                 msi_timeout_seconds=msi_timeout_seconds,
                 pause_native_ngen_queue=pause_queue,
                 install_profile=install_profile,
-                patch_fixture=patch_fixture)
+                patch_fixture=patch_fixture, patch_reinstall=patch_reinstall)
         self.assertTrue(p.validate(result))
         self.assertEqual(result["solidworks_compatibility"], "NOT_DEMONSTRATED")
         self.assertFalse(result["framework481_confirmed"])
@@ -261,6 +264,28 @@ class OriginalSignedMSITests(TestCase):
                                          "patch_win32": {
                                              **result["patch_win32"],
                                              "exit_hex": "00000000"}}))
+
+    def test_documented_silent_reinstall_is_opt_in_and_still_requires_real_win32_zero(self):
+        for exit_code in (1603, 0):
+            with self.subTest(exit_code=exit_code), TemporaryDirectory() as td:
+                result, calls = self.run_case(
+                    self.fixture(Path(td)), native_patch_probe=True,
+                    native_patch_code=exit_code, patch_reinstall=True)
+                self.assertEqual(result["patch_win32_mode"], "NATIVE_REINSTALL")
+                self.assertEqual(result["native48_candidate"], exit_code == 0)
+                self.assertEqual(result["patch_exit_lowbyte"], "UNAVAILABLE")
+                self.assertEqual(result["patch_win32"]["exit_hex"],
+                                 f"{exit_code:08X}")
+                self.assertEqual(sum("--apply-original-msp-reinstall" in cmd
+                                     for cmd, _ in calls), 1)
+                self.assertFalse(any("--apply-original-msp" in cmd
+                                     for cmd, _ in calls))
+                self.assertFalse(p.validate({
+                    **result, "patch_win32_mode": "DIRECT"}))
+        with TemporaryDirectory() as td:
+            paths = self.fixture(Path(td))
+            with self.assertRaisesRegex(ValueError, "requires native Win32"):
+                p.inspect(*paths, {}, patch_reinstall=True)
 
     def test_only_actual_original_msp_win32_zero_can_complete_native48(self):
         with TemporaryDirectory() as td:

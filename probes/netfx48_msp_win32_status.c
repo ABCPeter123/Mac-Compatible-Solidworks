@@ -143,6 +143,7 @@ int wmain(int argc, wchar_t **argv) {
     PROCESS_INFORMATION process;
     DWORD rc, code = 0xFFFFFFFFu;
     UINT length;
+    BOOL reinstall = FALSE;
     if (argc == 2 && wcscmp(argv[1], L"--selftest-msi-sequence") == 0) {
         report_sequence(stdout, "SELFTEST", "APPLICABLE", "PRODUCT_UNKNOWN");
         return 0;
@@ -158,7 +159,9 @@ int wmain(int argc, wchar_t **argv) {
         report("SELFTEST", 1603u);
         return 0;
     }
-    if (argc != 2 || wcscmp(argv[1], L"--apply-original-msp") != 0) {
+    if (argc == 2 && wcscmp(argv[1], L"--apply-original-msp-reinstall") == 0)
+        reinstall = TRUE;
+    else if (argc != 2 || wcscmp(argv[1], L"--apply-original-msp") != 0) {
         report("INVALID_ARGUMENT", code);
         return 1;
     }
@@ -172,8 +175,16 @@ int wmain(int argc, wchar_t **argv) {
         report("START_FAILED", code);
         return 1;
     }
+    /* Microsoft documents these explicit reinstall properties for silent
+     * msiexec /p servicing. Keep the previous invocation as the control.
+     * Both modes run the same authenticated vendor MSP and capture its
+     * real child exit. No patch, transform or registry value is altered.
+     * https://learn.microsoft.com/windows-server/administration/windows-commands/msiexec
+     */
     if (swprintf_s(command, CAPACITY,
-            L"\"%ls\" /p \"%ls\" /qn /norestart EXTUI=1 /L*v \"%ls\"",
+            reinstall
+                ? L"\"%ls\" /p \"%ls\" /qn /norestart EXTUI=1 REINSTALL=ALL REINSTALLMODE=ecmus /L*v \"%ls\""
+                : L"\"%ls\" /p \"%ls\" /qn /norestart EXTUI=1 /L*v \"%ls\"",
             executable, PATCH_PATH, PRIVATE_LOG) < 0) {
         report("INVALID_ARGUMENT", code);
         return 1;
