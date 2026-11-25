@@ -9,6 +9,13 @@ name: One-shot authenticated Wiage .NET 4.8 MSI after progress-drained CLR4 NGen
 # MSI_UNATTRIBUTED_SCRIPT_ENGINE, but no first failing script action;
 # non-final action class UNKNOWN and the NGen/service log hints are noncausal.
 #
+# PR #265 corrects a false-negative in that gate: run 45512909191
+# installed genuine CLR4 x64, native managed PASS and persisted across a
+# completed Wine restart, but the original bootstrapper timed out and its
+# process group was reaped. The bootstrapper TIMEOUT is kept unchanged;
+# the separately verified native CLR can continue to NGen/MSI research.
+# Continue the original x64 MSI/MSP only if independent native CLR proof
+# and exact original signed package exit gates still pass.
 # PR #262 allows ONE fresh-prefix genuine CLR4 retry after a verified 1603
 # with NO real CLR installed; all original NGen/MSI/MSP gates remain strict.
 # Merged PR #264 now adds a READ-ONLY native Windows Installer ProductCode
