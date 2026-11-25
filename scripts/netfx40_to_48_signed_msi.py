@@ -215,24 +215,24 @@ def validate(result: object) -> bool:
             or not valid_msi_log(result["install_log"])
             or not valid_msi_log(result["patch_log"])
             or type(result["patch_win32_mode"]) is not str
-            or result["patch_win32_mode"] not in {"DIRECT", "NATIVE"}
+            or result["patch_win32_mode"] not in {"DIRECT", "NATIVE", "NATIVE_REINSTALL"}
             or not valid_win32_patch(result["patch_win32"])
             or not valid_msp_wine_trace(result["patch_wine_trace"])
             or (result["patch_win32_mode"] == "DIRECT"
                 and result["patch_wine_trace"] != blank_msp_wine_trace())
             or (result["patch"] == "NOT_RUN"
                 and result["patch_wine_trace"] != blank_msp_wine_trace())
-            or (result["patch_win32_mode"] == "NATIVE"
+            or (result["patch_win32_mode"] in {"NATIVE", "NATIVE_REINSTALL"}
                 and result["patch"] != "NOT_RUN"
                 and result["patch_wine_trace"]["status"] == "NOT_RUN")
             or (result["patch_win32_mode"] == "DIRECT"
                 and result["patch_win32"] != blank_win32_patch())
-            or (result["patch_win32_mode"] == "NATIVE"
+            or (result["patch_win32_mode"] in {"NATIVE", "NATIVE_REINSTALL"}
                 and result["patch"] != "NOT_RUN"
                 and (result["patch_win32"]["status"] == "NOT_RUN"
                      or result["patch_exit_lowbyte"] != "UNAVAILABLE"
                      or win32_patch_status(result["patch_win32"]) != result["patch"]))
-            or (result["patch_win32_mode"] == "NATIVE"
+            or (result["patch_win32_mode"] in {"NATIVE", "NATIVE_REINSTALL"}
                 and result["patch"] == "NOT_RUN"
                 and result["patch_win32"] != blank_win32_patch())
             or not (
@@ -409,7 +409,7 @@ def private_run(args: list[str], env: dict[str, str], cwd: Path,
                 (len(args) >= 2 and args[1] == "msiexec.exe")
                 or (len(args) == 3
                     and Path(args[1]).name == "netfx48_msp_win32_status.exe"
-                    and args[2] == "--apply-original-msp")
+                    and args[2] in {"--apply-original-msp", "--apply-original-msp-reinstall"})
             )
             if original_msi:
                 prefix = Path(env.get("WINEPREFIX", ""))
@@ -440,7 +440,10 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
             msi_timeout_seconds: int = 420,
             pause_native_ngen_queue: bool = False,
             install_profile: str = "win7",
-            patch_fixture: Path | None = None) -> dict:
+            patch_fixture: Path | None = None,
+            patch_reinstall: bool = False) -> dict:
+    if type(patch_reinstall) is not bool or (patch_reinstall and patch_fixture is None):
+        raise ValueError("Explicit signed MSP reinstall requires native Win32 monitor")
     if type(pause_native_ngen_queue) is not bool:
         raise ValueError("Genuine NGen queue pause must be explicit")
     if type(install_profile) is not str or install_profile not in INSTALL_PROFILES:
@@ -529,7 +532,8 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
     patch_log = blank_msi_log()
     patch_win32 = blank_win32_patch()
     patch_wine_trace = blank_msp_wine_trace()
-    patch_win32_mode = "NATIVE" if patch_fixture is not None else "DIRECT"
+    patch_win32_mode = ("NATIVE_REINSTALL" if patch_reinstall else
+                        "NATIVE" if patch_fixture is not None else "DIRECT")
     patch_exit_lowbyte: int | str = "NOT_RUN"
     ngen_log = blank_ngen()
     ngen_progress = blank_progress()
@@ -598,8 +602,9 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                                 patch_exit_lowbyte = exit_code
                     else:
                         # Use the self-authored Win32 x64 CreateProcess monitor
-                        # to launch EXACTLY the same signed /p original MSP,
-                        # with same quiet, no-restart, EXTUI and private /L*v.
+                        # to launch the same signed /p original MSP with quiet,
+                        # no-restart, EXTUI and private /L*v. Only the opt-in
+                        # documented silent reinstall profile adds public MSI properties.
                         # The outer Wine process may return 0 while the real
                         # Microsoft msiexec child returned 1603, 1642, etc.
                         # Never interpret the wrapper exit as MSP success.
@@ -607,12 +612,14 @@ def inspect(wine: Path, prefix: Path, installer: Path, digest: Path,
                         wine_reports: list[dict] = []
                         # Change only Wine's *diagnostic* channel for this
                         # genuine signed MSP, not the original MSI/MSP bytes,
-                        # switches, services, native runtime or installation
-                        # action. Separate stderr prevents Wine logging from
+                        # services, native runtime or installation action.
+                        # Separate stderr prevents Wine logging from
                         # corrupting the strict 3-line Win32 DWORD packet.
                         patch_env = {**env, "WINEDEBUG": "-all,trace+msi,err+msi"}
                         host_status = private_run(
-                            [str(wine), str(patch_fixture), "--apply-original-msp"],
+                            [str(wine), str(patch_fixture),
+                             "--apply-original-msp-reinstall" if patch_reinstall
+                             else "--apply-original-msp"],
                             patch_env, prefix, 420,
                             on_diagnostic=packets.append,
                             on_stderr_report=wine_reports.append)
@@ -721,6 +728,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pause-native-ngen-queue", action="store_true")
     parser.add_argument("--patch-fixture", type=Path,
                         help="Only self-authored Win32 x64 full original MSP exit fixture")
+    parser.add_argument("--patch-reinstall", action="store_true",
+                        help="Opt-in documented silent MSP REINSTALL=ALL REINSTALLMODE=ecmus")
     parser.add_argument("--install-profile", choices=sorted(INSTALL_PROFILES),
                         default="win7")
     parser.add_argument("--msi-timeout-seconds", type=int,
@@ -735,7 +744,8 @@ def main(argv: list[str] | None = None) -> int:
                      pause_native_ngen_queue=a.pause_native_ngen_queue,
                      msi_timeout_seconds=a.msi_timeout_seconds,
                      install_profile=a.install_profile,
-                     patch_fixture=a.patch_fixture)
+                     patch_fixture=a.patch_fixture,
+                     patch_reinstall=a.patch_reinstall)
     if a.output.is_symlink():
         raise ValueError("Linked experiment report")
     a.output.parent.mkdir(parents=True, exist_ok=True)
