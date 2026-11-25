@@ -1,4 +1,8 @@
 """Fail-closed workflow contract for one authentic CLR4 fresh-prefix retry."""
+import ast
+import importlib
+import re
+import textwrap
 from pathlib import Path
 from unittest import TestCase
 
@@ -42,6 +46,52 @@ class Native40FreshRetryWorkflowTests(TestCase):
         self.assertNotIn("reg add", block.lower())
         self.assertNotIn("rm -rf", block)
         self.assertIn("signed_msp_win32_exit: true", caller)
+
+    def test_authentic_fresh_prefix_heredocs_compile_and_import_existing_apis(self):
+        """Compile both executable embedded scripts and resolve real imports.
+
+        A signed Apple Silicon MSI run should not first discover that a new
+        prefix preflight imported `validate` instead of the module's `valid`.
+        This imports local Python only; no Wine, original media, network,
+        registry, installer or actual shell steps are executed.
+        """
+        body = WORKFLOW.read_text(encoding="utf-8")
+        start = body.index(
+            "- name: One genuine CLR4 retry in a second fresh disposable "
+            "Wine prefix after 1603")
+        end = body.index(
+            "- name: Extract unchanged signed .NET 4.0 MSI for private failure "
+            "attribution", start)
+        block = body[start:end]
+        snippets = re.findall(
+            r"(?ms)^          python3 - <<'PY'\\n(.*?)^          PY$",
+            block,
+        )
+        self.assertEqual(len(snippets), 2, "Both preflight/restart verifiers required")
+        for number, snippet in enumerate(snippets, 1):
+            source = textwrap.dedent(snippet)
+            with self.subTest(script=number):
+                tree = compile(source, f"<authentic-clr4-retry-{number}>", "exec",
+                               flags=ast.PyCF_ONLY_AST)
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.ImportFrom):
+                        continue
+                    self.assertIsNotNone(node.module)
+                    if not node.module.startswith("scripts."):
+                        continue
+                    module = importlib.import_module(node.module)
+                    for symbol in node.names:
+                        self.assertTrue(
+                            hasattr(module, symbol.name),
+                            f"{node.module} does not export {symbol.name}")
+        self.assertIn(
+            "from scripts.netfx40_prefix_readiness import valid as valid_prefix",
+            block,
+        )
+        self.assertIn(
+            "from scripts.netfx40_msxml3_prerequisite import validate as valid_msxml",
+            block,
+        )
 
     def test_original_success_gate_and_private_reports_are_preserved(self):
         body = WORKFLOW.read_text(encoding="utf-8")
