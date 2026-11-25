@@ -913,7 +913,7 @@ jobs:
     name: Try genuine .NET 4.0 after msxml3 in a fresh Apple Silicon Wine prefix
     needs: [authentic-netfx40-windows, absolute-path-regressions]
     runs-on: ${{ inputs.use_macos26_runner && 'macos-26' || 'macos-15' }}
-    timeout-minutes: ${{ inputs.progress_gated_native40_ngen && 55 || inputs.try_48_msi && inputs.signed_msi_timeout_seconds == 1200 && 55 || inputs.try_40_core_msi_recovery && inputs.probe_native40_ngen_if_ready && 55 || 35 }}
+    timeout-minutes: ${{ inputs.signed_msp_reinstall && inputs.signed_msi_timeout_seconds == 1200 && 70 || inputs.progress_gated_native40_ngen && 55 || inputs.try_48_msi && inputs.signed_msi_timeout_seconds == 1200 && 55 || inputs.try_40_core_msi_recovery && inputs.probe_native40_ngen_if_ready && 55 || 35 }}
     env:
       SWCOMPAT_TRY_48_INTERMEDIATE: ${{ inputs.try_48_intermediate }}
       SWCOMPAT_TRY_48_DIRECT: ${{ inputs.try_48_direct }}
@@ -939,7 +939,7 @@ jobs:
           echo "Adaptive NGen requires authenticated original CLR4 or 1603 Core MSI control only."
           exit 1
       - name: Reject NGen one-time progress retry outside isolated original Microsoft CLR4 servicing
-        if: inputs.retry_growing_native40_ngen_nonzero && (!inputs.progress_gated_native40_ngen || !inputs.drain_native40_ngen || !inputs.ngen_host_stack64 || !inputs.try_48_msi || inputs.host_provenance_only || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner || inputs.pause_native_ngen_queue || inputs.pause_after_verified_native40_ngen || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_payload_host || inputs.try_40_core_msi_recovery || inputs.probe_native40_ngen_if_ready || inputs.signed_msi_timeout_seconds != 420)
+        if: inputs.retry_growing_native40_ngen_nonzero && (!inputs.progress_gated_native40_ngen || !inputs.drain_native40_ngen || !inputs.ngen_host_stack64 || !inputs.try_48_msi || inputs.host_provenance_only || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner || inputs.pause_native_ngen_queue || inputs.pause_after_verified_native40_ngen || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_payload_host || inputs.try_40_core_msi_recovery || inputs.probe_native40_ngen_if_ready || (inputs.signed_msi_timeout_seconds != 420 && !(inputs.signed_msp_reinstall && inputs.signed_msp_win32_exit && inputs.signed_msi_timeout_seconds == 1200)))
         shell: bash
         run: |
           echo "Original CLR4 NGen retry requires recorded log growth, private Wine error monitoring, true Microsoft NGen return success and isolated signed x64 MSI."
@@ -969,13 +969,13 @@ jobs:
           echo "Explicit silent signed MSP reinstall requires the isolated native Win32 monitor."
           exit 1
       - name: Reject native full Win32 MSP exit probe outside authentic original signed Microsoft 4.8
-        if: inputs.signed_msp_win32_exit && (!inputs.signed_msi_win10_profile || !inputs.progress_gated_native40_ngen || !inputs.drain_native40_ngen || !inputs.ngen_host_stack64 || !inputs.try_48_msi || inputs.host_provenance_only || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner || inputs.pause_native_ngen_queue || inputs.pause_after_verified_native40_ngen || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_payload_host || inputs.try_40_core_msi_recovery || inputs.probe_native40_ngen_if_ready || inputs.signed_msi_timeout_seconds != 420)
+        if: inputs.signed_msp_win32_exit && (!inputs.signed_msi_win10_profile || !inputs.progress_gated_native40_ngen || !inputs.drain_native40_ngen || !inputs.ngen_host_stack64 || !inputs.try_48_msi || inputs.host_provenance_only || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner || inputs.pause_native_ngen_queue || inputs.pause_after_verified_native40_ngen || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_payload_host || inputs.try_40_core_msi_recovery || inputs.probe_native40_ngen_if_ready || (inputs.signed_msi_timeout_seconds != 420 && !(inputs.signed_msp_reinstall && inputs.signed_msp_win32_exit && inputs.signed_msi_timeout_seconds == 1200)))
         shell: bash
         run: |
           echo "Native Win32 original MSP status is restricted to verified isolated Apple Silicon original signed .NET 4.8 servicing."
           exit 1
       - name: Reject signed .NET 4.8 Win10 profile outside verified original CLR4 servicing
-        if: inputs.signed_msi_win10_profile && (!inputs.progress_gated_native40_ngen || !inputs.drain_native40_ngen || !inputs.ngen_host_stack64 || !inputs.try_48_msi || inputs.host_provenance_only || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner || inputs.pause_native_ngen_queue || inputs.pause_after_verified_native40_ngen || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_payload_host || inputs.try_40_core_msi_recovery || inputs.probe_native40_ngen_if_ready || inputs.signed_msi_timeout_seconds != 420)
+        if: inputs.signed_msi_win10_profile && (!inputs.progress_gated_native40_ngen || !inputs.drain_native40_ngen || !inputs.ngen_host_stack64 || !inputs.try_48_msi || inputs.host_provenance_only || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner || inputs.pause_native_ngen_queue || inputs.pause_after_verified_native40_ngen || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_payload_host || inputs.try_40_core_msi_recovery || inputs.probe_native40_ngen_if_ready || (inputs.signed_msi_timeout_seconds != 420 && !(inputs.signed_msp_reinstall && inputs.signed_msp_win32_exit && inputs.signed_msi_timeout_seconds == 1200)))
         shell: bash
         run: |
           echo "Original Win10 signed MSI compatibility A/B requires authenticated original x64 and x86 CLR4 NGen and unmodified signed MSI/MSP with no queue pause."
@@ -987,10 +987,10 @@ jobs:
           echo "Post-preflight NGen pause requires a verified native Microsoft CLR4 x86/x64 drain and isolated signed MSI/MSP servicing."
           exit 1
       - name: Reject progress-gated NGen outside genuine Wiage signed .NET 4.8 MSI servicing
-        if: inputs.progress_gated_native40_ngen && (!inputs.drain_native40_ngen || !inputs.ngen_host_stack64 || !inputs.try_48_msi || inputs.host_provenance_only || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner || inputs.pause_native_ngen_queue || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_payload_host || inputs.try_40_core_msi_recovery || inputs.probe_native40_ngen_if_ready || inputs.signed_msi_timeout_seconds != 420)
+        if: inputs.progress_gated_native40_ngen && (!inputs.drain_native40_ngen || !inputs.ngen_host_stack64 || !inputs.try_48_msi || inputs.host_provenance_only || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner || inputs.pause_native_ngen_queue || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_payload_host || inputs.try_40_core_msi_recovery || inputs.probe_native40_ngen_if_ready || (inputs.signed_msi_timeout_seconds != 420 && !(inputs.signed_msp_reinstall && inputs.signed_msp_win32_exit && inputs.signed_msi_timeout_seconds == 1200)))
         shell: bash
         run: |
-          echo "Progress-gated NGen is permitted only for the isolated authentic .NET 4.8 MSI control with original CLR4 and 420s MSI budget."
+          echo "Progress-gated NGen requires isolated authentic CLR4 and signed .NET 4.8 servicing; the 1200s MSI budget is permitted only with explicit silent MSP reinstall and native Win32 monitoring."
           exit 1
       - name: Fetch selected Microsoft media privately using Windows authenticated SHA256
         shell: bash
