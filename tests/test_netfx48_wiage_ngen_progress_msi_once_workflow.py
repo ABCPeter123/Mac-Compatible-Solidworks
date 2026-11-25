@@ -32,7 +32,8 @@ class Signed48AfterProgressNgenTests(unittest.TestCase):
             "ngen_host_stack64: true",
             "progress_gated_native40_ngen: true",
             "retry_growing_native40_ngen_nonzero: true",
-            "signed_msi_timeout_seconds: 420",
+            "signed_msi_timeout_seconds: 1200",
+            "signed_msp_reinstall: true",
             "prepare_48_assembly_cache: true",
             "pause_native_ngen_queue: false",
             "pause_after_verified_native40_ngen: false",
@@ -47,6 +48,46 @@ class Signed48AfterProgressNgenTests(unittest.TestCase):
             "actions/upload-artifact", "actions/download-artifact",
         ):
             self.assertNotIn(forbidden, caller)
+
+    def test_extended_msi_budget_is_only_for_the_native_reinstall_arm(self):
+        reusable = REUSE.read_text(encoding="utf-8")
+        exception = (
+            "(inputs.signed_msi_timeout_seconds != 420 && "
+            "!(inputs.signed_msp_reinstall && inputs.signed_msp_win32_exit "
+            "&& inputs.signed_msi_timeout_seconds == 1200))"
+        )
+        # Every prerequisite guard that previously forced 420s must allow
+        # exactly this bounded native-reinstall arm, or the real run will
+        # be rejected before it reaches Microsoft servicing.
+        conditions = (
+            "inputs.retry_growing_native40_ngen_nonzero &&",
+            "inputs.signed_msp_win32_exit && (",
+            "inputs.signed_msi_win10_profile && (",
+            "inputs.progress_gated_native40_ngen && (",
+        )
+        for condition in conditions:
+            guards = [
+                line for line in reusable.splitlines()
+                if line.startswith("        if: ") and condition in line
+            ]
+            with self.subTest(condition=condition):
+                self.assertEqual(len(guards), 1)
+                self.assertIn(exception, guards[0])
+        self.assertEqual(reusable.count(exception), 4)
+        self.assertIn(
+            "inputs.signed_msp_reinstall && !inputs.signed_msp_win32_exit",
+            reusable,
+        )
+        self.assertIn(
+            "inputs.signed_msp_reinstall && inputs.signed_msi_timeout_seconds "
+            "== 1200 && 70 || inputs.progress_gated_native40_ngen && 55",
+            reusable,
+        )
+        caller = CALLER.read_text(encoding="utf-8")
+        self.assertIn("signed_msp_reinstall: true", caller)
+        self.assertIn("signed_msp_win32_exit: true", caller)
+        self.assertEqual(caller.count("signed_msi_timeout_seconds: 1200"), 1)
+        self.assertNotIn("signed_msi_timeout_seconds: 420", caller)
 
     def test_grace_requires_authentic_original_stack_and_signed_msi(self):
         reuse = REUSE.read_text(encoding="utf-8")
