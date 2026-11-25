@@ -9,6 +9,16 @@ name: One-shot authenticated Wiage .NET 4.8 MSI after progress-drained CLR4 NGen
 # MSI_UNATTRIBUTED_SCRIPT_ENGINE, but no first failing script action;
 # non-final action class UNKNOWN and the NGen/service log hints are noncausal.
 #
+# Authentic run 45518474022: native original Microsoft CLR and signed x64
+# .NET 4.8 MSI SUCCESS; the unchanged x64 MSP returned genuine Win32
+# 00000643/1603. Read-only registration proved the original MSI product
+# INSTALLED and its LocalPackage cache PRESENT. These are excluded causes.
+# Merged PR #267 tests the original signed MSP's read-only eligibility in
+# both USER_UNMANAGED and MACHINE MSI installation contexts via the actual
+# native MsiDeterminePatchSequenceW API. Only finite enum classifications
+# from PRIVATE Wine stderr enter the report. The unmodified original /p,
+# genuine native-only managed probe and exact Win32 MSP gates stay strict.
+# Sequencing eligibility does NOT prove that the patch executed successfully.
 # Authenticated run 45516726602 encountered genuine original CLR4 setup
 # Win32 1603 with no CLR, correctly selected one fresh disposable prefix,
 # but stopped at a Python ImportError before the second original setup:
