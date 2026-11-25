@@ -9,6 +9,7 @@ on:
       - 'scripts/netfx40_fresh_prefix_retry.py'
       - 'scripts/netfx48_msp_win32_exit.py'
       - 'scripts/netfx48_msi_registration.py'
+      - 'scripts/netfx48_msp_patch_sequence.py'
       - 'scripts/netfx48_msp_wine_trace.py'
       - 'probes/netfx48_msp_win32_status.c'
       - 'scripts/netfx48_msi_service_evidence.py'
@@ -18,6 +19,7 @@ on:
       - 'tests/test_netfx40_fresh_prefix_retry_workflow.py'
       - 'tests/test_netfx48_msp_win32_exit.py'
       - 'tests/test_netfx48_msi_registration.py'
+      - 'tests/test_netfx48_msp_patch_sequence.py'
       - 'tests/test_netfx48_msp_wine_trace.py'
       - 'tests/test_netfx48_signed_msi_workflow.py'
       - '.github/workflows/netfx40-legacy-ci.yml'
@@ -29,6 +31,7 @@ on:
       - 'scripts/netfx40_fresh_prefix_retry.py'
       - 'scripts/netfx48_msp_win32_exit.py'
       - 'scripts/netfx48_msi_registration.py'
+      - 'scripts/netfx48_msp_patch_sequence.py'
       - 'scripts/netfx48_msp_wine_trace.py'
       - 'probes/netfx48_msp_win32_status.c'
       - 'scripts/netfx48_msi_service_evidence.py'
@@ -38,6 +41,7 @@ on:
       - 'tests/test_netfx40_fresh_prefix_retry_workflow.py'
       - 'tests/test_netfx48_msp_win32_exit.py'
       - 'tests/test_netfx48_msi_registration.py'
+      - 'tests/test_netfx48_msp_patch_sequence.py'
       - 'tests/test_netfx48_msp_wine_trace.py'
       - 'tests/test_netfx48_signed_msi_workflow.py'
       - '.github/workflows/netfx48-signed-msi-contract-ci.yml'
@@ -76,6 +80,14 @@ jobs:
               $registration -notcontains 'SWCOMPAT_MSI_REG_CACHE=PRESENT') {
             throw "Read-only MSI product registration fixture selftest failed"
           }
+          $sequence = & build\netfx48_msp_win32_status.exe --selftest-msi-sequence
+          if ($LASTEXITCODE -ne 0 -or
+              $sequence -notcontains 'SWCOMPAT_MSI_SEQ_SCHEMA=1' -or
+              $sequence -notcontains 'SWCOMPAT_MSI_SEQ_STATUS=SELFTEST' -or
+              $sequence -notcontains 'SWCOMPAT_MSI_SEQ_USER=APPLICABLE' -or
+              $sequence -notcontains 'SWCOMPAT_MSI_SEQ_MACHINE=PRODUCT_UNKNOWN') {
+            throw "Read-only native signed MSP sequencing fixture selftest failed"
+          }
           $status = & build\netfx48_msp_win32_status.exe --selftest-1603
           if ($LASTEXITCODE -ne 0 -or
               $status -notcontains 'SWCOMPAT_MSP_WIN32_SCHEMA=1' -or
@@ -104,6 +116,7 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_netfx40_fresh_prefix_retry_workflow.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx48_msp_win32_exit.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx48_msi_registration.py' -v
+          python3 -m unittest discover -s tests -p 'test_netfx48_msp_patch_sequence.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx48_msp_wine_trace.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx48_msi_service_evidence.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx48_signed_msi_workflow.py' -v

@@ -12,6 +12,7 @@ from collections.abc import Iterable
 from typing import BinaryIO
 
 from scripts.netfx48_msi_registration import parse as parse_msi_registration
+from scripts.netfx48_msp_patch_sequence import parse as parse_patch_sequence
 
 MAX_BYTES = 8 * 1024 * 1024
 MAX_LINE = 8192
@@ -64,6 +65,11 @@ SIGNALS = {
     "MSI_REG_PRODUCT_OTHER", "MSI_REG_PRODUCT_UNKNOWN",
     "MSI_REG_CACHE_PRESENT", "MSI_REG_CACHE_MISSING", "MSI_REG_CACHE_UNKNOWN",
     "MSI_REG_QUERY_FAILED",
+} | {"MSI_SEQ_" + context + "_" + state
+     for context in ("USER", "MACHINE")
+     for state in ("APPLICABLE", "EXCLUDED", "TARGET_MISMATCH",
+                   "NO_SEQUENCE", "PRODUCT_UNKNOWN", "UNSUPPORTED",
+                   "PATCH_UNOPENABLE", "OTHER_ERROR")
 } | {"MSI_TRACE_NONFINAL_" + action for action in ACTIONS
      if action not in {"NOT_SEEN", "UNKNOWN"}}
 SIGNAL_MATCH = {
@@ -265,6 +271,11 @@ def classify_stream(stream: BinaryIO) -> dict:
         "SWCOMPAT_MSI_REG_SCHEMA=", "SWCOMPAT_MSI_REG_STATUS=",
         "SWCOMPAT_MSI_REG_PRODUCT=", "SWCOMPAT_MSI_REG_CACHE=",
     )
+    sequencing: dict[str, str] = {}
+    seq_prefixes = (
+        "SWCOMPAT_MSI_SEQ_SCHEMA=", "SWCOMPAT_MSI_SEQ_STATUS=",
+        "SWCOMPAT_MSI_SEQ_USER=", "SWCOMPAT_MSI_SEQ_MACHINE=",
+    )
 
     def safe_lines() -> Iterable[str]:
         nonlocal total_bytes, total_lines
@@ -299,6 +310,10 @@ def classify_stream(stream: BinaryIO) -> dict:
                     if decoded.startswith(prefix) and prefix not in registration:
                         registration[prefix] = decoded
                         break
+                for prefix in seq_prefixes:
+                    if decoded.startswith(prefix) and prefix not in sequencing:
+                        sequencing[prefix] = decoded
+                        break
             yield decoded
 
     try:
@@ -325,6 +340,17 @@ def classify_stream(stream: BinaryIO) -> dict:
                 if report["status"] == "NO_MSI_ERRORS":
                     report = blank("CLASSIFIED")
                 report["signals"] = sorted(set(report["signals"]) | {"MSI_REG_QUERY_FAILED"})
+        if len(sequencing) == len(seq_prefixes):
+            packet = "".join(sequencing[p] for p in seq_prefixes).encode("ascii")
+            sequence = parse_patch_sequence(packet)
+            if sequence["status"] == "OBSERVED":
+                extra = {
+                    "MSI_SEQ_USER_" + sequence["user"],
+                    "MSI_SEQ_MACHINE_" + sequence["machine"],
+                }
+                if report["status"] == "NO_MSI_ERRORS":
+                    report = blank("CLASSIFIED")
+                report["signals"] = sorted(set(report["signals"]) | extra)
         assert valid(report)
         return report
     except OverflowError:

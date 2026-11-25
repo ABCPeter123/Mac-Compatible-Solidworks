@@ -262,6 +262,56 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
         no_registration = t.classify_stream(BytesIO(b'0009:err:msi:ITERATE_Actions Failed\n'))
         self.assertNotIn("MSI_REG_QUERY_FAILED", no_registration["signals"])
 
+    def test_actual_msi_patch_sequence_contexts_are_not_vendor_success(self):
+        seq = (
+            b"SWCOMPAT_MSI_SEQ_SCHEMA=1\n"
+            b"SWCOMPAT_MSI_SEQ_STATUS=OBSERVED\n"
+            b"SWCOMPAT_MSI_SEQ_USER=APPLICABLE\n"
+            b"SWCOMPAT_MSI_SEQ_MACHINE=PRODUCT_UNKNOWN\n"
+        )
+        reg = (
+            b"SWCOMPAT_MSI_REG_SCHEMA=1\n"
+            b"SWCOMPAT_MSI_REG_STATUS=OBSERVED\n"
+            b"SWCOMPAT_MSI_REG_PRODUCT=INSTALLED\n"
+            b"SWCOMPAT_MSI_REG_CACHE=PRESENT\n"
+        )
+        fail = (
+            b'0022:err:msi:ITERATE_Actions Execution halted, '
+            b'action L"InstallFinalize" returned 1603\n'
+        )
+        result = t.classify_stream(BytesIO(reg + seq + fail))
+        self.assertTrue(t.valid(result))
+        self.assertEqual(result["signals"], [
+            "MSI_REG_CACHE_PRESENT", "MSI_REG_PRODUCT_INSTALLED",
+            "MSI_SEQ_MACHINE_PRODUCT_UNKNOWN", "MSI_SEQ_USER_APPLICABLE",
+            "MSI_UNATTRIBUTED_SCRIPT_ENGINE",
+        ])
+        self.assertEqual(result["first_forward_action"], "NOT_SEEN")
+        self.assertNotIn("PATCH.msp", str(result))
+        self.assertNotIn("ProductCode", str(result))
+        # API *eligibility* does not upgrade original signed MSP Win32 1603.
+        self.assertIn("MSI_UNATTRIBUTED_SCRIPT_ENGINE", result["signals"])
+
+    def test_msi_sequence_invalid_private_values_cannot_leak(self):
+        trace = (
+            b"SWCOMPAT_MSI_SEQ_SCHEMA=1\n"
+            b"SWCOMPAT_MSI_SEQ_STATUS=OBSERVED\n"
+            b"SWCOMPAT_MSI_SEQ_USER=PRIVATE-PATCH-ID\n"
+            b"SWCOMPAT_MSI_SEQ_MACHINE=PRODUCT_UNKNOWN\n"
+        )
+        result = t.classify_stream(BytesIO(trace))
+        self.assertEqual(result, t.blank("NO_MSI_ERRORS"))
+        self.assertTrue(t.valid(result))
+        self.assertNotIn("PRIVATE", str(result))
+        no_run = (
+            b"SWCOMPAT_MSI_SEQ_SCHEMA=1\n"
+            b"SWCOMPAT_MSI_SEQ_STATUS=NOT_RUN\n"
+            b"SWCOMPAT_MSI_SEQ_USER=UNKNOWN\n"
+            b"SWCOMPAT_MSI_SEQ_MACHINE=UNKNOWN\n"
+        )
+        self.assertEqual(t.classify_stream(BytesIO(no_run)),
+                         t.blank("NO_MSI_ERRORS"))
+
     def test_stream_scans_early_original_msp_error_beyond_eight_megabyte_tail(self):
         early = (
             b'0001:trace:msi:ACTION_PerformAction Performing action '
