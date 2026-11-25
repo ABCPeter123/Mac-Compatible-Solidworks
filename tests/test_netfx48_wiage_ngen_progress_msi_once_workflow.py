@@ -205,6 +205,11 @@ class Signed48AfterProgressNgenTests(unittest.TestCase):
         self.assertIn("SWCOMPAT_MSP_WIN32: ${{ inputs.signed_msp_win32_exit }}", msi)
         self.assertIn("cache_flags+=(--patch-fixture build/netfx48_msp_win32_status.exe)", msi)
         self.assertNotIn("REINSTALLMODE=", msi)
+        self.assertEqual(reusable.count("signed_msp_reinstall:"), 2)
+        self.assertIn("inputs.signed_msp_reinstall && !inputs.signed_msp_win32_exit", reusable)
+        self.assertIn("SWCOMPAT_MSP_REINSTALL: ${{ inputs.signed_msp_reinstall }}", msi)
+        self.assertIn('if [[ "$SWCOMPAT_MSP_REINSTALL" == "true" ]]', msi)
+        self.assertIn("cache_flags+=(--patch-reinstall)", msi)
         self.assertNotIn("continue-on-error", msi)
         native = (ROOT / "scripts/netfx40_to_48_signed_msi.py").read_text()
         for part in ("parse_win32_patch(", "win32_patch_status(patch_win32)",
