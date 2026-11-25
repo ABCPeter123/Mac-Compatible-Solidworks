@@ -39,6 +39,42 @@ static void report_registration(FILE *stream, const char *status,
     fflush(stream);
 }
 
+/* Windows Installer's *read-only* patch-sequencing API. The same signed
+ * MSP is still applied by the unchanged msiexec /p process afterwards.
+ * Per-user and per-machine contexts are recorded separately, because a
+ * query in the wrong installation context may report UNKNOWN_PRODUCT.
+ * A successful sequencing query is not proof that execution will succeed. */
+static void report_sequence(FILE *stream, const char *status,
+                            const char *user, const char *machine) {
+    fprintf(stream, "SWCOMPAT_MSI_SEQ_SCHEMA=1\n");
+    fprintf(stream, "SWCOMPAT_MSI_SEQ_STATUS=%s\n", status);
+    fprintf(stream, "SWCOMPAT_MSI_SEQ_USER=%s\n", user);
+    fprintf(stream, "SWCOMPAT_MSI_SEQ_MACHINE=%s\n", machine);
+    fflush(stream);
+}
+
+static const char *sequence_context(const WCHAR *product,
+                                    MSIINSTALLCONTEXT context) {
+    MSIPATCHSEQUENCEINFOW info;
+    UINT result, status;
+    ZeroMemory(&info, sizeof(info));
+    info.szPatchData = PATCH_PATH;
+    info.ePatchDataType = MSIPATCH_DATATYPE_PATCHFILE;
+    info.dwOrder = 0xFFFFFFFFu;
+    result = MsiDeterminePatchSequenceW(product, NULL, context, 1, &info);
+    status = result == ERROR_SUCCESS ? info.uStatus : result;
+    if (result == ERROR_SUCCESS && status == ERROR_SUCCESS) {
+        return info.dwOrder == 0xFFFFFFFFu ? "EXCLUDED" : "APPLICABLE";
+    }
+    if (status == ERROR_PATCH_TARGET_NOT_FOUND) return "TARGET_MISMATCH";
+    if (status == ERROR_PATCH_NO_SEQUENCE) return "NO_SEQUENCE";
+    if (status == ERROR_UNKNOWN_PRODUCT) return "PRODUCT_UNKNOWN";
+    if (status == ERROR_CALL_NOT_IMPLEMENTED ||
+        status == ERROR_FUNCTION_NOT_CALLED) return "UNSUPPORTED";
+    if (status == ERROR_INSTALL_PACKAGE_OPEN_FAILED) return "PATCH_UNOPENABLE";
+    return "OTHER_ERROR";
+}
+
 static int probe_registration(FILE *stream) {
     MSIHANDLE db = 0, view = 0, record = 0;
     WCHAR product[80] = {0};
@@ -52,6 +88,7 @@ static int probe_registration(FILE *stream) {
     rc = MsiOpenDatabaseW(ORIGINAL_MSI_PATH, MSIDBOPEN_READONLY, &db);
     if (rc != ERROR_SUCCESS) {
         report_registration(stream, "OPEN_FAILED", "UNKNOWN", "UNKNOWN");
+        report_sequence(stream, "NOT_RUN", "UNKNOWN", "UNKNOWN");
         return 0;
     }
     rc = MsiDatabaseOpenViewW(
@@ -64,6 +101,7 @@ static int probe_registration(FILE *stream) {
         if (view) MsiCloseHandle(view);
         MsiCloseHandle(db);
         report_registration(stream, "QUERY_FAILED", "UNKNOWN", "UNKNOWN");
+        report_sequence(stream, "NOT_RUN", "UNKNOWN", "UNKNOWN");
         return 0;
     }
     state = MsiQueryProductStateW(product);
@@ -85,6 +123,9 @@ static int probe_registration(FILE *stream) {
     if (view) MsiCloseHandle(view);
     MsiCloseHandle(db);
     report_registration(stream, "OBSERVED", product_state, cache_state);
+    report_sequence(stream, "OBSERVED",
+                    sequence_context(product, MSIINSTALLCONTEXT_USERUNMANAGED),
+                    sequence_context(product, MSIINSTALLCONTEXT_MACHINE));
     return 0;
 }
 
@@ -102,6 +143,10 @@ int wmain(int argc, wchar_t **argv) {
     PROCESS_INFORMATION process;
     DWORD rc, code = 0xFFFFFFFFu;
     UINT length;
+    if (argc == 2 && wcscmp(argv[1], L"--selftest-msi-sequence") == 0) {
+        report_sequence(stdout, "SELFTEST", "APPLICABLE", "PRODUCT_UNKNOWN");
+        return 0;
+    }
     if (argc == 2 && wcscmp(argv[1], L"--selftest-msi-registration") == 0) {
         report_registration(stdout, "SELFTEST", "INSTALLED", "PRESENT");
         return 0;
