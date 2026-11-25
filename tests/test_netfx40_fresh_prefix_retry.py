@@ -15,16 +15,20 @@ class OriginalMSIFreshPrefixRetryTests(TestCase):
             "installer_exit": "MSI_FATAL_ERROR",
             "installer_exit_hex": "00000643",
             "installer_child_lifecycle": "ALL_EXITED",
+            "installer_cleanup": "PIPE_CLOSED",
             "candidate_native40": False,
             "clr64_after": "ABSENT",
             "clr32_after": "ABSENT",
             "mscorlib64_after": "ABSENT",
+            "native_loader": "NOT_FOUND",
+            "managed_functionality": "NOT_VERIFIED",
         }
 
     @staticmethod
     def invalid_restart():
         return {
             "status": "NOT_ELIGIBLE",
+            "restart": "NOT_RUN",
             "persistent_native_managed": False,
             "native_only_managed": "NOT_VERIFIED",
         }
@@ -55,14 +59,44 @@ class OriginalMSIFreshPrefixRetryTests(TestCase):
         self.assertEqual(
             p.decision(self.failed(), self.invalid_restart()), "DENIED")
 
-    def test_real_native40_pass_is_never_reinstalled(self):
-        valid = {**self.failed(), "candidate_native40": True}
-        ready = {
-            **self.invalid_restart(),
+    @classmethod
+    def confirmed_native(cls):
+        return {
+            **cls.failed(),
+            "installer_exit": "SUCCESS",
+            "installer_exit_hex": "00000000",
+            "candidate_native40": True,
+            "clr64_after": "PE_AMD64",
+            "mscorlib64_after": "PE_AMD64",
+            "native_loader": "LOADED",
+            "managed_functionality": "PASS",
+        }
+
+    @classmethod
+    def timed_out_native(cls):
+        return {
+            **cls.confirmed_native(),
+            "installer_status": "TIMEOUT",
+            "installer_exit": "NOT_AVAILABLE",
+            "installer_exit_hex": "NOT_VERIFIED",
+            "installer_child_lifecycle": "NOT_VERIFIED",
+            "installer_cleanup": "PREFIX_REAPED",
+            "candidate_native40": False,
+        }
+
+    @classmethod
+    def ready_restart(cls):
+        return {
+            **cls.invalid_restart(),
             "status": "RESTART_COMPLETED",
+            "restart": "COMPLETED",
             "persistent_native_managed": True,
             "native_only_managed": "PASS",
         }
+
+    def test_real_native40_pass_is_never_reinstalled(self):
+        valid = self.confirmed_native()
+        ready = self.ready_restart()
         with (mock.patch.object(p, "valid_original", return_value=True),
               mock.patch.object(p, "valid_restart", return_value=True),
               mock.patch.object(p, "_terminate_private_setup_wineserver")
@@ -72,6 +106,55 @@ class OriginalMSIFreshPrefixRetryTests(TestCase):
                 p.prepare(Path("wine"), Path("prefix"), valid, ready),
                 "ALREADY_VERIFIED")
             stop.assert_not_called()
+
+    def test_original_setup_timeout_with_real_restarted_clr_is_reused(self):
+        # Observed in authenticated run 45512909191: setup timed out and was
+        # reaped, while genuine CLR64+mscorlib survived, real native managed
+        # code passed, and a clean Wine restart independently verified both.
+        original = self.timed_out_native()
+        restarted = self.ready_restart()
+        with (mock.patch.object(p, "valid_original", return_value=True),
+              mock.patch.object(p, "valid_restart", return_value=True),
+              mock.patch.object(p, "_terminate_private_setup_wineserver")
+              as cleanup):
+            self.assertEqual(p.decision(original, restarted),
+                             "ALREADY_VERIFIED")
+            self.assertEqual(
+                p.prepare(Path("wine"), Path("prefix"), original, restarted),
+                "ALREADY_VERIFIED")
+            cleanup.assert_not_called()
+        # A genuine installer timeout is never relabeled as a successful /i.
+        self.assertEqual(original["installer_status"], "TIMEOUT")
+        self.assertEqual(original["installer_exit"], "NOT_AVAILABLE")
+        self.assertFalse(original["candidate_native40"])
+
+    def test_incomplete_or_fabricated_timeout_cannot_pass_clr_gate(self):
+        original = self.timed_out_native()
+        restarted = self.ready_restart()
+        with (mock.patch.object(p, "valid_original", return_value=True),
+              mock.patch.object(p, "valid_restart", return_value=True)):
+            for field, wrong in (
+                ("installer_status", "START_FAILED"),
+                ("installer_cleanup", "PIPE_CLOSED"),
+                ("installer_cleanup", "NOT_REQUESTED"),
+                ("candidate_native40", True),
+                ("clr64_after", "ABSENT"),
+                ("mscorlib64_after", "ABSENT"),
+                ("native_loader", "NOT_FOUND"),
+                ("managed_functionality", "FAIL"),
+            ):
+                with self.subTest(field=field, wrong=wrong):
+                    self.assertEqual(p.decision(
+                        {**original, field: wrong}, restarted), "DENIED")
+            for field, wrong in (
+                ("status", "NOT_ELIGIBLE"),
+                ("restart", "EXIT_NONZERO"),
+                ("persistent_native_managed", False),
+                ("native_only_managed", "FAIL"),
+            ):
+                with self.subTest(field=field, wrong=wrong):
+                    self.assertEqual(p.decision(original,
+                        {**restarted, field: wrong}), "DENIED")
 
     @skipIf(os.name == "nt", "Clean Wine prefix retry is POSIX-only")
     def test_rename_only_an_exact_marked_ephemeral_prefix_after_server_shutdown(self):
