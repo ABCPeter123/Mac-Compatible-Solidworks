@@ -23,7 +23,8 @@ class SignedMSIGates(TestCase):
             "progress_gated_native40_ngen: true",
             "retry_growing_native40_ngen_nonzero: true",
             "signed_msp_win32_exit: true",
-            "prepare_48_assembly_cache: true", "signed_msi_timeout_seconds: 420",
+            "prepare_48_assembly_cache: true", "signed_msi_timeout_seconds: 1200",
+            "signed_msp_reinstall: true",
             "pause_native_ngen_queue: false",
             "pause_after_verified_native40_ngen: false",
             "cancel-in-progress: false",
@@ -88,7 +89,8 @@ class SignedMSIGates(TestCase):
             reusable)
         self.assertNotIn("cancel-in-progress: true", reusable)
         self.assertIn(
-            "timeout-minutes: ${{ inputs.progress_gated_native40_ngen && 55 "
+            "timeout-minutes: ${{ inputs.signed_msp_reinstall && inputs.signed_msi_timeout_seconds "
+            "== 1200 && 70 || inputs.progress_gated_native40_ngen && 55 "
             "|| inputs.try_48_msi && inputs.signed_msi_timeout_seconds "
             "== 1200 && 55", reusable)
         self.assertIn('--msi-timeout-seconds "$SWCOMPAT_SIGNED_MSI_TIMEOUT"',
