@@ -9,6 +9,14 @@ name: One-shot authenticated Wiage .NET 4.8 MSI after progress-drained CLR4 NGen
 # MSI_UNATTRIBUTED_SCRIPT_ENGINE, but no first failing script action;
 # non-final action class UNKNOWN and the NGen/service log hints are noncausal.
 #
+# Authentic run 45522878087 verified MSI_SEQ_MACHINE_APPLICABLE for the
+# original signed MSP and still returned native Win32 1603 under the
+# baseline quiet /p command. MSI product registration and cache are present.
+# PR #268 selects the Microsoft-documented explicit silent reinstall mode
+# for this isolated A/B: public MSI properties are fixed in the native
+# monitor; original signed MSI/MSP bytes, Wine version and acceptance gates
+# are unchanged. A successful wrapper or sequencing API is NOT MSP success.
+# https://learn.microsoft.com/windows-server/administration/windows-commands/msiexec#update-options
 # Authentic run 45518474022: native original Microsoft CLR and signed x64
 # .NET 4.8 MSI SUCCESS; the unchanged x64 MSP returned genuine Win32
 # 00000643/1603. Read-only registration proved the original MSI product
@@ -83,3 +91,4 @@ jobs:
       pause_after_verified_native40_ngen: false
       signed_msi_win10_profile: true
       signed_msp_win32_exit: true
+      signed_msp_reinstall: true
