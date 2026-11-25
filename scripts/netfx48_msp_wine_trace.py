@@ -70,7 +70,6 @@ SIGNALS = {
      for state in ("APPLICABLE", "EXCLUDED", "TARGET_MISMATCH",
                    "NO_SEQUENCE", "PRODUCT_UNKNOWN", "UNSUPPORTED",
                    "PATCH_UNOPENABLE", "OTHER_ERROR")
-} | {
 } | {"MSI_TRACE_NONFINAL_" + action for action in ACTIONS
      if action not in {"NOT_SEEN", "UNKNOWN"}}
 SIGNAL_MATCH = {
