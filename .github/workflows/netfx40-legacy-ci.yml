@@ -749,7 +749,7 @@ jobs:
           retention-days: 1
 
   apple-silicon-native-baseline:
-    if: github.event_name == 'workflow_dispatch' && !inputs.host_provenance_only
+    if: github.event_name == 'workflow_dispatch' && !inputs.host_provenance_only && !inputs.try_481_catalog_wusa
     name: Check genuine Microsoft .NET 4.0 on Apple Silicon Wine Staging 11.21
     needs: [authentic-netfx40-windows, absolute-path-regressions]
     runs-on: ${{ inputs.use_macos26_runner && 'macos-26' || 'macos-15' }}
