@@ -14,11 +14,11 @@ import subprocess
 import tempfile
 
 from scripts.netfx481_catalog_wusa import verify_package
-from scripts.netfx481_ipd_stage import inventory, digest_tree
+from scripts.netfx481_ipd_stage import inventory, digest_tree, digest_file
 from scripts.netfx481_native_delta_gate import EXPECTED_COUNT, EXPECTED_TREE_SHA256
 from scripts.netfx481_trial import validate_prefix, probe, wineboot_restart
 from scripts.netfx40_msxml3_restart import validate as valid_native40
-from scripts.netfx481_payload_audit import snapshot, compare
+from scripts.netfx481_payload_audit import snapshot, compare, pe_type, ITEMS, MIN_BYTES, MAX_BYTES
 from scripts.netfx481_clr_load import run as load_clr
 from scripts.netfx40_legacy import _terminate_private_setup_wineserver
 from scripts.netfx481_ipd_wusa_dryrun import CATEGORIES, windows_path, parse_packet
@@ -67,6 +67,34 @@ def parse_apply(raw: bytes, code: int) -> dict:
     if completed and not preflight_ready(preflight):
         raise ValueError("Missing package-local apply invariants")
     return {"started": started, "completed": completed, "preflight": preflight}
+
+
+def verified_runtime_payloads(members: dict[str, Path], after: dict) -> dict:
+    """Require post-restart files to be byte-identical to a genuine staged PE.
+
+    The enclosing caller must have verified the complete pinned stage first.
+    Only match booleans and candidate counts leave this function.
+    """
+    result = {}
+    for key, parts in ITEMS.items():
+        machine = "PE_AMD64" if key.endswith("64") else "PE_I386"
+        basename = parts[-1].casefold()
+        state, digest = after[key]
+        hashes = set()
+        for name, path in members.items():
+            if name.rsplit("/", 1)[-1] != basename:
+                continue
+            if path.is_symlink() or not path.is_file():
+                raise ValueError("Unsafe original runtime payload")
+            if not MIN_BYTES <= path.stat().st_size <= MAX_BYTES:
+                continue
+            with path.open("rb") as f:
+                if pe_type(f.read(8192)) != machine:
+                    continue
+            hashes.add(digest_file(path).hex())
+        result[key] = {"candidates": len(hashes),
+                       "matches_original": state == machine and digest in hashes}
+    return result
 
 
 def inspect(wine: Path, prefix: Path, fixture: Path, package: Path, digest: Path,
@@ -138,14 +166,18 @@ def inspect(wine: Path, prefix: Path, fixture: Path, package: Path, digest: Path
     result["restart"] = wineboot_restart(wine, prefix, timeout=120)
     if result["restart"] != "COMPLETED":
         return result
-    payload = compare(before, snapshot(prefix))
+    after = snapshot(prefix)
+    payload = compare(before, after)
+    provenance = verified_runtime_payloads(members, after)
     measured = probe(wine, prefix, managed, override="native_only")
     loaded = load_clr(wine, prefix, loader)
-    result.update(payload=payload, loader=loaded, registry=measured["registry"],
+    result.update(payload=payload, original_runtime_payloads=provenance,
+                  loader=loaded, registry=measured["registry"],
                   runtime_family=measured["clr_family"], managed=measured["managed"])
     result["framework481_confirmed"] = (
         payload["status"] == "MEASURED"
         and payload["changes"]["CLR64"] == "CHANGED"
+        and provenance["CLR64"]["matches_original"] and provenance["MSCORLIB64"]["matches_original"]
         and payload["after"]["CLR64"] == payload["after"]["MSCORLIB64"] == "PE_AMD64"
         and loaded == "LOADED" and measured["registry"] == "AT_LEAST_481"
         and measured["clr_family"] == "MICROSOFT_CLR_CANDIDATE" and measured["managed"] == "PASS")
