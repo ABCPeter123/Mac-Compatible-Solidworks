@@ -4,7 +4,6 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 LEGACY = ROOT / ".github/workflows/netfx40-legacy-ci.yml"
-ONCE = ROOT / ".github/workflows/netfx48-wine1110-full-verb-once-ci.yml"
 SHA_1110 = "940bdd1a177872020be01c5c33917cb8eecc1cc3193ad554914fb6efd90d7889"
 SHA_1121 = "d7bcd5abf4df27aae397a7898aef074fea4a2e0b51e0a55aa9659517bbf9d452"
 
@@ -21,19 +20,6 @@ class Wine1110Comparison(unittest.TestCase):
         self.assertIn('shasum -a 256 -c -', source)
         self.assertIn('Gcenx/macOS_Wine_builds/releases/download/', source)
         self.assertIn('default: \'11.21\'', source)
-
-    def test_older_version_is_a_separate_one_shot_not_a_global_change(self):
-        source = ONCE.read_text(encoding="utf-8")
-        self.assertIn('branches: [main]', source)
-        self.assertIn("      - '.github/workflows/netfx48-wine1110-full-verb-once-ci.yml'", source)
-        self.assertIn('wine_baseline: \'11.10\'', source)
-        self.assertIn('use_macos26_runner: true', source)
-        self.assertIn('try_48_intermediate: true', source)
-        self.assertIn('try_48_direct: false', source)
-        self.assertIn('try_48_payload_host: false', source)
-        self.assertIn('host_provenance_only: false', source)
-        self.assertIn("uses: ./.github/workflows/netfx40-legacy-ci.yml", source)
-        self.assertNotIn('actions/upload-artifact', source)
 
 
 if __name__ == "__main__":

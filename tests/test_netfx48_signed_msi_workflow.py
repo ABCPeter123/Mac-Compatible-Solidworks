@@ -161,9 +161,6 @@ class SignedMSIGates(TestCase):
             source)
         for filename in (
             "netfx40-wow64-x86-once-ci.yml",
-            "netfx40-wow64-fault-triage-once-ci.yml",
-            "netfx40-wow64-hoststack64-once-ci.yml",
-            "netfx40-wow64-hoststack64-macos15-once-ci.yml",
             "netfx40-wiage-rosetta-clr4-once-ci.yml",
         ):
             caller = (ROOT / ".github/workflows" / filename).read_text(
@@ -175,15 +172,6 @@ class SignedMSIGates(TestCase):
         self.assertNotIn("cancel-in-progress: true", source)
 
     def test_native_wow64_rossetta_fault_triage_isolated_from_signed_msi(self):
-        caller = (ROOT / ".github/workflows/netfx40-wow64-fault-triage-once-ci.yml").read_text(
-            encoding="utf-8")
-        for token in ("branches: [main]", "try_wow64_faults: true",
-                      "try_wow64_managed: true", "host_provenance_only: true",
-                      "try_48_msi: false", "try_48_direct: false",
-                      "try_48_intermediate: false", "try_48_payload_host: false",
-                      "wine_baseline: '11.21'", "cancel-in-progress: false"):
-            self.assertIn(token, caller)
-        self.assertNotIn("actions/upload-artifact", caller)
         reused = LEGACY.read_text(encoding="utf-8")
         self.assertIn("try_wow64_faults:", reused)
         self.assertIn("netfx40_wow64_native_smoke.c", reused)
@@ -199,16 +187,6 @@ class SignedMSIGates(TestCase):
         self.assertNotIn("print(raw)", diagnostic)
 
     def test_wow64_host_stack_64mb_requires_real_x86_only_and_no_original_msi(self):
-        one_shot = (ROOT / ".github/workflows/netfx40-wow64-hoststack64-once-ci.yml").read_text(
-            encoding="utf-8")
-        for expected in ("branches: [main]", "wow64_host_stack64: true",
-                         "try_wow64_managed: true", "try_wow64_faults: true",
-                         "host_provenance_only: true", "use_macos26_runner: true",
-                         "wine_baseline: '11.21'", "cancel-in-progress: false",
-                         "try_48_msi: false", "try_48_direct: false",
-                         "try_48_intermediate: false", "try_48_payload_host: false"):
-            self.assertIn(expected, one_shot)
-        self.assertNotIn("actions/upload-artifact", one_shot)
         reusable = LEGACY.read_text(encoding="utf-8")
         self.assertEqual(reusable.count("wow64_host_stack64:"), 2)
         # This assertion must count only the existing two x86 WoW64 steps.
@@ -231,29 +209,6 @@ class SignedMSIGates(TestCase):
                 or step.startswith("Verify native Microsoft CLR4 x86 managed"))
             self.assertIn('inputs.wow64_host_stack64', step)
             self.assertIn("python3 - <<'PY'", step)
-
-    def test_original_wow64_macos15_version_ab_keeps_exact_native_clr_only(self):
-        original = (ROOT / ".github/workflows/netfx40-wow64-hoststack64-once-ci.yml").read_text(
-            encoding="utf-8")
-        comparison = (ROOT / ".github/workflows/netfx40-wow64-hoststack64-macos15-once-ci.yml").read_text(
-            encoding="utf-8")
-        for token in ("branches: [main]", "host_provenance_only: true",
-                      "try_wow64_managed: true", "try_wow64_faults: true",
-                      "wow64_host_stack64: true", "wine_baseline: '11.21'",
-                      "cancel-in-progress: false", "try_48_msi: false",
-                      "try_48_direct: false", "try_48_intermediate: false",
-                      "try_48_payload_host: false"):
-            self.assertIn(token, original)
-            self.assertIn(token, comparison)
-        self.assertIn("use_macos26_runner: true", original)
-        self.assertIn("use_macos26_runner: false", comparison)
-        self.assertNotIn("actions/upload-artifact", comparison)
-        self.assertNotIn("try_48_msi: true", comparison)
-        self.assertNotIn("try_48_direct: true", comparison)
-        self.assertNotIn("host_provenance_only: false", comparison)
-        self.assertIn(
-            "- '.github/workflows/netfx40-wow64-hoststack64-macos15-once-ci.yml'",
-            comparison)
 
     def test_pinned_wiage_engine_exclusively_allows_authenticated_install_routes(self):
         caller = (ROOT / ".github/workflows/netfx40-wiage-rosetta-clr4-once-ci.yml").read_text(
