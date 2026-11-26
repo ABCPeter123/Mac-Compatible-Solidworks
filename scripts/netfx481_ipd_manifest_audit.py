@@ -87,6 +87,10 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
     missing_dependencies = Counter()
     expression_tokens = Counter()
     dep_kinds = defaultdict(Counter)
+    dep_metadata = defaultdict(list)
+    missing_resource_metadata = Counter()
+    version_resource_metadata = Counter()
+    resource_name_relations = Counter()
     absent_names = Counter()
     absent_arch = Counter()
     absent_language = Counter()
@@ -132,6 +136,8 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
                     else:
                         record.deps.append(ref)
                         dep_kinds[(ident, ref)][dep.get("dependencyType") if dep.get("dependencyType") in {"install", "prerequisite"} else "unspecified"] += 1
+                        dep_metadata[(ident, ref)].append((element.get("resourceType"), element.get("optional"),
+                                                            element.get("discoverable"), dep.get("dependencyType")))
             if tag == "package":
                 for update in children(element, "update"):
                     for item in update:
@@ -217,8 +223,22 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
                 counts["dependency_ambiguous"] += 1
             elif loose:
                 counts["dependency_version_only"] += 1
+                for resource, optional, discoverable, kind in dep_metadata[(assembly.identity, ref)]:
+                    version_resource_metadata["resource_" + (resource if resource in {"Resources", "LanguagePack", "Neutral"} else "other_or_absent")] += 1
             else:
                 counts["dependency_absent"] += 1
+                for resource, optional, discoverable, kind in dep_metadata[(assembly.identity, ref)]:
+                    missing_resource_metadata["resource_" + (resource if resource in {"Resources", "LanguagePack", "Neutral"} else "other_or_absent")] += 1
+                    missing_resource_metadata["optional_" + (optional if optional in {"true", "false"} else "absent_or_other")] += 1
+                    missing_resource_metadata["discoverable_" + (discoverable if discoverable in {"true", "false"} else "absent_or_other")] += 1
+                    if resource == "Resources" and kind == "prerequisite" and ref[2] == "*":
+                        missing_resource_metadata["wildcard_resource_prerequisite"] += 1
+                    if ref[0] == assembly.identity[0] + ".resources":
+                        resource_name_relations["parent_dot_resources"] += 1
+                    elif ref[0].endswith(".resources"):
+                        resource_name_relations["other_dot_resources"] += 1
+                    else:
+                        resource_name_relations["other_name"] += 1
                 absent_arch[ref[1] if ref[1] in {"amd64", "x86", "wow64", "msil", "neutral", "arm64", "*"} else "other"] += 1
                 absent_language[ref[2] if re.fullmatch(r"[a-z0-9*-]{1,20}", ref[2]) else "other"] += 1
                 absent_versions[ref[4] if re.fullmatch(r"[0-9.]{1,32}|\*", ref[4]) else "other"] += 1
@@ -271,6 +291,9 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
             "absent_dependency_kinds": {k: counts["absent_" + k] for k in ("install", "prerequisite", "unspecified", "package_component")},
             "absent_public_assembly_names": dict(sorted(absent_names.items())),
             "absent_architectures": dict(sorted(absent_arch.items())),
+            "absent_resource_metadata": dict(sorted(missing_resource_metadata.items())),
+            "version_only_resource_metadata": dict(sorted(version_resource_metadata.items())),
+            "resource_name_relations": dict(sorted(resource_name_relations.items())),
             "absent_languages": dict(sorted(absent_language.items())),
             "absent_versions": dict(sorted(absent_versions.items())),
             "file_name_shapes": dict(sorted(file_shapes.items())),
