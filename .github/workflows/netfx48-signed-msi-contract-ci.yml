@@ -12,6 +12,10 @@ on:
       - 'scripts/netfx48_msp_patch_sequence.py'
       - 'scripts/netfx48_msp_wine_trace.py'
       - 'probes/netfx48_msp_win32_status.c'
+      - 'probes/netfx481_catalog_wusa.c'
+      - 'scripts/netfx481_catalog_wusa.py'
+      - 'tests/test_netfx481_catalog_wusa.py'
+      - '.github/workflows/netfx481-catalog-wusa-ci.yml'
       - 'scripts/netfx48_msi_service_evidence.py'
       - 'tests/test_netfx48_msi_service_evidence.py'
       - 'tests/test_netfx40_to_48_signed_msi.py'
@@ -34,6 +38,10 @@ on:
       - 'scripts/netfx48_msp_patch_sequence.py'
       - 'scripts/netfx48_msp_wine_trace.py'
       - 'probes/netfx48_msp_win32_status.c'
+      - 'probes/netfx481_catalog_wusa.c'
+      - 'scripts/netfx481_catalog_wusa.py'
+      - 'tests/test_netfx481_catalog_wusa.py'
+      - '.github/workflows/netfx481-catalog-wusa-ci.yml'
       - 'scripts/netfx48_msi_service_evidence.py'
       - 'tests/test_netfx48_msi_service_evidence.py'
       - 'tests/test_netfx40_to_48_signed_msi.py'
@@ -96,6 +104,15 @@ jobs:
             throw "Win32 full DWORD original MSP selftest failed"
           }
 
+          $lines = @('@echo off', ('call "' + $vcvars + '"'),
+            'cl /nologo /W4 /WX /O2 /DUNICODE /D_UNICODE /Fe:build\netfx481_catalog_wusa.exe probes\netfx481_catalog_wusa.c',
+            'exit /b %errorlevel%')
+          [System.IO.File]::WriteAllLines((Join-Path (Get-Location) 'build\compile-catalog-wusa.cmd'), $lines, [System.Text.Encoding]::ASCII)
+          & cmd.exe /d /c build\compile-catalog-wusa.cmd
+          if ($LASTEXITCODE -ne 0) { throw "Native catalog WUSA monitor compilation failed" }
+          $catalog = & build\netfx481_catalog_wusa.exe --selftest
+          if ($LASTEXITCODE -ne 0 -or $catalog -notcontains 'SWCOMPAT_WUSA_EXIT=00000BC2') { throw "Native WUSA full child DWORD selftest failed" }
+
   original-signed-msi-contract:
     name: Verify genuine 4.8 MSI source rules on ${{ matrix.os }}
     strategy:
@@ -122,3 +139,4 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_netfx48_signed_msi_workflow.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx48_core_host_workflow.py' -v
           python3 -m unittest discover -s tests -p 'test_netfx40_host_once_workflow.py' -v
+          python3 -m unittest discover -s tests -p 'test_netfx481_catalog_wusa.py' -v
