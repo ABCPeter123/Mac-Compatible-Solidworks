@@ -36,7 +36,7 @@ void swcompat_wusa_event(const char *format);
 '''
 
 EVENTS = r'''
-static unsigned swcompat_counts[14];
+static unsigned swcompat_counts[16];
 static const WCHAR *swcompat_stage;
 static unsigned swcompat_ipd_count;
 void swcompat_wusa_event(const char *format)
@@ -216,7 +216,7 @@ def patch_file_names(main: str, manifest: str, header: str) -> tuple[str, str, s
                             '        if (!(entry->name = wcsdup(entry->source))) goto error;')
     main = replace_once(main, "    if (!(target = path_combine(target_path, fileop->source))) goto error;",
                         "    target = NULL;\n"
-                        "    if (!swcompat_file_name(fileop->source) || !swcompat_file_name(fileop->name)) goto error;\n"
+                        "    if (!swcompat_file_name(fileop->source) || !swcompat_file_name(fileop->name)) { swcompat_counts[14]++; goto error; }\n"
                         "    if (!(target = path_combine(target_path, fileop->name))) goto error;")
     main = replace_once(main, "    if (!(source = path_combine(source_path, fileop->source))) goto error;",
                         r'''    if (!(source = path_combine(source_path, fileop->source))) goto error;
@@ -229,13 +229,26 @@ def patch_file_names(main: str, manifest: str, header: str) -> tuple[str, str, s
     }''')
     main = replace_once(main, "if (!(ret = PathFileExistsW(source)))",
                         "if (!(ret = swcompat_regular_file(source)))")
+    main = replace_once(main, "    int csidl = 0;",
+                        "    int csidl = 0;\n\n"
+                        "    if (!wcsicmp(key, L\"assembly.empty\"))\n"
+                        "    {\n        swcompat_counts[15]++;\n        return wcsdup(L\"\");\n    }")
     main = replace_once(main, "static BOOL install_files_copy(",
                         r'''static BOOL swcompat_file_name(const WCHAR *name)
 {
-    size_t n;
-    if (!name || !(n = wcslen(name)) || !wcscmp(name, L".") || !wcscmp(name, L".."))
-        return FALSE;
-    return !wcspbrk(name, L"\\/:*?\"<>|") && name[n-1] != L'.' && name[n-1] != L' ';
+    const WCHAR *start, *p;
+    if (!name || !*name) return FALSE;
+    for (start = p = name; ; p++)
+    {
+        if (*p && *p != L'\\' && *p != L'/')
+        {
+            if (*p < 32 || wcschr(L":*?\"<>|", *p)) return FALSE;
+            continue;
+        }
+        if (p == start || p[-1] == L'.' || p[-1] == L' ') return FALSE;
+        if (!*p) return TRUE;
+        start = p + 1;
+    }
 }
 
 static BOOL swcompat_regular_file(const WCHAR *path)
