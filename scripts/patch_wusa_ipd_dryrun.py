@@ -36,7 +36,7 @@ void swcompat_wusa_event(const char *format);
 '''
 
 EVENTS = r'''
-static unsigned swcompat_counts[11];
+static unsigned swcompat_counts[14];
 static const WCHAR *swcompat_stage;
 static unsigned swcompat_ipd_count;
 void swcompat_wusa_event(const char *format)
@@ -80,7 +80,7 @@ OLD_INSTALL = r'''    /* installation */
     TRACE("Installation finished\n");
     ret = TRUE;'''
 NEW_INSTALL = r'''    /* This research executable has no installation mode. */
-    ret = swcompat_ipd_count == 1;'''
+    ret = swcompat_ipd_count == 1 && !swcompat_counts[12] && !swcompat_counts[13];'''
 
 OLD_DWORD = r'''    DWORD value = registrykv->value_type ? wcstoul(registrykv->value_type, NULL, 16) : 0;
     BOOL ret = TRUE;'''
@@ -202,6 +202,73 @@ def patch_manifest(text: str) -> str:
     return converted
 
 
+def patch_file_names(main: str, manifest: str, header: str) -> tuple[str, str, str]:
+    # CBS sourceName is the original build-source name, while name is the
+    # destination name. IPD expands renamed payloads under the latter.
+    # The full CIX tree is authenticated by the host; never search elsewhere.
+    header = replace_once(header, "    WCHAR       *source;\n    WCHAR       *target;",
+                          "    WCHAR       *source;\n    WCHAR       *target;\n    WCHAR       *name;")
+    manifest = replace_once(manifest, "    free(entry->source);\n    free(entry->target);",
+                            "    free(entry->source);\n    free(entry->target);\n    free(entry->name);")
+    manifest = replace_once(manifest, '    if (!(entry->source = get_xml_attribute(root, L"sourceName"))) goto error;',
+                            '    if (!(entry->source = get_xml_attribute(root, L"sourceName"))) goto error;\n'
+                            '    if (!(entry->name = get_xml_attribute(root, L"name")))\n'
+                            '        if (!(entry->name = wcsdup(entry->source))) goto error;')
+    main = replace_once(main, "    if (!(target = path_combine(target_path, fileop->source))) goto error;",
+                        "    target = NULL;\n"
+                        "    if (!swcompat_file_name(fileop->source) || !swcompat_file_name(fileop->name)) goto error;\n"
+                        "    if (!(target = path_combine(target_path, fileop->name))) goto error;")
+    main = replace_once(main, "    if (!(source = path_combine(source_path, fileop->source))) goto error;",
+                        r'''    if (!(source = path_combine(source_path, fileop->source))) goto error;
+    if (swcompat_ipd_count == 1 && GetFileAttributesW(source) == INVALID_FILE_ATTRIBUTES
+        && wcsicmp(fileop->source, fileop->name))
+    {
+        free(source);
+        if (!(source = path_combine(source_path, fileop->name))) goto error;
+        if (swcompat_regular_file(source)) swcompat_counts[11]++;
+    }''')
+    main = replace_once(main, "if (!(ret = PathFileExistsW(source)))",
+                        "if (!(ret = swcompat_regular_file(source)))")
+    main = replace_once(main, "static BOOL install_files_copy(",
+                        r'''static BOOL swcompat_file_name(const WCHAR *name)
+{
+    size_t n;
+    if (!name || !(n = wcslen(name)) || !wcscmp(name, L".") || !wcscmp(name, L".."))
+        return FALSE;
+    return !wcspbrk(name, L"\\/:*?\"<>|") && name[n-1] != L'.' && name[n-1] != L' ';
+}
+
+static BOOL swcompat_regular_file(const WCHAR *path)
+{
+    DWORD attrs = GetFileAttributesW(path);
+    return attrs != INVALID_FILE_ATTRIBUTES &&
+        !(attrs & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT));
+}
+
+static BOOL install_files_copy(''')
+    return main, manifest, header
+
+
+def patch_full_preflight(main: str) -> str:
+    # WUSA stops at the first missing dependency. Independently exercise every
+    # parsed component's file and registry dry-run paths before graph traversal.
+    # A successful report still requires the original dependency traversal.
+    return replace_once(main, "    /* perform dry run */", r'''    {
+        struct assembly_entry *item;
+        LIST_FOR_EACH_ENTRY(item, &state->assemblies, struct assembly_entry, entry)
+        {
+            if (!item->identity.name || !item->identity.architecture)
+            {
+                swcompat_counts[12]++;
+                continue;
+            }
+            if (!install_files(item, TRUE)) swcompat_counts[12]++;
+            if (!install_registry(item, TRUE)) swcompat_counts[13]++;
+        }
+    }
+    /* perform dry run */''')
+
+
 def git_blob(data: bytes) -> str:
     return hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()
 
@@ -218,13 +285,16 @@ def prepare(source: Path, destination: Path) -> None:
         if git_blob(raw) != digest:
             raise ValueError("Wine source blob identity mismatch")
         original[name] = raw
+    main, manifest, header = patch_file_names(
+        patch_main(original["main.c"].decode("utf-8")),
+        patch_manifest(original["manifest.c"].decode("utf-8")),
+        original["wusa.h"].decode("utf-8"))
+    original["main.c"] = patch_full_preflight(main).encode("utf-8")
+    original["manifest.c"] = manifest.encode("utf-8")
+    original["wusa.h"] = header.encode("utf-8")
     destination.mkdir()
     (destination / "wine").mkdir()
     for name, data in original.items():
-        if name == "main.c":
-            data = patch_main(data.decode("utf-8")).encode("utf-8")
-        elif name == "manifest.c":
-            data = patch_manifest(data.decode("utf-8")).encode("utf-8")
         (destination / name).write_bytes(data)
     (destination / "wine/debug.h").write_text(DEBUG, encoding="ascii")
 
