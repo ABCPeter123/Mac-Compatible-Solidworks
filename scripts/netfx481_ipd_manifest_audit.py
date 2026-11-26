@@ -91,6 +91,7 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
     missing_resource_metadata = Counter()
     version_resource_metadata = Counter()
     version_conflicts = []
+    component_metadata = {}
     resource_name_relations = Counter()
     absent_names = Counter()
     absent_arch = Counter()
@@ -117,6 +118,13 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
         if ident is None:
             counts["incomplete_identity"] += 1
             continue
+        component_metadata[ident] = {
+            "version_scope": top[0].get("versionScope"),
+            "build_type": top[0].get("buildType"),
+            "root_file_count": len(children(root, "file")),
+            "root_registry_count": len(children(root, "registryKeys")),
+            "deployment_count": len(children(root, "deployment")),
+        }
         record = Assembly(ident, [])
         assemblies.append(record)
         index[ident[0]].append(record)
@@ -229,6 +237,9 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
                 if len(version_conflicts) < 16:
                     version_conflicts.append({
                         "parent": public_identity(assembly.identity[0]),
+                        "parent_architecture": public_identity(assembly.identity[1]),
+                        "parent_version": public_identity(assembly.identity[4]),
+                        "parent_language": public_identity(assembly.identity[2]),
                         "needed": public_identity(ref[0]),
                         "architecture": public_identity(ref[1]),
                         "language": ref[2] if ref[2] == "*" else public_identity(ref[2]),
@@ -236,6 +247,23 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
                         "available_versions": sorted({public_identity(c.identity[4]) for c in candidates
                                                       if compatible(c.identity, ref, version=False)}),
                         "kinds": sorted(dep_kinds[(assembly.identity, ref)]),
+                        "all_same_name_candidates": [
+                            {"architecture": public_identity(c.identity[1]),
+                             "language": c.identity[2] if c.identity[2] == "*" else public_identity(c.identity[2]),
+                             "version": public_identity(c.identity[4]),
+                             "version_scope": (component_metadata[c.identity]["version_scope"]
+                                 if component_metadata[c.identity]["version_scope"] in {"nonSxS", "SxS"} else "other_or_absent"),
+                             "root_file_count": component_metadata[c.identity]["root_file_count"],
+                             "root_registry_count": component_metadata[c.identity]["root_registry_count"],
+                             "deployment_count": component_metadata[c.identity]["deployment_count"],
+                             "direct_package_component_refs": sum(
+                                 dep_kinds[(owner.identity, need)]["package_component"]
+                                 for owner in assemblies for need in owner.deps
+                                 if compatible(c.identity, need))}
+                            for c in candidates],
+                        "parent_file_count": component_metadata[assembly.identity]["root_file_count"],
+                        "parent_registry_count": component_metadata[assembly.identity]["root_registry_count"],
+                        "parent_deployment_count": component_metadata[assembly.identity]["deployment_count"],
                     })
                 for resource, optional, discoverable, kind in dep_metadata[(assembly.identity, ref)]:
                     version_resource_metadata["resource_" + (resource if resource in {"Resources", "LanguagePack", "Neutral"} else "other_or_absent")] += 1
