@@ -3,7 +3,9 @@ on:
   pull_request:
     paths:
       - 'scripts/netfx481_native_delta.py'
+      - 'scripts/netfx481_native_delta_gate.py'
       - 'scripts/netfx481_cix_graph.py'
+      - 'data/netfx481/recipes/**'
       - 'scripts/patch_msdelta_compat.py'
       - 'probes/swcompat_verified_delta.rs'
       - 'tests/test_netfx481_native_delta.py'
@@ -42,8 +44,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Force build, build/pa30-recipes | Out-Null
-          Set-Content -LiteralPath build/pa30-recipes/schema.txt -Value 'swcompat-rip-recipe-v1' -Encoding ascii
+          New-Item -ItemType Directory -Force build | Out-Null
           $msu = Join-Path (Resolve-Path build) "KB5011048.msu"
           try {
             curl.exe --fail --location --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 600 --connect-timeout 20 --max-time 120 --output $msu "https://catalog.s.download.windowsupdate.com/c/msdownload/update/software/ftpk/2023/09/windows10.0-kb5011048-x64_411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e.msu"
@@ -51,25 +52,20 @@ jobs:
             if ((Get-FileHash -LiteralPath $msu -Algorithm SHA1).Hash.ToLowerInvariant() -ne "411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e") { throw "Original package identity mismatch" }
             (Get-FileHash -LiteralPath $msu -Algorithm SHA256).Hash.ToLowerInvariant() |
               Set-Content -LiteralPath build/netfx481-catalog.sha256 -NoNewline -Encoding ascii
-            python -m scripts.netfx481_native_delta --package $msu --sha256-file build/netfx481-catalog.sha256 --sevenzip (Join-Path $env:ProgramFiles "7-Zip\7z.exe") --codec (Join-Path $env:RUNNER_TEMP "swcompat-msdelta-source\target\release\ms-delta.exe") --expand (Join-Path $env:WINDIR "System32\expand.exe") --verified-codec (Join-Path $env:RUNNER_TEMP "swcompat-msdelta-source\target\release\swcompat-verified-delta.exe") --recipe-dir build/pa30-recipes --output build/netfx481-native-delta.json
+            python -m scripts.netfx481_native_delta --package $msu --sha256-file build/netfx481-catalog.sha256 --sevenzip (Join-Path $env:ProgramFiles "7-Zip\7z.exe") --codec (Join-Path $env:RUNNER_TEMP "swcompat-msdelta-source\target\release\ms-delta.exe") --expand (Join-Path $env:WINDIR "System32\expand.exe") --verified-codec (Join-Path $env:RUNNER_TEMP "swcompat-msdelta-source\target\release\swcompat-verified-delta.exe") --recipe-dir data/netfx481/recipes --output build/netfx481-native-delta.json
             if ($LASTEXITCODE -ne 0) { throw "Native delta reference failed" }
           } finally {
             if (Test-Path -LiteralPath $msu) { Remove-Item -LiteralPath $msu }
           }
+      - name: Require complete tree and all native Windows reference matches
+        run: python -m scripts.netfx481_native_delta_gate build/netfx481-native-delta.json --windows-oracle
       - uses: actions/upload-artifact@v4
         with:
           name: native-delta-allowlisted-result-windows-2025
           path: build/netfx481-native-delta.json
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 3 || 7 }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: pa30-algorithm-recipe-metadata
-          path: build/pa30-recipes/
-          if-no-files-found: error
-          retention-days: 3
   decode-macos:
-    needs: decode-windows
     runs-on: macos-15
     timeout-minutes: 25
     steps:
@@ -92,14 +88,6 @@ jobs:
           cp probes/swcompat_verified_delta.rs "$RUNNER_TEMP/swcompat-msdelta-source/src/bin/swcompat-verified-delta.rs"
           cargo +stable build --manifest-path "$RUNNER_TEMP/swcompat-msdelta-source/Cargo.toml" --locked --release --features cli --bin ms-delta --bin swcompat-verified-delta
           cargo +stable test --manifest-path "$RUNNER_TEMP/swcompat-msdelta-source/Cargo.toml" --locked --release --features cli --lib swcompat_provenance_tests
-      - uses: actions/download-artifact@v4
-        with:
-          name: pa30-algorithm-recipe-metadata
-          path: build/pa30-recipes
-      - uses: actions/download-artifact@v4
-        with:
-          name: native-delta-allowlisted-result-windows-2025
-          path: build/windows-reference
       - name: Install native macOS CAB reader
         run: brew install sevenzip
       - name: Download original pinned Microsoft update and exercise native decompression on macOS
@@ -116,25 +104,9 @@ jobs:
             --sevenzip "$(realpath "$(command -v 7zz)")" \
             --codec "$RUNNER_TEMP/swcompat-msdelta-source/target/release/ms-delta" \
             --verified-codec "$RUNNER_TEMP/swcompat-msdelta-source/target/release/swcompat-verified-delta" \
-            --recipe-dir build/pa30-recipes --output build/netfx481-native-delta.json
-      - name: Require complete tree and byte-for-byte Windows equivalence
-        shell: bash
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          win = json.loads(Path("build/windows-reference/netfx481-native-delta.json").read_text())
-          mac = json.loads(Path("build/netfx481-native-delta.json").read_text())
-          for report in (win, mac):
-              assert report["catalog_verified"] is True and report["ipd_cabs"] == 1
-              assert report["cix_entries"] == report["cix_reconstructed"] == 2446, "Incomplete IPD reconstruction"
-              for key in ("cix_delta_failed", "cix_basis_blocked", "cix_unresolved", "cix_unsupported", "cix_missing_source", "cix_size_mismatch"):
-                  assert report[key] == 0, key
-          assert win["cix_oracle_matches"] == 2446
-          assert win["cix_oracle_mismatches"] == win["cix_oracle_missing"] == 0
-          assert win["cix_tree_sha256"] == mac["cix_tree_sha256"], "Platform tree mismatch"
-          print("Verified 2446/2446 identical reconstructed CIX files on Windows and Apple Silicon")
-          PY
+            --recipe-dir data/netfx481/recipes --output build/netfx481-native-delta.json
+      - name: Require complete tree and independently verified Windows digest
+        run: python -m scripts.netfx481_native_delta_gate build/netfx481-native-delta.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
