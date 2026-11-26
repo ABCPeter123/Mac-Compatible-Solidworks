@@ -1,6 +1,10 @@
 name: Independent genuine .NET 4.8.1 Windows Update catalog experiment
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netfx481-catalog-wusa-ci.yml'
 permissions:
   contents: read
 concurrency:
