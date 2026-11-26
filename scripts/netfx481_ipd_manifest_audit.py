@@ -90,6 +90,7 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
     dep_metadata = defaultdict(list)
     missing_resource_metadata = Counter()
     version_resource_metadata = Counter()
+    version_conflicts = []
     resource_name_relations = Counter()
     absent_names = Counter()
     absent_arch = Counter()
@@ -223,6 +224,19 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
                 counts["dependency_ambiguous"] += 1
             elif loose:
                 counts["dependency_version_only"] += 1
+                def public_identity(value):
+                    return value if re.fullmatch(r"[a-z0-9_.-]{1,120}", value) else "other"
+                if len(version_conflicts) < 16:
+                    version_conflicts.append({
+                        "parent": public_identity(assembly.identity[0]),
+                        "needed": public_identity(ref[0]),
+                        "architecture": public_identity(ref[1]),
+                        "language": ref[2] if ref[2] == "*" else public_identity(ref[2]),
+                        "required_version": public_identity(ref[4]),
+                        "available_versions": sorted({public_identity(c.identity[4]) for c in candidates
+                                                      if compatible(c.identity, ref, version=False)}),
+                        "kinds": sorted(dep_kinds[(assembly.identity, ref)]),
+                    })
                 for resource, optional, discoverable, kind in dep_metadata[(assembly.identity, ref)]:
                     version_resource_metadata["resource_" + (resource if resource in {"Resources", "LanguagePack", "Neutral"} else "other_or_absent")] += 1
             else:
@@ -293,6 +307,7 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
             "absent_architectures": dict(sorted(absent_arch.items())),
             "absent_resource_metadata": dict(sorted(missing_resource_metadata.items())),
             "version_only_resource_metadata": dict(sorted(version_resource_metadata.items())),
+            "version_conflicts": version_conflicts,
             "resource_name_relations": dict(sorted(resource_name_relations.items())),
             "absent_languages": dict(sorted(absent_language.items())),
             "absent_versions": dict(sorted(absent_versions.items())),
