@@ -163,11 +163,29 @@ class CixGraphTests(unittest.TestCase):
             self.assertEqual(report["cix_external_hash_recovered"], 1)
             self.assertEqual(report["cix_oracle_matches"], 1)
 
-            # An intrinsic digest mismatch must not be routed to the helper.
+            # An intrinsic digest mismatch must not be treated as hashless.
             work2 = root / "work2"
             work2.mkdir()
-            with patch.object(p, "observe_decoder", return_value=(False, "TARGET_HASH")), patch.object(p, "run_private") as fallback, patch.object(p, "native_delta_reference", return_value="MATCH"):
+            with patch.object(p, "observe_decoder", return_value=(False, "TARGET_HASH")), patch.object(p, "run_private", return_value=False) as fallback, patch.object(p, "native_delta_reference", return_value="MATCH"):
                 report = p.reconstruct(root / "ms-delta", raw, list(raw.iterdir()), work2, oracle, helper)
-            fallback.assert_not_called()
+            fallback.assert_called_once()
+            self.assertEqual(report["cix_compat_attempted"], 1)
+            self.assertEqual(report["cix_compat_failed"], 1)
             self.assertEqual(report["cix_delta_failed"], 1)
             self.assertEqual(report["cix_external_hash_recovered"], 0)
+
+
+    def test_pinned_source_patch_retains_original_intrinsic_digest(self):
+        from scripts.patch_msdelta_compat import ANCHOR, INSERT, patch
+        self.assertIn("validate_hash(&parsed.info)?", INSERT)
+        self.assertIn("apply_once(source, &alternate, limits, false)", INSERT)
+        self.assertIn("verify_hash(info, &output)?", INSERT)
+        self.assertIn("..info.clone()", INSERT)
+        self.assertIn(".take(96)", INSERT)
+        with tempfile.TemporaryDirectory() as d:
+            pth = Path(d) / "pa30.rs"
+            pth.write_text(ANCHOR + "\n}")
+            patch(pth)
+            self.assertEqual(pth.read_text().count("pub fn apply_pa30_compat("), 1)
+            with self.assertRaises(ValueError):
+                patch(pth)
