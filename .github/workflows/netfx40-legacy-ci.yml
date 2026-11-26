@@ -88,6 +88,11 @@ on:
         type: boolean
         required: false
         default: false
+      try_481_catalog_wusa:
+        description: 'Independent official KB5011048 MSU via Wine WUSA on persistent native CLR4'
+        type: boolean
+        required: false
+        default: false
       try_481_after_verified_partial48:
         description: 'Independent genuine 4.8.1 recovery after native 4.8 MSP 1603; never marks 4.8 complete'
         type: boolean
@@ -572,8 +577,33 @@ jobs:
           (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant() |
             Set-Content -LiteralPath build/netfx40.sha256 -NoNewline -Encoding ascii
           Write-Output "Original .NET Framework 4.0 signed by Microsoft and digest bound"
+      - name: Fetch original Microsoft catalog KB5011048 x64 and independently bind SHA256
+        if: inputs.try_481_catalog_wusa
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $url = "https://catalog.s.download.windowsupdate.com/c/msdownload/update/software/ftpk/2023/09/windows10.0-kb5011048-x64_411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e.msu"
+          $msu = Join-Path (Resolve-Path build) "KB5011048.msu"
+          curl.exe --fail --location --retry 3 --max-time 600 --output $msu $url
+          if ($LASTEXITCODE -ne 0 -or (Get-Item -LiteralPath $msu).Length -ne 71059034) { throw "Original catalog package download failed" }
+          if ((Get-FileHash -LiteralPath $msu -Algorithm SHA1).Hash.ToLowerInvariant() -ne "411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e") { throw "Catalog package identity mismatch" }
+          (Get-FileHash -LiteralPath $msu -Algorithm SHA256).Hash.ToLowerInvariant() |
+            Set-Content -LiteralPath build/netfx481-catalog.sha256 -NoNewline -Encoding ascii
+          Remove-Item -LiteralPath $msu
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw "MSVC required for catalog WUSA monitor" }
+          $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+          $lines = @('@echo off', ('call "' + $vcvars + '"'),
+            'cl /nologo /W4 /O2 /DUNICODE /D_UNICODE /Fe:build\netfx481_catalog_wusa.exe probes\netfx481_catalog_wusa.c',
+            'exit /b %errorlevel%')
+          [System.IO.File]::WriteAllLines((Join-Path (Get-Location) 'build\compile-catalog-wusa.cmd'), $lines, [System.Text.Encoding]::ASCII)
+          & cmd.exe /d /c build\compile-catalog-wusa.cmd
+          if ($LASTEXITCODE -ne 0) { throw "Catalog WUSA monitor build failed" }
+          $control = & build\netfx481_catalog_wusa.exe --selftest
+          if ($LASTEXITCODE -ne 0 -or $control -notcontains 'SWCOMPAT_WUSA_EXIT=00000BC2') { throw "Catalog WUSA full DWORD control failed" }
       - name: Download and authenticate original Microsoft .NET Framework 4.8.1 upgrade media
-        if: '!inputs.host_provenance_only'
+        if: '!inputs.host_provenance_only && !inputs.try_481_catalog_wusa'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -698,6 +728,8 @@ jobs:
           path: |
             build/netfx40.sha256
             build/netfx481.sha256
+            build/netfx481-catalog.sha256
+            build/netfx481_catalog_wusa.exe
             build/netfx48.sha256
             build/netfx48_win32_launch.exe
             build/netfx48_scm_service_probe.exe
@@ -717,7 +749,7 @@ jobs:
           retention-days: 1
 
   apple-silicon-native-baseline:
-    if: github.event_name == 'workflow_dispatch' && !inputs.host_provenance_only
+    if: github.event_name == 'workflow_dispatch' && !inputs.host_provenance_only && !inputs.try_481_catalog_wusa
     name: Check genuine Microsoft .NET 4.0 on Apple Silicon Wine Staging 11.21
     needs: [authentic-netfx40-windows, absolute-path-regressions]
     runs-on: ${{ inputs.use_macos26_runner && 'macos-26' || 'macos-15' }}
@@ -937,6 +969,12 @@ jobs:
         with:
           name: self-authored-netfx40-probes-and-signed-digests
           path: build
+      - name: Reject catalog WUSA outside independent native CLR4 trial
+        if: inputs.try_481_catalog_wusa && (inputs.host_provenance_only || inputs.try_48_msi || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_payload_host || inputs.try_481_after_verified_partial48 || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner)
+        shell: bash
+        run: |
+          echo "Catalog WUSA requires the independent authenticated Wiage native CLR4 baseline."
+          exit 1
       - name: Reject payload-only mode outside native 4.0 host-only trial
         if: inputs.try_48_payload_host && (!inputs.host_provenance_only || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_msi)
         run: |
@@ -1019,12 +1057,18 @@ jobs:
         env:
           SWCOMPAT_PROVENANCE_ONLY: ${{ inputs.host_provenance_only }}
           SWCOMPAT_DIRECT_48: ${{ inputs.try_48_direct || inputs.try_48_msi }}
+          SWCOMPAT_TRY_CATALOG: ${{ inputs.try_481_catalog_wusa }}
           SWCOMPAT_PAYLOAD_48: ${{ inputs.try_48_payload_host }}
         run: |
           set -euo pipefail
           versions=(--version 40)
-          if [ "$SWCOMPAT_PROVENANCE_ONLY" != "true" ]; then
+          if [ "$SWCOMPAT_PROVENANCE_ONLY" != "true" ] && [ "$SWCOMPAT_TRY_CATALOG" != "true" ]; then
             versions+=(--version 481)
+          fi
+          if [ "$SWCOMPAT_TRY_CATALOG" == "true" ]; then
+            curl --fail --location --retry 3 --max-time 600 --output build/KB5011048.msu \
+              "https://catalog.s.download.windowsupdate.com/c/msdownload/update/software/ftpk/2023/09/windows10.0-kb5011048-x64_411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e.msu"
+            python3 -c 'from pathlib import Path; from scripts.netfx481_catalog_wusa import verify_package; verify_package(Path("build/KB5011048.msu"), Path("build/netfx481-catalog.sha256"))'
           fi
           if [ "$SWCOMPAT_DIRECT_48" = "true" ] || [ "$SWCOMPAT_PAYLOAD_48" = "true" ]; then
             versions+=(--version 48)
@@ -1049,6 +1093,7 @@ jobs:
           SWCOMPAT_WIAGE_TRY_DIRECT: ${{ inputs.try_48_direct }}
           SWCOMPAT_WIAGE_TRY_INTERMEDIATE: ${{ inputs.try_48_intermediate }}
           SWCOMPAT_WIAGE_TRY_PAYLOAD: ${{ inputs.try_48_payload_host }}
+          SWCOMPAT_WIAGE_TRY_CATALOG: ${{ inputs.try_481_catalog_wusa || false }}
         run: |
           set -euo pipefail
           if [[ "$SWCOMPAT_WINE_BASELINE" == "wiage-11.13" ]]; then
@@ -1067,10 +1112,10 @@ jobs:
               echo "Pinned Wiage requires macOS26, no Winetricks48 and no payload-only trial" >&2
               exit 1
             fi
-            case "$SWCOMPAT_HOST_ONLY:$SWCOMPAT_WIAGE_TRY_DIRECT:$SWCOMPAT_WIAGE_TRY_MSI" in
-              true:false:false|false:true:false|false:false:true) ;;
+            case "$SWCOMPAT_HOST_ONLY:$SWCOMPAT_WIAGE_TRY_DIRECT:$SWCOMPAT_WIAGE_TRY_MSI:$SWCOMPAT_WIAGE_TRY_CATALOG" in
+              true:false:false:false|false:true:false:false|false:false:true:false|false:false:false:true) ;;
               *)
-                echo "Wiage must select exactly one of CLR4 host, signed 4.8 direct or signed 4.8 MSI" >&2
+                echo "Wiage must select exactly one of CLR4 host, signed 4.8 direct, signed 4.8 MSI or catalog WUSA" >&2
                 exit 1
                 ;;
             esac
@@ -1812,7 +1857,7 @@ jobs:
           print("Real native Microsoft 4.8 intermediate candidate verified:", r["native48_candidate"])
           PY
       - name: Read disk-space prerequisites on actual persistent native CLR 4.0 prefix
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct && !inputs.try_48_msi) || env.SWCOMPAT_NATIVE48_READY == 'yes' || env.SWCOMPAT_NATIVE481_RECOVERY == 'yes')
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && !inputs.try_481_catalog_wusa && ((!inputs.try_48_intermediate && !inputs.try_48_direct && !inputs.try_48_msi) || env.SWCOMPAT_NATIVE48_READY == 'yes' || env.SWCOMPAT_NATIVE481_RECOVERY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
@@ -1823,15 +1868,29 @@ jobs:
             --output build/netfx481-disk-before-upgrade.json \
             --agree-disposable-prefix
       - name: Select Windows 10 reported version for original Microsoft 4.8.1 upgrade
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct && !inputs.try_48_msi) || env.SWCOMPAT_NATIVE48_READY == 'yes' || env.SWCOMPAT_NATIVE481_RECOVERY == 'yes')
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && !inputs.try_481_catalog_wusa && ((!inputs.try_48_intermediate && !inputs.try_48_direct && !inputs.try_48_msi) || env.SWCOMPAT_NATIVE48_READY == 'yes' || env.SWCOMPAT_NATIVE481_RECOVERY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
           python3 -m swcompat \
             --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
             --logs-dir "$RUNNER_TEMP/netfx40-msxml3-logs" set-winver win10
+      - name: Apply original Microsoft catalog KB5011048 through actual Wine WUSA
+        if: inputs.try_481_catalog_wusa && env.SWCOMPAT_NATIVE40_READY == 'yes'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --logs-dir "$RUNNER_TEMP/netfx40-msxml3-logs" set-winver win10
+          python3 -m scripts.netfx481_catalog_wusa \
+            --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --package build/KB5011048.msu --sha256-file build/netfx481-catalog.sha256 \
+            --fixture build/netfx481_catalog_wusa.exe --loader build/netfx481_clr_load.exe \
+            --managed build/netfx481_runtime_probe.exe --native40-report build/netfx40-msxml3-restart.json \
+            --output build/netfx481-catalog-wusa.json
       - name: Upgrade functioning Microsoft .NET 4.x CLR with original Microsoft 4.8.1
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct && !inputs.try_48_msi) || env.SWCOMPAT_NATIVE48_READY == 'yes' || env.SWCOMPAT_NATIVE481_RECOVERY == 'yes')
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && !inputs.try_481_catalog_wusa && ((!inputs.try_48_intermediate && !inputs.try_48_direct && !inputs.try_48_msi) || env.SWCOMPAT_NATIVE48_READY == 'yes' || env.SWCOMPAT_NATIVE481_RECOVERY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
@@ -1848,7 +1907,7 @@ jobs:
             --experiment-private-setup-evidence \
             --agree-disposable-prefix
       - name: Restore Windows 11 profile and verify native-only managed CLR
-        if: always() && env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct && !inputs.try_48_msi) || env.SWCOMPAT_NATIVE48_READY == 'yes' || env.SWCOMPAT_NATIVE481_RECOVERY == 'yes')
+        if: always() && env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && !inputs.try_481_catalog_wusa && ((!inputs.try_48_intermediate && !inputs.try_48_direct && !inputs.try_48_msi) || env.SWCOMPAT_NATIVE48_READY == 'yes' || env.SWCOMPAT_NATIVE481_RECOVERY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
@@ -2229,6 +2288,7 @@ jobs:
             build/netfx40-to-48-direct.json
             build/netfx40-to-48-signed-msi.json
             build/netfx481-disk-before-upgrade.json
+            build/netfx481-catalog-wusa.json
             build/netfx40-to-481-upgrade.json
             build/netfx40-to-481-win11.json
           if-no-files-found: warn
@@ -2242,6 +2302,7 @@ jobs:
           SWCOMPAT_TRY_40_CORE: ${{ inputs.try_40_core_msi_recovery }}
           SWCOMPAT_CORE_NGEN: ${{ inputs.probe_native40_ngen_if_ready }}
           SWCOMPAT_TRY_481_RECOVERY: ${{ inputs.try_481_after_verified_partial48 }}
+          SWCOMPAT_TRY_CATALOG: ${{ inputs.try_481_catalog_wusa }}
         shell: bash
         run: |
           python3 - <<'PY'
@@ -2414,9 +2475,18 @@ jobs:
                           and eligible_481_recovery(msi))
                       if recovery_eligible:
                           assert not intermediate_ready
+                  catalog_requested = os.environ.get("SWCOMPAT_TRY_CATALOG") == "true"
+                  catalog_path = Path("build/netfx481-catalog-wusa.json")
+                  assert catalog_path.is_file() == (catalog_requested and native40_ready)
+                  if catalog_path.is_file():
+                      from scripts.netfx481_catalog_wusa import valid as valid_catalog
+                      catalog = json.loads(catalog_path.read_text(encoding="ascii"))
+                      assert valid_catalog(catalog)
+                      assert catalog["original_package_verified"]
+                      print("Independent catalog WUSA framework confirmed:", catalog["framework481_confirmed"])
                   upgrade_path = Path("build/netfx40-to-481-upgrade.json")
                   assert upgrade_path.is_file() == (
-                      not host_only and (
+                      not host_only and not catalog_requested and (
                           (not intermediate_required and not direct_required and not msi_required)
                           or intermediate_ready or recovery_eligible)), (
                       "4.8.1 is forbidden in host-only mode and requires verified baseline or independently eligible recovery")

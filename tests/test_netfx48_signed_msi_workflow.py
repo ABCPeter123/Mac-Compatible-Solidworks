@@ -255,7 +255,7 @@ class SignedMSIGates(TestCase):
             "- '.github/workflows/netfx40-wow64-hoststack64-macos15-once-ci.yml'",
             comparison)
 
-    def test_pinned_wiage_engine_exclusively_allows_original_signed_48(self):
+    def test_pinned_wiage_engine_exclusively_allows_authenticated_install_routes(self):
         caller = (ROOT / ".github/workflows/netfx40-wiage-rosetta-clr4-once-ci.yml").read_text(
             encoding="utf-8")
         for token in ("branches: [main]", "wine_baseline: 'wiage-11.13'",
@@ -283,9 +283,9 @@ class SignedMSIGates(TestCase):
         self.assertIn("wiage/bin/wine", reusable)
         self.assertIn("wiage/bin/wineserver", reusable)
         self.assertIn("SWCOMPAT_WIAGE_TRY_DIRECT:", reusable)
-        self.assertIn('"$SWCOMPAT_HOST_ONLY:$SWCOMPAT_WIAGE_TRY_DIRECT:$SWCOMPAT_WIAGE_TRY_MSI"', reusable)
-        self.assertIn("true:false:false|false:true:false|false:false:true)", reusable)
-        self.assertIn("Wiage must select exactly one of CLR4 host, signed 4.8 direct or signed 4.8 MSI", reusable)
+        self.assertIn('"$SWCOMPAT_HOST_ONLY:$SWCOMPAT_WIAGE_TRY_DIRECT:$SWCOMPAT_WIAGE_TRY_MSI:$SWCOMPAT_WIAGE_TRY_CATALOG"', reusable)
+        self.assertIn("true:false:false:false|false:true:false:false|false:false:true:false|false:false:false:true)", reusable)
+        self.assertIn("Wiage must select exactly one of CLR4 host, signed 4.8 direct, signed 4.8 MSI or catalog WUSA", reusable)
         direct = (ROOT / ".github/workflows/netfx48-wiage-direct-once-ci.yml").read_text(
             encoding="utf-8")
         for value in ("host_provenance_only: false", "try_48_direct: true",
