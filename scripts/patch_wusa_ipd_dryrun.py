@@ -350,6 +350,64 @@ def patch_resource_dependencies(main: str, manifest: str, header: str) -> tuple[
     return main, manifest, header
 
 
+def patch_neutral_preflight(main: str) -> str:
+    """Read-only English runtime experiment, never a strict servicing pass."""
+    main = replace_once(main, "static unsigned swcompat_counts[20];",
+                        "static unsigned swcompat_counts[23];\nstatic BOOL swcompat_neutral;")
+    main = replace_once(main, "        if (wcsicmp(assembly->identity.name, identity->name)) continue;",
+                        "        if (!assembly->identity.name || !assembly->identity.architecture ||\n"
+                        "            !assembly->identity.language || !assembly->identity.pubkey_token ||\n"
+                        "            !assembly->identity.version) continue;\n"
+                        "        if (wcsicmp(assembly->identity.name, identity->name)) continue;")
+    main = replace_once(main, r'''            WARN("Ignoring version difference for %s (expected %s, found %s)\n",
+                 debugstr_w(identity->name), debugstr_w(identity->version), debugstr_w(assembly->identity.version));''',
+                        r'''            WARN("Ignoring version difference for %s (expected %s, found %s)\n",
+                 debugstr_w(identity->name), debugstr_w(identity->version), debugstr_w(assembly->identity.version));
+            continue;''')
+    main = replace_once(main, "        if (!install_assembly(manifest_list, &dependency->identity, dryrun)) return FALSE;",
+                        r'''        if (dryrun && swcompat_neutral && dependency->resource_prerequisite &&
+            !lookup_assembly(manifest_list, &dependency->identity))
+        {
+            size_t n = wcslen(assembly->identity.name);
+            const WCHAR *resource_name = dependency->identity.name;
+            if (wcslen(resource_name) == n + 10 &&
+                !wcsnicmp(resource_name, assembly->identity.name, n) &&
+                !wcsicmp(resource_name + n, L".resources"))
+            {
+                swcompat_counts[20]++;
+                continue;
+            }
+        }
+        if (!install_assembly(manifest_list, &dependency->identity, dryrun)) return FALSE;''')
+    main = replace_once(main, r'''    if (!install_updates(state, TRUE))
+    {
+        ERR("Dry run failed, aborting installation\n");
+        goto done;
+    }''',
+                        r'''    if (!install_updates(state, TRUE))
+    {
+        ERR("Dry run failed, aborting installation\n");
+        /* The English-only probe is independent from the strict result.
+         * Never perform an installation or claim the deferred assemblies
+         * exist. No version-only or non-resource mismatch is waived. */
+        if (swcompat_ipd_count == 1 &&
+            PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_ENGLISH &&
+            PRIMARYLANGID(GetSystemDefaultUILanguage()) == LANG_ENGLISH)
+        {
+            swcompat_counts[21] = 1;
+            set_assembly_status(&state->assemblies, ASSEMBLY_STATUS_NONE);
+            swcompat_neutral = TRUE;
+            swcompat_counts[22] = install_updates(state, TRUE) &&
+                !swcompat_counts[12] && !swcompat_counts[13] &&
+                !swcompat_counts[17] && !swcompat_counts[19] &&
+                swcompat_counts[20] == swcompat_counts[18];
+            swcompat_neutral = FALSE;
+        }
+        goto done;
+    }''')
+    return main
+
+
 def git_blob(data: bytes) -> str:
     return hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()
 
@@ -371,7 +429,7 @@ def prepare(source: Path, destination: Path) -> None:
         patch_manifest(original["manifest.c"].decode("utf-8")),
         original["wusa.h"].decode("utf-8"))
     main, manifest, header = patch_resource_dependencies(patch_full_preflight(main), manifest, header)
-    original["main.c"] = main.encode("utf-8")
+    original["main.c"] = patch_neutral_preflight(main).encode("utf-8")
     original["manifest.c"] = manifest.encode("utf-8")
     original["wusa.h"] = header.encode("utf-8")
     destination.mkdir()
