@@ -19,7 +19,8 @@ from scripts.netfx481_trial import validate_prefix
 
 CATEGORIES = ("missing_assembly", "missing_file", "expression", "registry_type",
               "cycle", "no_updates", "extraction", "version_difference",
-              "unsupported_manifest", "load_failure", "other")
+              "unsupported_manifest", "load_failure", "other", "renamed_source_uses",
+              "component_file_failures", "component_registry_failures")
 
 
 def parse_packet(raw: bytes, code: int) -> dict:
