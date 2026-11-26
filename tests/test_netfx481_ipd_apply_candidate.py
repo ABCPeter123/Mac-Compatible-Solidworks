@@ -20,11 +20,16 @@ class ApplyCandidateTests(unittest.TestCase):
         report["dryrun"] = "PASS"
         self.assertFalse(preflight_ready(report))
 
-    def packet(self, started=1, completed=1):
+    def packet(self, started=1, completed=1, phase=0, error="00000000", files=0):
         events = self.report()["events"]
-        lines = ["SWCOMPAT_IPD_APPLY_SCHEMA=1",
+        lines = ["SWCOMPAT_IPD_APPLY_SCHEMA=2",
                  f"SWCOMPAT_IPD_APPLY_STARTED={started}",
                  f"SWCOMPAT_IPD_APPLY_COMPLETED={completed}",
+                 f"SWCOMPAT_IPD_APPLY_PHASE={phase}",
+                 f"SWCOMPAT_IPD_APPLY_WIN32={error}",
+                 f"SWCOMPAT_IPD_APPLY_FILES={files}",
+                 "SWCOMPAT_IPD_APPLY_KEYS=0", "SWCOMPAT_IPD_APPLY_VALUES=0",
+                 "SWCOMPAT_IPD_APPLY_ASSEMBLIES=0",
                  "SWCOMPAT_IPD_DRYRUN_SCHEMA=1", "SWCOMPAT_IPD_DRYRUN_RESULT=FAIL",
                  "SWCOMPAT_IPD_DRYRUN_IPD=1"]
         lines += [f"SWCOMPAT_IPD_DRYRUN_C{i}={events[key]}" for i, key in enumerate(CATEGORIES)]
@@ -58,6 +63,16 @@ class ApplyCandidateTests(unittest.TestCase):
             self.assertEqual(result["CLR32"]["candidates"], 0)
             after["CLR64"] = ("PE_AMD64", "0" * 64)
             self.assertFalse(verified_runtime_payloads(members, after)["CLR64"]["matches_original"])
+
+    def test_partial_write_reports_preserve_first_failure(self):
+        result = parse_apply(self.packet(1, 0, 2, "00000020", 14), 1)
+        self.assertEqual(result["writes"]["first_failure_phase"], "COPY_FILE")
+        self.assertEqual(result["writes"]["win32_error"], "00000020")
+        self.assertEqual(result["writes"]["files"], 14)
+        with self.assertRaises(ValueError):
+            parse_apply(self.packet(0, 0, 2, "00000020", 14), 1)
+        with self.assertRaises(ValueError):
+            parse_apply(self.packet(1, 1, 2, "00000020", 14), 0)
 
     def test_separate_transaction_and_strict_results(self):
         result = parse_apply(self.packet(), 0)
