@@ -253,3 +253,39 @@ class CixGraphTests(unittest.TestCase):
         self.assertIn("recipe.source_sha256 != swcompat_digest(source)", INSERT)
         self.assertIn("recipe.patch_sha256 != swcompat_digest(delta)", INSERT)
         self.assertIn("bad.is_subset(&resolved)", INSERT)
+
+
+    def test_checked_in_recipe_and_read_only_default(self):
+        import json
+        from unittest.mock import patch
+        recipes = Path(p.__file__).resolve().parents[1] / "data/netfx481/recipes"
+        entries = list(recipes.glob("*.json"))
+        self.assertEqual(len(entries), 1)
+        value = json.loads(entries[0].read_text())
+        self.assertTrue(p.valid_recipe(value, value["source_sha256"], entries[0].stem))
+        self.assertEqual(len(value["selectors"]), 56)
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "basis").write_bytes(b"source")
+            (root / "delta").write_bytes(b"patch")
+            (root / "reference").write_bytes(b"result")
+            with patch.object(p.subprocess, "run") as process:
+                self.assertFalse(p.replay_or_synthesize_recipe(
+                    root / "helper", root / "basis", root / "delta", root / "output",
+                    6, root / "reference", root, root))
+                process.assert_not_called()
+
+    def test_complete_gate_rejects_partial_or_different_tree(self):
+        from scripts.netfx481_native_delta_gate import EXPECTED_TREE_SHA256, require_complete
+        report = dict(catalog_verified=True, ipd_cabs=1, cix_entries=2446,
+                      cix_reconstructed=2446, cix_tree_sha256=EXPECTED_TREE_SHA256,
+                      oracle_available=True, cix_oracle_matches=2446)
+        for key in ("cix_delta_failed", "cix_basis_blocked", "cix_unresolved",
+                    "cix_unsupported", "cix_missing_source", "cix_size_mismatch",
+                    "cix_oracle_mismatches", "cix_oracle_missing"):
+            report[key] = 0
+        require_complete(report, windows_oracle=True)
+        for update in ({"cix_reconstructed": 2445}, {"cix_tree_sha256": "0" * 64},
+                       {"cix_basis_blocked": 1}, {"cix_oracle_matches": 2445}):
+            with self.assertRaises(ValueError):
+                require_complete(dict(report, **update), windows_oracle=True)
