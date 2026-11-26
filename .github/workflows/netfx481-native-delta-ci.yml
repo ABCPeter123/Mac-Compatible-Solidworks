@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'scripts/netfx481_native_delta.py'
+      - 'scripts/netfx481_cix_graph.py'
       - 'tests/test_netfx481_native_delta.py'
       - '.github/workflows/netfx481-native-delta-ci.yml'
   workflow_dispatch:
