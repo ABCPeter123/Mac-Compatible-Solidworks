@@ -1,7 +1,7 @@
 """Tests for the dry-run-only WUSA integration."""
 from pathlib import Path
 import unittest
-from scripts.patch_wusa_ipd_dryrun import patch_main, OLD_IPD, OLD_INSTALL, git_blob
+from scripts.patch_wusa_ipd_dryrun import patch_main, OLD_IPD, OLD_INSTALL, OLD_DWORD, git_blob
 from scripts.netfx481_ipd_wusa_dryrun import parse_packet, CATEGORIES
 
 
@@ -9,13 +9,20 @@ class WusaDryRunTests(unittest.TestCase):
     def test_patch_removes_apply_and_preserves_dryrun(self):
         fixture = "\n".join(["WINE_DEFAULT_DEBUG_CHANNEL(wusa);", OLD_IPD,
                              "    HKEY root, subkey;", "    install_updates(state, TRUE);",
-                             OLD_INSTALL, "static void restart_as_x86_64(void)",
+                             OLD_INSTALL, "static BOOL install_registry_dword(", OLD_DWORD,
+                             "    if (!(output = malloc(length))) return NULL;",
+                             "        *p++ = wcstoul(number, 0, 16);",
+                             "static void restart_as_x86_64(void)",
                              "int __cdecl wmain(int argc, WCHAR *argv[])"])
         modified = patch_main(fixture)
         self.assertIn("temp_path = swcompat_stage;", modified)
         self.assertIn("install_updates(state, TRUE)", modified)
         self.assertNotIn("install_updates(state, FALSE)", modified)
         self.assertNotIn("restart_as_x86_64", modified)
+        self.assertIn("swcompat_parse_dword(registrykv->value, &value)", modified)
+        self.assertNotIn("wcstoul(registrykv->value_type", modified)
+        self.assertIn("swcompat_hex_digit(number[0]) < 0", modified)
+        self.assertIn("swcompat_numeric_selftest()", modified)
         with self.assertRaises(ValueError):
             patch_main(modified)
 
