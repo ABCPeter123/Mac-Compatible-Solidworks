@@ -96,6 +96,10 @@ jobs:
         with:
           name: pa30-algorithm-recipe-metadata
           path: build/pa30-recipes
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-delta-allowlisted-result-windows-2025
+          path: build/windows-reference
       - name: Install native macOS CAB reader
         run: brew install sevenzip
       - name: Download original pinned Microsoft update and exercise native decompression on macOS
@@ -113,7 +117,26 @@ jobs:
             --codec "$RUNNER_TEMP/swcompat-msdelta-source/target/release/ms-delta" \
             --verified-codec "$RUNNER_TEMP/swcompat-msdelta-source/target/release/swcompat-verified-delta" \
             --recipe-dir build/pa30-recipes --output build/netfx481-native-delta.json
+      - name: Require complete tree and byte-for-byte Windows equivalence
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          win = json.loads(Path("build/windows-reference/netfx481-native-delta.json").read_text())
+          mac = json.loads(Path("build/netfx481-native-delta.json").read_text())
+          for report in (win, mac):
+              assert report["catalog_verified"] is True and report["ipd_cabs"] == 1
+              assert report["cix_entries"] == report["cix_reconstructed"] == 2446, "Incomplete IPD reconstruction"
+              for key in ("cix_delta_failed", "cix_basis_blocked", "cix_unresolved", "cix_unsupported", "cix_missing_source", "cix_size_mismatch"):
+                  assert report[key] == 0, key
+          assert win["cix_oracle_matches"] == 2446
+          assert win["cix_oracle_mismatches"] == win["cix_oracle_missing"] == 0
+          assert win["cix_tree_sha256"] == mac["cix_tree_sha256"], "Platform tree mismatch"
+          print("Verified 2446/2446 identical reconstructed CIX files on Windows and Apple Silicon")
+          PY
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: native-delta-allowlisted-result-macos-15
           path: build/netfx481-native-delta.json
