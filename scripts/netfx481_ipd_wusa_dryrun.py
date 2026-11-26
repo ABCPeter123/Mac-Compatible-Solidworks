@@ -71,6 +71,20 @@ def inspect(wine: Path, prefix: Path, fixture: Path, package: Path,
     env = os.environ.copy()
     env.update(WINEPREFIX=str(prefix.resolve()), WINEARCH="win64", WINEDEBUG="-all")
     env.pop("WINEDLLOVERRIDES", None)
+    # Exercise the compiled numeric parser on the real Wine runtime before
+    # trusting the dependency report. Neither self-test nor probe may install.
+    with tempfile.TemporaryFile() as test_out:
+        try:
+            control = subprocess.run([str(wine.resolve(strict=True)), str(fixture.resolve(strict=True)),
+                                      "--selftest"], env=env, cwd=prefix,
+                                     stdin=subprocess.DEVNULL, stdout=test_out,
+                                     stderr=subprocess.DEVNULL, timeout=60, check=False)
+            test_out.seek(0)
+            if control.returncode != 0 or test_out.read(256).strip() != b"SWCOMPAT_WUSA_REGISTRY_SELFTEST=PASS":
+                raise ValueError("Native WUSA numeric parser control rejected")
+        except (OSError, subprocess.TimeoutExpired):
+            raise ValueError("Native WUSA numeric parser control failed") from None
+    print("WUSA native numeric registry parser selftest PASS")
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
         try:
             result = subprocess.run([str(wine.resolve(strict=True)), str(fixture.resolve(strict=True)),
