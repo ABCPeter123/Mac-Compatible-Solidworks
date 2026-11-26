@@ -92,10 +92,36 @@ class CixGraphTests(unittest.TestCase):
                 self.assertIn("--source", command)
                 self.assertEqual(Path(command[command.index("--source") + 1]).read_bytes(), b"base")
                 Path(command[command.index("--output") + 1]).write_bytes(b"new!")
-                return True
-            with patch.object(p, "run_private", side_effect=fake):
+                return True, "OTHER"
+            with patch.object(p, "observe_decoder", side_effect=fake):
                 report = p.reconstruct(root / "ms-delta", raw, list(raw.iterdir()), work, oracle)
             self.assertEqual(report["cix_reconstructed"], 2)
             self.assertEqual(report["cix_delta_reconstructed"], 1)
             self.assertEqual(report["cix_oracle_matches"], 2)
             self.assertEqual(report["cix_oracle_mismatches"], 0)
+
+
+    def test_null_source_retry_is_explicit_and_error_classes_safe(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            raw, work = (root / x for x in ("raw", "work"))
+            raw.mkdir()
+            work.mkdir()
+            (raw / "_manifest_.cix.xml").write_text(
+                '<Container><File id="1" name="target.dll" length="4"><Delta>'
+                '<Source type="PA30" name="0"/></Delta></File></Container>')
+            (raw / "0").write_bytes(b"PA30fixture")
+            def fake(command, cwd, timeout):
+                if "--source" not in command:
+                    return False, "INVALID"
+                self.assertEqual(Path(command[command.index("--source") + 1]).read_bytes(), b"")
+                Path(command[command.index("--output") + 1]).write_bytes(b"new!")
+                return True, "OTHER"
+            with patch.object(p, "observe_decoder", side_effect=fake):
+                report = p.reconstruct(root / "ms-delta", raw, list(raw.iterdir()), work, None)
+            self.assertEqual(report["cix_empty_source_recovered"], 1)
+            self.assertEqual(report["cix_delta_reconstructed"], 1)
+        self.assertEqual(p.classify_decoder_error(b"unsupported delta at PRIVATE"), "UNSUPPORTED")
+        self.assertEqual(p.classify_decoder_error(b"delta integrity check failed: PRIVATE"), "INTEGRITY")
+        self.assertEqual(p.classify_decoder_error(b"unexpected argument PRIVATE"), "CLI_USAGE")
+        self.assertEqual(p.classify_decoder_error(b"PRIVATE"), "OTHER")
