@@ -1,0 +1,11 @@
+# Native KB5011048 IPD reconstruction
+
+The original Microsoft .NET Framework 4.8.1 catalog update contains an IPD CIX cabinet with 2,446 logical files. CI run [45848826050](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/45848826050) reconstructed all files on Windows and Apple Silicon. Windows Expand independently matched every file; both reconstructed trees produced SHA-256 `2f492b8e9cded7ca527860190fc7b6caa9ac25f86ebd6d521efd0dcaa429010b`.
+
+The portable decoder uses the pinned MIT ms-delta source and a bounded local PA30 compatibility adapter. Four difficult deltas were recovered by intrinsic-hash-verified operand variants. The final delta required 56 algorithm selectors synthesized against the native Windows reference. The checked-in selector JSON is bound to the source and patch SHA-256, contains no original binary payload, and requires the original target hash before returning bytes. This is a package-specific compatibility correction, not a claim of general MSDelta compatibility.
+
+The regular Mac path uses the checked-in recipe and does not call Windows or synthesize recipes. Windows remains an independent regression oracle. Explicit research-only synthesis requires Windows Expand and a separate writable recipe directory. The complete-tree gate is mandatory for this exact package.
+
+## Scope
+
+This milestone proves decompression, not installation. The current inspector keeps reconstructed files in a temporary private directory and removes them at exit. The next integration must safely materialize the original manifest paths for Wine servicing, retain the original package/catalog integrity and independently verify restarted native .NET 4.8.1. No SOLIDWORKS installation is claimed.
