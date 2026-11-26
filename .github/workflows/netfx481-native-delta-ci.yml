@@ -15,12 +15,8 @@ concurrency:
   group: native-ipd-decoder-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  decode:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-2025, macos-15]
-    runs-on: ${{ matrix.os }}
+  decode-windows:
+    runs-on: windows-2025
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -42,11 +38,67 @@ jobs:
           cp probes/swcompat_verified_delta.rs "$RUNNER_TEMP/swcompat-msdelta-source/src/bin/swcompat-verified-delta.rs"
           cargo +stable build --manifest-path "$RUNNER_TEMP/swcompat-msdelta-source/Cargo.toml" --locked --release --features cli --bin ms-delta --bin swcompat-verified-delta
           cargo +stable test --manifest-path "$RUNNER_TEMP/swcompat-msdelta-source/Cargo.toml" --locked --release --features cli --lib swcompat_provenance_tests
+      - name: Compare genuine portable reconstruction with native Windows IPD Expand oracle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force build, build/pa30-recipes | Out-Null
+          Set-Content -LiteralPath build/pa30-recipes/schema.txt -Value 'swcompat-rip-recipe-v1' -Encoding ascii
+          $msu = Join-Path (Resolve-Path build) "KB5011048.msu"
+          try {
+            curl.exe --fail --location --retry 3 --max-time 600 --output $msu "https://catalog.s.download.windowsupdate.com/c/msdownload/update/software/ftpk/2023/09/windows10.0-kb5011048-x64_411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e.msu"
+            if ($LASTEXITCODE -ne 0 -or (Get-Item -LiteralPath $msu).Length -ne 71059034) { throw "Catalog download failed" }
+            if ((Get-FileHash -LiteralPath $msu -Algorithm SHA1).Hash.ToLowerInvariant() -ne "411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e") { throw "Original package identity mismatch" }
+            (Get-FileHash -LiteralPath $msu -Algorithm SHA256).Hash.ToLowerInvariant() |
+              Set-Content -LiteralPath build/netfx481-catalog.sha256 -NoNewline -Encoding ascii
+            python -m scripts.netfx481_native_delta --package $msu --sha256-file build/netfx481-catalog.sha256 --sevenzip (Join-Path $env:ProgramFiles "7-Zip\7z.exe") --codec (Join-Path $env:RUNNER_TEMP "swcompat-msdelta-source\target\release\ms-delta.exe") --expand (Join-Path $env:WINDIR "System32\expand.exe") --verified-codec (Join-Path $env:RUNNER_TEMP "swcompat-msdelta-source\target\release\swcompat-verified-delta.exe") --recipe-dir build/pa30-recipes --output build/netfx481-native-delta.json
+            if ($LASTEXITCODE -ne 0) { throw "Native delta reference failed" }
+          } finally {
+            if (Test-Path -LiteralPath $msu) { Remove-Item -LiteralPath $msu }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-delta-allowlisted-result-windows-2025
+          path: build/netfx481-native-delta.json
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 3 || 7 }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pa30-algorithm-recipe-metadata
+          path: build/pa30-recipes/
+          if-no-files-found: error
+          retention-days: 3
+  decode-macos:
+    needs: decode-windows
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test bounded decoder adapter
+        run: python -m unittest discover -s tests -p test_netfx481_native_delta.py -v
+      - name: Build pinned MSDelta CLI and intrinsic-hash compatibility adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup update stable
+          git clone --filter=blob:none --no-checkout https://github.com/CaddyGlow/ms-delta.git "$RUNNER_TEMP/swcompat-msdelta-source"
+          git -C "$RUNNER_TEMP/swcompat-msdelta-source" checkout --detach 6f25d63e8a8573015feb2f6a3d3f98861edbb22c
+          test "$(git -C "$RUNNER_TEMP/swcompat-msdelta-source" rev-parse HEAD)" = 6f25d63e8a8573015feb2f6a3d3f98861edbb22c
+          python -m scripts.patch_msdelta_compat "$RUNNER_TEMP/swcompat-msdelta-source/src/pa30.rs"
+          mkdir -p "$RUNNER_TEMP/swcompat-msdelta-source/src/bin"
+          cp probes/swcompat_verified_delta.rs "$RUNNER_TEMP/swcompat-msdelta-source/src/bin/swcompat-verified-delta.rs"
+          cargo +stable build --manifest-path "$RUNNER_TEMP/swcompat-msdelta-source/Cargo.toml" --locked --release --features cli --bin ms-delta --bin swcompat-verified-delta
+          cargo +stable test --manifest-path "$RUNNER_TEMP/swcompat-msdelta-source/Cargo.toml" --locked --release --features cli --lib swcompat_provenance_tests
+      - uses: actions/download-artifact@v4
+        with:
+          name: pa30-algorithm-recipe-metadata
+          path: build/pa30-recipes
       - name: Install native macOS CAB reader
-        if: runner.os == 'macOS'
         run: brew install sevenzip
       - name: Download original pinned Microsoft update and exercise native decompression on macOS
-        if: runner.os == 'macOS'
         shell: bash
         run: |
           set -euo pipefail
@@ -60,28 +112,10 @@ jobs:
             --sevenzip "$(realpath "$(command -v 7zz)")" \
             --codec "$RUNNER_TEMP/swcompat-msdelta-source/target/release/ms-delta" \
             --verified-codec "$RUNNER_TEMP/swcompat-msdelta-source/target/release/swcompat-verified-delta" \
-            --output build/netfx481-native-delta.json
-      - name: Compare genuine portable reconstruction with native Windows IPD Expand oracle
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Force build | Out-Null
-          $msu = Join-Path (Resolve-Path build) "KB5011048.msu"
-          try {
-            curl.exe --fail --location --retry 3 --max-time 600 --output $msu "https://catalog.s.download.windowsupdate.com/c/msdownload/update/software/ftpk/2023/09/windows10.0-kb5011048-x64_411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e.msu"
-            if ($LASTEXITCODE -ne 0 -or (Get-Item -LiteralPath $msu).Length -ne 71059034) { throw "Catalog download failed" }
-            if ((Get-FileHash -LiteralPath $msu -Algorithm SHA1).Hash.ToLowerInvariant() -ne "411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e") { throw "Original package identity mismatch" }
-            (Get-FileHash -LiteralPath $msu -Algorithm SHA256).Hash.ToLowerInvariant() |
-              Set-Content -LiteralPath build/netfx481-catalog.sha256 -NoNewline -Encoding ascii
-            python -m scripts.netfx481_native_delta --package $msu --sha256-file build/netfx481-catalog.sha256 --sevenzip (Join-Path $env:ProgramFiles "7-Zip\7z.exe") --codec (Join-Path $env:RUNNER_TEMP "swcompat-msdelta-source\target\release\ms-delta.exe") --expand (Join-Path $env:WINDIR "System32\expand.exe") --verified-codec (Join-Path $env:RUNNER_TEMP "swcompat-msdelta-source\target\release\swcompat-verified-delta.exe") --output build/netfx481-native-delta.json
-            if ($LASTEXITCODE -ne 0) { throw "Native delta reference failed" }
-          } finally {
-            if (Test-Path -LiteralPath $msu) { Remove-Item -LiteralPath $msu }
-          }
+            --recipe-dir build/pa30-recipes --output build/netfx481-native-delta.json
       - uses: actions/upload-artifact@v4
         with:
-          name: native-delta-allowlisted-result-${{ matrix.os }}
+          name: native-delta-allowlisted-result-macos-15
           path: build/netfx481-native-delta.json
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 3 || 7 }}
