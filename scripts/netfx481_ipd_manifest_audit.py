@@ -88,6 +88,11 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
     expression_tokens = Counter()
     dep_kinds = defaultdict(Counter)
     absent_names = Counter()
+    absent_arch = Counter()
+    absent_language = Counter()
+    absent_versions = Counter()
+    file_shapes = Counter()
+    empty_shapes = Counter()
     basenames = defaultdict(list)
     for key in members:
         basenames[key.rsplit("/", 1)[-1]].append(key)
@@ -146,6 +151,13 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
                 counts["file_operations"] += 1
                 source = element.get("sourceName")
                 target = element.get("destinationPath")
+                for field, value in (("source", source), ("name", element.get("name"))):
+                    if value and ("/" in value or "\\" in value):
+                        file_shapes[field + "_relative_path"] += 1
+                    if value and value.endswith((".", " ")):
+                        file_shapes[field + "_trailing_dot_space"] += 1
+                    if value and any(c in value for c in '<>"|?*:'):
+                        file_shapes[field + "_invalid_character"] += 1
                 if not source:
                     counts["missing_source_name"] += 1
                 else:
@@ -190,6 +202,9 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
                                 # Only bounded public CBS runtime identifiers,
                                 # never registry strings or their values.
                                 token = expr.casefold()
+                                if token == "assembly.empty":
+                                    empty_shapes["whole_value" if val.casefold() == "$(assembly.empty)" else "embedded"] += 1
+                                    empty_shapes[typ] += 1
                                 expression_tokens[token if re.fullmatch(r"[a-z][a-z0-9_.-]{0,79}", token) else "other"] += 1
     for assembly in assemblies:
         for ref in assembly.deps:
@@ -204,6 +219,9 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
                 counts["dependency_version_only"] += 1
             else:
                 counts["dependency_absent"] += 1
+                absent_arch[ref[1] if ref[1] in {"amd64", "x86", "wow64", "msil", "neutral", "arm64", "*"} else "other"] += 1
+                absent_language[ref[2] if re.fullmatch(r"[a-z0-9*-]{1,20}", ref[2]) else "other"] += 1
+                absent_versions[ref[4] if re.fullmatch(r"[0-9.]{1,32}|\*", ref[4]) else "other"] += 1
                 for kind in dep_kinds[(assembly.identity, ref)]:
                     counts["absent_" + kind] += 1
                 # Public Windows assembly identifiers, not arbitrary XML,
@@ -252,6 +270,11 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
             "missing_dependency_categories": dict(sorted(missing_dependencies.items())),
             "absent_dependency_kinds": {k: counts["absent_" + k] for k in ("install", "prerequisite", "unspecified", "package_component")},
             "absent_public_assembly_names": dict(sorted(absent_names.items())),
+            "absent_architectures": dict(sorted(absent_arch.items())),
+            "absent_languages": dict(sorted(absent_language.items())),
+            "absent_versions": dict(sorted(absent_versions.items())),
+            "file_name_shapes": dict(sorted(file_shapes.items())),
+            "assembly_empty_shapes": dict(sorted(empty_shapes.items())),
             "unknown_runtime_tokens": dict(sorted(expression_tokens.items())),
             "reachable": dict(sorted(reachable.items())),
             "servicing_performed": False}
