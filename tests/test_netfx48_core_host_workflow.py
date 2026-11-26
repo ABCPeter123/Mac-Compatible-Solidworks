@@ -36,11 +36,11 @@ class Original48CoreWorkflowTests(unittest.TestCase):
         self.assertIn("payload_path.is_file() == payload_requested", source)
         self.assertIn('assert r["framework48_installed"] is False', source)
         self.assertIn('assert r["framework481_installed"] is False', source)
-        self.assertIn("if: '!inputs.host_provenance_only'", source)
+        self.assertIn("if: '!inputs.host_provenance_only && !inputs.try_481_catalog_wusa'", source)
         self.assertIn(
             "if: inputs.try_48_payload_host && (!inputs.host_provenance_only || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_msi)",
             source)
-        self.assertIn('not host_only and (', source)
+        self.assertIn('not host_only and not catalog_requested and (', source)
 
     def test_no_vendor_original_payloads_in_artifacts(self):
         source = (WORKFLOWS / "netfx40-legacy-ci.yml").read_text()
