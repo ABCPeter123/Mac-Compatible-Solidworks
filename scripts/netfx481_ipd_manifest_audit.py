@@ -92,6 +92,12 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
     version_resource_metadata = Counter()
     version_conflicts = []
     component_metadata = {}
+    ignored_features = Counter()
+    deployment_features = Counter()
+    deployment_attributes = Counter()
+    file_targets = defaultdict(set)
+    runtime_payloads = Counter()
+    release_registry = Counter()
     resource_name_relations = Counter()
     absent_names = Counter()
     absent_arch = Counter()
@@ -132,6 +138,18 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
         parent = name.rsplit(".", 1)[0]
         for element in root:
             tag = local(element.tag)
+            if tag not in {"assemblyIdentity", "dependency", "package", "file",
+                           "registryKeys", "trustInfo", "configuration", "deployment"}:
+                ignored_features[tag if re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_.-]{0,64}", tag) else "other"] += 1
+            if tag in {"deployment", "configuration", "directories"}:
+                for node in element.iter():
+                    feature = local(node.tag)
+                    if re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_.-]{0,64}", feature):
+                        deployment_features[tag + "/" + feature] += 1
+                    for attr in node.attrib:
+                        attr = local(attr)
+                        if re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_.-]{0,64}", attr):
+                            deployment_attributes[feature + "/" + attr] += 1
             features[tag if tag in KNOWN_ROOT_TAGS else "other"] += 1
             if tag == "dependency":
                 for dep in children(element, "dependentAssembly"):
@@ -188,6 +206,15 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
                                         else "ambiguous_source_basename" if options
                                         else "source_basename_absent")
                             missing_files[category] += 1
+                if source and target:
+                    dest_name = element.get("name") or source
+                    normalized = (target.rstrip("\\/") + "\\" + dest_name).replace("/", "\\").casefold()
+                    # Preserve architecture-specific registry and filesystem views.
+                    view = "32" if ident[1] in ("x86", "wow64") else "64"
+                    file_targets[(view, normalized)].add((parent, source.casefold()))
+                    base = dest_name.replace("\\", "/").rsplit("/", 1)[-1].casefold()
+                    if base in ("clr.dll", "mscorlib.dll", "mscoree.dll", "ngen.exe", "servicemodelreg.exe"):
+                        runtime_payloads[view + "/" + base] += 1
                 if not target:
                     counts["missing_destination_path"] += 1
                 else:
@@ -195,6 +222,22 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
                         if expr.casefold() not in WUSA_EXPRESSIONS:
                             counts["unknown_destination_expression"] += 1
             if tag == "registryKeys":
+                for registry_key in element.iter():
+                    if local(registry_key.tag) != "registryKey":
+                        continue
+                    name = registry_key.get("keyName", "").casefold()
+                    if not name.endswith(r"\ndp\v4\full"):
+                        continue
+                    for value in children(registry_key, "registryValue"):
+                        if value.get("name", "").casefold() == "release":
+                            release_registry["release_declarations"] += 1
+                            if value.get("valueType") == "REG_DWORD":
+                                release_registry["release_dword"] += 1
+                                try:
+                                    if int(value.get("value", ""), 16) >= 533320:
+                                        release_registry["release_at_least_481"] += 1
+                                except ValueError:
+                                    release_registry["invalid_release"] += 1
                 for node in element.iter():
                     if local(node.tag) != "registryValue":
                         continue
@@ -328,6 +371,12 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
             "dependency_version_only", "dependency_absent")
     return {"counts": {k: counts[k] for k in keys},
             "root_features": dict(sorted(features.items())),
+            "wine_ignored_root_features": dict(sorted(ignored_features.items())),
+            "deployment_features": dict(sorted(deployment_features.items())),
+            "deployment_attribute_names": dict(sorted(deployment_attributes.items())),
+            "file_destination_collisions": sum(len(v) > 1 for v in file_targets.values()),
+            "runtime_payload_operations": dict(sorted(runtime_payloads.items())),
+            "release_registry": dict(sorted(release_registry.items())),
             "missing_source_categories": dict(sorted(missing_files.items())),
             "missing_dependency_categories": dict(sorted(missing_dependencies.items())),
             "absent_dependency_kinds": {k: counts["absent_" + k] for k in ("install", "prerequisite", "unspecified", "package_component")},
