@@ -201,13 +201,81 @@ def inspect(stage: Path):
     return audit_members(members)
 
 
+def inspect_windows(package: Path, digest: Path, sevenzip: Path, expand: Path):
+    """Use the original Windows Expand oracle directly, avoiding an extra Rust
+    build or dependency on the queued Mac runner. Only the pinned graph is
+    passed to the audit, with its full independently verified tree digest."""
+    import os
+    import tempfile
+    from scripts.netfx481_catalog_wusa import verify_package
+    from scripts.netfx481_servicing_inventory import _invoke_sevenzip, _safe_embedded
+    from scripts.netfx481_native_delta import files, run_private
+    from scripts.netfx481_cix_graph import parse, path_key
+
+    if os.name != "nt" or any(p.is_symlink() for p in (package, digest, sevenzip, expand)):
+        raise ValueError("Native Windows reference audit requires original inputs")
+    package, digest, sevenzip, expand = (p.resolve(strict=True) for p in (package, digest, sevenzip, expand))
+    verify_package(package, digest)
+    with tempfile.TemporaryDirectory(prefix="swcompat-ipd-audit-") as d:
+        root = Path(d)
+        cabs = root / "cabs"
+        cabs.mkdir()
+        state, _ = _invoke_sevenzip(sevenzip, ["x", "-y", "-r", "-o" + str(cabs),
+                                              str(package), "*.cab"], root, timeout=150)
+        packages, partial = _safe_embedded(cabs)
+        if state != "OK" or partial:
+            raise ValueError("Original cabinet extraction failed")
+        result = None
+        for i, cab in enumerate(packages):
+            if cab.suffix.casefold() != ".cab":
+                continue
+            raw = root / f"raw-{i}"
+            raw.mkdir()
+            state, _ = _invoke_sevenzip(sevenzip, ["x", "-y", "-o" + str(raw), str(cab)], root, timeout=150)
+            if state != "OK":
+                raise ValueError("Original inner cabinet extraction failed")
+            matches = [p for p in files(raw) if p.relative_to(raw).as_posix().casefold() == "_manifest_.cix.xml"]
+            if not matches:
+                continue
+            if len(matches) != 1 or result is not None:
+                raise ValueError("Unexpected IPD cabinet count")
+            entries, unsupported = parse(matches[0].read_bytes())
+            if unsupported or len(entries) != EXPECTED_COUNT:
+                raise ValueError("Unexpected CIX graph")
+            expanded = root / "expanded"
+            expanded.mkdir()
+            if not run_private([str(expand), "-F:*", str(cab), str(expanded)], root, 150):
+                raise ValueError("Native Windows IPD expansion failed")
+            index = {}
+            for p in files(expanded):
+                key = path_key(p.relative_to(expanded).as_posix())
+                if key in index:
+                    raise ValueError("Ambiguous Windows reference")
+                index[key] = p
+            members = {e.name: index[e.name] for e in entries.values() if e.name in index}
+            if len(members) != EXPECTED_COUNT or digest_tree(members) != EXPECTED_TREE_SHA256:
+                raise ValueError("Windows reference tree differs from validated CIX tree")
+            result = audit_members(members)
+        if result is None:
+            raise ValueError("Missing original IPD cabinet")
+        return result
+
+
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--stage", required=True, type=Path)
+    p.add_argument("--stage", type=Path)
+    for name in ("package", "sha256-file", "sevenzip", "expand"):
+        p.add_argument("--" + name, type=Path)
     p.add_argument("--output", required=True, type=Path)
     a = p.parse_args()
     if a.output.exists() or a.output.is_symlink():
         raise ValueError("Report must be fresh")
-    report = inspect(a.stage)
+    args = (a.package, a.sha256_file, a.sevenzip, a.expand)
+    if a.stage is not None and not any(args):
+        report = inspect(a.stage)
+    elif a.stage is None and all(args):
+        report = inspect_windows(*args)
+    else:
+        p.error("Choose either verified stage or all four Windows oracle inputs")
     a.output.write_text(json.dumps(report, sort_keys=True), encoding="ascii")
     print("Verified IPD manifest audit", json.dumps(report, sort_keys=True))
