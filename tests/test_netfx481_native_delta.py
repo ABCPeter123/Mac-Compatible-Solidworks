@@ -125,3 +125,49 @@ class CixGraphTests(unittest.TestCase):
         self.assertEqual(p.classify_decoder_error(b"delta integrity check failed: PRIVATE"), "INTEGRITY")
         self.assertEqual(p.classify_decoder_error(b"unexpected argument PRIVATE"), "CLI_USAGE")
         self.assertEqual(p.classify_decoder_error(b"PRIVATE"), "OTHER")
+
+
+    def test_debug_error_variants_and_exact_reason(self):
+        for raw, expected in (
+            (b'Error: Integrity("PA30 target hash mismatch")', "TARGET_HASH"),
+            (b'Error: Unsupported("PA30 target hash algorithm")', "HASH_ALGORITHM"),
+            (b'Error: Limit("PA30 parameter memory")', "PARAMETER_LIMIT"),
+            (b'Error: Invalid("unknown")', "INVALID"),
+            (b'Error: Unsupported("PA30 unknown transform flag")', "TRANSFORM"),
+            (b'Error: Io(Os { code: 2 })', "IO"),
+        ):
+            self.assertEqual(p.classify_decoder_error(raw), expected)
+
+    def test_external_verifier_requires_exact_independent_reference(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            raw, work, oracle = (root / x for x in ("raw", "work", "oracle"))
+            for x in (raw, work, oracle):
+                x.mkdir()
+            (raw / "_manifest_.cix.xml").write_text(
+                '<Container><File id="1" name="target.dll" length="4"><Delta>'
+                '<Source type="PA30" name="0"/></Delta></File></Container>')
+            (raw / "0").write_bytes(b"PA30fixture")
+            (oracle / "target.dll").write_bytes(b"new!")
+            helper = root / "swcompat-verified-delta"
+
+            def decode(command, cwd, timeout):
+                self.assertEqual(Path(command[0]), helper)
+                self.assertEqual(Path(command[1]).read_bytes(), b"")
+                self.assertEqual(command[-2:], ["4", hashlib.sha256(b"new!").hexdigest()])
+                Path(command[3]).write_bytes(b"new!")
+                return True
+            with patch.object(p, "observe_decoder", return_value=(False, "HASH_ALGORITHM")), patch.object(p, "run_private", side_effect=decode):
+                report = p.reconstruct(root / "ms-delta", raw, list(raw.iterdir()), work, oracle, helper)
+            self.assertEqual(report["cix_external_hash_recovered"], 1)
+            self.assertEqual(report["cix_oracle_matches"], 1)
+
+            # An intrinsic digest mismatch must not be routed to the helper.
+            work2 = root / "work2"
+            work2.mkdir()
+            with patch.object(p, "observe_decoder", return_value=(False, "TARGET_HASH")), patch.object(p, "run_private") as fallback, patch.object(p, "native_delta_reference", return_value="MATCH"):
+                report = p.reconstruct(root / "ms-delta", raw, list(raw.iterdir()), work2, oracle, helper)
+            fallback.assert_not_called()
+            self.assertEqual(report["cix_delta_failed"], 1)
+            self.assertEqual(report["cix_external_hash_recovered"], 0)
