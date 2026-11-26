@@ -86,6 +86,8 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
     missing_files = Counter()
     missing_dependencies = Counter()
     expression_tokens = Counter()
+    dep_kinds = defaultdict(Counter)
+    absent_names = Counter()
     basenames = defaultdict(list)
     for key in members:
         basenames[key.rsplit("/", 1)[-1]].append(key)
@@ -124,6 +126,7 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
                         counts["incomplete_dependency_identity"] += 1
                     else:
                         record.deps.append(ref)
+                        dep_kinds[(ident, ref)][dep.get("dependencyType") if dep.get("dependencyType") in {"install", "prerequisite"} else "unspecified"] += 1
             if tag == "package":
                 for update in children(element, "update"):
                     for item in update:
@@ -138,6 +141,7 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
                                 counts["incomplete_dependency_identity"] += 1
                             else:
                                 record.deps.append(ref)
+                                dep_kinds[(ident, ref)]["package_component"] += 1
             if tag == "file":
                 counts["file_operations"] += 1
                 source = element.get("sourceName")
@@ -186,7 +190,7 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
                                 # Only bounded public CBS runtime identifiers,
                                 # never registry strings or their values.
                                 token = expr.casefold()
-                                expression_tokens[token if re.fullmatch(r"runtime\.[a-z0-9_.]{1,64}", token) else "other"] += 1
+                                expression_tokens[token if re.fullmatch(r"[a-z][a-z0-9_.-]{0,79}", token) else "other"] += 1
     for assembly in assemblies:
         for ref in assembly.deps:
             candidates = index.get(ref[0], ())
@@ -200,6 +204,14 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
                 counts["dependency_version_only"] += 1
             else:
                 counts["dependency_absent"] += 1
+                for kind in dep_kinds[(assembly.identity, ref)]:
+                    counts["absent_" + kind] += 1
+                # Public Windows assembly identifiers, not arbitrary XML,
+                # payload bytes, registry values or host file paths.
+                if re.fullmatch(r"microsoft[-.][a-z0-9_.-]{1,115}", ref[0]):
+                    absent_names[ref[0]] += 1
+                else:
+                    absent_names["other"] += 1
                 if candidates:
                     if any(c.identity[1] == ref[1] for c in candidates):
                         missing_dependencies["same_name_arch_identity_mismatch"] += 1
@@ -238,6 +250,8 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
             "root_features": dict(sorted(features.items())),
             "missing_source_categories": dict(sorted(missing_files.items())),
             "missing_dependency_categories": dict(sorted(missing_dependencies.items())),
+            "absent_dependency_kinds": {k: counts["absent_" + k] for k in ("install", "prerequisite", "unspecified", "package_component")},
+            "absent_public_assembly_names": dict(sorted(absent_names.items())),
             "unknown_runtime_tokens": dict(sorted(expression_tokens.items())),
             "reachable": dict(sorted(reachable.items())),
             "servicing_performed": False}
