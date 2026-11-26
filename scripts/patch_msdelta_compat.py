@@ -145,6 +145,27 @@ fn swcompat_trace_copy(source_len: usize, output_len: usize, offset: usize, leng
     });
 }
 
+#[cfg(test)]
+mod swcompat_provenance_tests {
+    use super::*;
+    #[test]
+    fn swcompat_trace_propagates_dictionary_origins() {
+        SWCOMPAT_TRACE.with(|v| v.replace(Some(Vec::new())));
+        swcompat_trace_literal();
+        // Source bytes [2,3], followed by literal origin, then overlap.
+        swcompat_trace_copy(4, 1, 3, 5);
+        let trace = SWCOMPAT_TRACE.with(|v| v.replace(None)).unwrap();
+        assert_eq!(trace, vec![SWCOMPAT_NO_ORIGIN, 2, 3, SWCOMPAT_NO_ORIGIN, 2, 3]);
+    }
+    #[test]
+    fn swcompat_rip_modes_are_bounded_and_distinct() {
+        let modes = swcompat_operand_modes();
+        assert_eq!(modes.len(), 51);
+        assert_eq!(modes.iter().collect::<std::collections::BTreeSet<_>>().len(), modes.len());
+        assert_eq!(&modes[..23], &(1..=23).collect::<Vec<u8>>()[..]);
+    }
+}
+
 /// Private Windows-reference differential. Never returns candidate bytes.
 /// The independent reference must match the original intrinsic digest.
 /// A temporary parsed view suppresses validation solely to count differences
