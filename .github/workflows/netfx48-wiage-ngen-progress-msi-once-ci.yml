@@ -9,6 +9,15 @@ name: One-shot authenticated Wiage .NET 4.8 MSI after progress-drained CLR4 NGen
 # MSI_UNATTRIBUTED_SCRIPT_ENGINE, but no first failing script action;
 # non-final action class UNKNOWN and the NGen/service log hints are noncausal.
 #
+# Run 45690667294 finished genuine signed MSI SUCCESS in the 1200s budget,
+# and actually ran the explicit native reinstall MSP. It still returned
+# Win32 00000643 / 1603 with machine applicability and registered cache.
+# Test one remaining host-side variable: inherit the same 65520 KiB stack
+# used by the verified CLR4 NGen preflight in the actual signed MSI/MSP
+# launch shell. Prior shell's ulimit cannot carry over between CI steps.
+# Wine bug 60281 motivates this controlled Rosetta hypothesis, not a proven fix.
+# Capture exact Wine immediate-sequence, commit, and finalizer categories.
+# Keep authentic media, original commands, 1200s/420s limits and gates strict.
 # Run 45527110314 selected explicit native silent reinstall, but its genuine
 # original x64 MSI timed out after 420s (safely reaped) BEFORE the MSP ran.
 # Keep every other experimental variable fixed. Permit the already bounded
@@ -98,3 +107,4 @@ jobs:
       signed_msi_win10_profile: true
       signed_msp_win32_exit: true
       signed_msp_reinstall: true
+      signed_msi_host_stack64: true
