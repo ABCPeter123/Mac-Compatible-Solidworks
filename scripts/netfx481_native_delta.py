@@ -9,6 +9,7 @@ Never install, publish, or modify Microsoft components or their catalogs.
 from __future__ import annotations
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -128,6 +129,41 @@ def observe_decoder(command: list[str], root: Path, timeout: int) -> tuple[bool,
         return False, classify_decoder_error(log.read(65536))
 
 
+DIFFERENTIAL_FIELDS = frozenset({
+    "file_type", "flags", "different", "runs", "max_run", "near_e8", "near_e9",
+    "source_same", "header", "text", "rdata", "data", "rsrc", "reloc", "unwind", "other"
+})
+
+
+def observe_reference_difference(helper: Path, basis: Path, delta: Path,
+                                 reference: Path, root: Path) -> dict | None:
+    if os.name != "nt":
+        return None
+    with tempfile.TemporaryFile() as log:
+        try:
+            p = subprocess.run([str(helper), "--diagnose", str(basis), str(delta),
+                                str(reference)], cwd=root, stdin=subprocess.DEVNULL,
+                               stdout=log, stderr=subprocess.DEVNULL, timeout=90,
+                               check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if p.returncode:
+            return None
+        log.seek(0)
+        try:
+            r = json.loads(log.read(4097))
+        except (ValueError, UnicodeError):
+            return None
+    if (type(r) is not dict or set(r) != DIFFERENTIAL_FIELDS
+            or any(type(v) is not int or not 0 <= v <= 2**64 - 1 for v in r.values())
+            or r["file_type"] not in {1, 2, 4, 8, 16, 32, 64, 128}
+            or r["different"] > reference.stat().st_size
+            or sum(r[k] for k in ("header", "text", "rdata", "data", "rsrc", "reloc", "unwind", "other")) != r["different"]
+            or any(r[k] > r["different"] for k in ("runs", "max_run", "near_e8", "near_e9", "source_same"))):
+        return None
+    return r
+
+
 def native_delta_reference(raw: bytes, basis: Path | None,
                            expected: Path | None, length: int) -> str:
     """Native Windows ApplyDeltaB check; never retain or use its result as a basis."""
@@ -217,6 +253,7 @@ def reconstruct(codec: Path, raw_dir: Path, extracted: list[Path],
               "cix_empty_source_recovered": 0, "cix_external_hash_recovered": 0,
               "cix_parameter_budget_recovered": 0, "cix_compat_attempted": 0,
               "cix_compat_recovered": 0, "cix_compat_failed": 0,
+              "cix_differential_reports": 0,
               "cix_target_hash_pa30": 0, "cix_target_hash_pa31": 0, "cix_target_hash_pa19": 0,
               **{"cix_error_" + k.lower(): 0 for k in ERROR_CLASSES},
               **{"cix_native_reference_" + k.lower(): 0
@@ -301,6 +338,15 @@ def reconstruct(codec: Path, raw_dir: Path, extracted: list[Path],
                             else:
                                 report["cix_compat_failed"] += 1
                                 ok = False
+                if (not ok and reason == "TARGET_HASH" and e.kind == "PA30"
+                        and expanded and verified_codec is not None):
+                    expected = oracle.get(e.name)
+                    if expected is not None and expected.stat().st_size == e.length:
+                        differential = observe_reference_difference(verified_codec, basis or empty_basis,
+                                                                  delta, expected, work)
+                        if differential is not None:
+                            report["cix_differential_reports"] += 1
+                            print("Native PA30 fixed differential", json.dumps(differential, sort_keys=True))
                 # The upstream verifier API is restricted to CALG_NONE + empty
                 # intrinsic hash. Supply an independent native Windows Expand
                 # digest, never a digest derived from the decoder's own output.
