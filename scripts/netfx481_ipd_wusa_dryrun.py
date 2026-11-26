@@ -24,7 +24,9 @@ CATEGORIES = ("missing_assembly", "missing_file", "expression", "registry_type",
               "unsafe_relative_file_names", "assembly_empty_expansions",
               "exact_dependencies", "version_only_dependencies",
               "absent_resource_prerequisites", "absent_other_dependencies",
-              "neutral_deferred_resources", "neutral_preflight_attempted", "neutral_preflight_passed")
+              "neutral_deferred_resources", "neutral_preflight_attempted", "neutral_preflight_passed",
+              "package_local_wcf_uses", "package_local_trial_attempted",
+              "package_local_graph_passed", "package_local_preflight_passed")
 
 
 def parse_packet(raw: bytes, code: int) -> dict:
