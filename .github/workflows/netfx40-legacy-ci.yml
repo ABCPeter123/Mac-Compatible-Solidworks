@@ -88,6 +88,11 @@ on:
         type: boolean
         required: false
         default: false
+      try_481_after_verified_partial48:
+        description: 'Independent genuine 4.8.1 recovery after native 4.8 MSP 1603; never marks 4.8 complete'
+        type: boolean
+        required: false
+        default: false
       signed_msi_host_stack64:
         description: 'Only isolated native explicit-reinstall signed MSI/MSP: inherit 65520 KiB macOS stack'
         type: boolean
@@ -967,6 +972,12 @@ jobs:
         run: |
           echo "NGen preflight requires a standalone authenticated Wiage signed MSI arm."
           exit 1
+      - name: Reject independent 4.8.1 recovery outside authenticated native MSI arm
+        if: inputs.try_481_after_verified_partial48 && (!inputs.try_48_msi || !inputs.signed_msp_win32_exit || !inputs.signed_msi_win10_profile || inputs.host_provenance_only || inputs.pause_native_ngen_queue || inputs.pause_after_verified_native40_ngen)
+        shell: bash
+        run: |
+          echo "Independent 4.8.1 recovery requires authenticated native MSI arm without queue pause."
+          exit 1
       - name: Reject signed MSI servicing host stack outside native reinstall arm
         if: inputs.signed_msi_host_stack64 && (!inputs.signed_msp_reinstall || !inputs.signed_msp_win32_exit || !inputs.ngen_host_stack64 || inputs.signed_msi_timeout_seconds != 1200)
         shell: bash
@@ -1741,6 +1752,23 @@ jobs:
                   out.write("SWCOMPAT_NATIVE48_READY=yes\n")
           print("Original signed .NET 4.8 MSI and MSP verified:", result["native48_candidate"])
           PY
+      - name: Gate independent genuine 4.8.1 recovery on persistent partial native 4.8
+        if: inputs.try_481_after_verified_partial48 && env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && inputs.try_48_msi
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx40_to_48_signed_msi import validate, eligible_481_recovery
+          report = json.loads(Path("build/netfx40-to-48-signed-msi.json").read_text(encoding="ascii"))
+          assert validate(report)
+          eligible = eligible_481_recovery(report)
+          print("Independent original 4.8.1 recovery eligible:", eligible)
+          if eligible:
+              with open(os.environ["GITHUB_ENV"], "a") as out:
+                  out.write("SWCOMPAT_NATIVE481_RECOVERY=yes\n")
+          PY
       - name: Test pinned Winetricks dotnet48 on existing verified Microsoft 4.0 prefix
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && inputs.try_48_intermediate
         shell: bash
@@ -1784,7 +1812,7 @@ jobs:
           print("Real native Microsoft 4.8 intermediate candidate verified:", r["native48_candidate"])
           PY
       - name: Read disk-space prerequisites on actual persistent native CLR 4.0 prefix
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct && !inputs.try_48_msi) || env.SWCOMPAT_NATIVE48_READY == 'yes')
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct && !inputs.try_48_msi) || env.SWCOMPAT_NATIVE48_READY == 'yes' || env.SWCOMPAT_NATIVE481_RECOVERY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
@@ -1795,7 +1823,7 @@ jobs:
             --output build/netfx481-disk-before-upgrade.json \
             --agree-disposable-prefix
       - name: Select Windows 10 reported version for original Microsoft 4.8.1 upgrade
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct && !inputs.try_48_msi) || env.SWCOMPAT_NATIVE48_READY == 'yes')
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct && !inputs.try_48_msi) || env.SWCOMPAT_NATIVE48_READY == 'yes' || env.SWCOMPAT_NATIVE481_RECOVERY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
@@ -1803,7 +1831,7 @@ jobs:
             --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
             --logs-dir "$RUNNER_TEMP/netfx40-msxml3-logs" set-winver win10
       - name: Upgrade functioning Microsoft .NET 4.x CLR with original Microsoft 4.8.1
-        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct && !inputs.try_48_msi) || env.SWCOMPAT_NATIVE48_READY == 'yes')
+        if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct && !inputs.try_48_msi) || env.SWCOMPAT_NATIVE48_READY == 'yes' || env.SWCOMPAT_NATIVE481_RECOVERY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
@@ -1820,7 +1848,7 @@ jobs:
             --experiment-private-setup-evidence \
             --agree-disposable-prefix
       - name: Restore Windows 11 profile and verify native-only managed CLR
-        if: always() && env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct && !inputs.try_48_msi) || env.SWCOMPAT_NATIVE48_READY == 'yes')
+        if: always() && env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && ((!inputs.try_48_intermediate && !inputs.try_48_direct && !inputs.try_48_msi) || env.SWCOMPAT_NATIVE48_READY == 'yes' || env.SWCOMPAT_NATIVE481_RECOVERY == 'yes')
         shell: bash
         run: |
           set -euo pipefail
@@ -1830,7 +1858,7 @@ jobs:
           python3 - <<'PY'
           import json, os
           from pathlib import Path
-          from scripts.netfx481_trial import probe
+          from scripts.netfx481_trial import probe, wineboot_restart
           from scripts.netfx40_to_481_upgrade import validate
           up = Path("build/netfx40-to-481-upgrade.json")
           if not up.is_file():
@@ -1841,8 +1869,17 @@ jobs:
               wine = Path(os.environ["SWCOMPAT_WINE"])
               prefix = Path(os.environ["RUNNER_TEMP"]) / "netfx40-msxml3-prefix"
               fixture = Path("build/netfx481_runtime_probe.exe").resolve()
+              recovery = os.environ.get("SWCOMPAT_NATIVE481_RECOVERY") == "yes"
+              recovery_restart = False
+              if recovery and original["framework481_confirmed"]:
+                  if original["setup"]["child_lifecycle"] not in {"ALL_EXITED", "NOT_OBSERVED"}:
+                      raise SystemExit("Recovery installer child lifecycle unverified")
+                  recovery_restart = wineboot_restart(wine, prefix, timeout=120) == "COMPLETED"
+                  if not recovery_restart:
+                      raise SystemExit("Independent 4.8.1 recovery did not survive restart")
               actual = probe(wine, prefix, fixture, override="native_only")
               ready = (original["framework481_confirmed"]
+                       and (not recovery or recovery_restart)
                        and actual["registry"] == "AT_LEAST_481"
                        and actual["clr_family"] == "MICROSOFT_CLR_CANDIDATE"
                        and actual["managed"] == "PASS")
@@ -2204,6 +2241,7 @@ jobs:
           SWCOMPAT_DRAIN_NGEN: ${{ inputs.drain_native40_ngen }}
           SWCOMPAT_TRY_40_CORE: ${{ inputs.try_40_core_msi_recovery }}
           SWCOMPAT_CORE_NGEN: ${{ inputs.probe_native40_ngen_if_ready }}
+          SWCOMPAT_TRY_481_RECOVERY: ${{ inputs.try_481_after_verified_partial48 }}
         shell: bash
         run: |
           python3 - <<'PY'
@@ -2365,17 +2403,23 @@ jobs:
                   assert msi_path.is_file() == (msi_required and drain_ready), (
                       "Original signed 4.8 MSI missing despite successful preflight "
                       "or unexpectedly ran after failed native NGen preflight")
+                  recovery_eligible = False
                   if msi_path.is_file():
-                      from scripts.netfx40_to_48_signed_msi import validate as valid_msi
+                      from scripts.netfx40_to_48_signed_msi import validate as valid_msi, eligible_481_recovery
                       msi = json.loads(msi_path.read_text(encoding="ascii"))
                       assert valid_msi(msi)
                       intermediate_ready = msi["native48_candidate"]
+                      recovery_eligible = (
+                          os.environ.get("SWCOMPAT_TRY_481_RECOVERY") == "true"
+                          and eligible_481_recovery(msi))
+                      if recovery_eligible:
+                          assert not intermediate_ready
                   upgrade_path = Path("build/netfx40-to-481-upgrade.json")
                   assert upgrade_path.is_file() == (
                       not host_only and (
                           (not intermediate_required and not direct_required and not msi_required)
-                          or intermediate_ready)), (
-                      "4.8.1 is forbidden in host-only mode and requires verified 4.8 otherwise")
+                          or intermediate_ready or recovery_eligible)), (
+                      "4.8.1 requires verified baseline or independently eligible recovery")
                   if host_only:
                       assert not intermediate_required and not direct_required and not msi_required
                       assert not intermediate_path.is_file() and not direct_path.is_file()
