@@ -189,3 +189,24 @@ class CixGraphTests(unittest.TestCase):
             self.assertEqual(pth.read_text().count("pub fn apply_pa30_compat("), 1)
             with self.assertRaises(ValueError):
                 patch(pth)
+
+
+    def test_amd64_patch_preserves_mode_zero_and_scopes_alternatives(self):
+        from scripts.patch_msdelta_compat import PE_ANCHOR, PE_OLD, PE_NEW, PE_MODE, INSERT, patch_pe
+        self.assertIn("with_swcompat_operand_mode(mode", INSERT)
+        self.assertIn("apply_once(source, &parsed, limits, false)", INSERT)
+        self.assertIn("verify_hash(info, &output)?", INSERT)
+        self.assertIn("mode & 3 != 0", PE_NEW)
+        self.assertIn("mode & 4 != 0", PE_NEW)
+        self.assertIn("mode & 8 != 0", PE_NEW)
+        self.assertIn("struct Restore(u8)", PE_MODE)
+        with tempfile.TemporaryDirectory() as d:
+            pth = Path(d) / "pe.rs"
+            pth.write_text(PE_ANCHOR + "\n" + PE_OLD + "\n}")
+            patch_pe(pth)
+            result = pth.read_text()
+            self.assertIn(PE_NEW, result)
+            self.assertNotIn(PE_OLD, result)
+            self.assertEqual(result.count("static SWCOMPAT_OPERAND_MODE:"), 1)
+            with self.assertRaises(ValueError):
+                patch_pe(pth)
