@@ -132,6 +132,10 @@ def observe_decoder(command: list[str], root: Path, timeout: int) -> tuple[bool,
 DIFFERENTIAL_FIELDS = frozenset({
     "file_type", "flags", "different", "runs", "max_run", "near_e8", "near_e9",
     "best_mode", "best_different",
+    "trace_available", "trace_source_bytes", "trace_literal_bytes", "trace_unique_origins",
+    "trace_conflicting_origins", "trace_origins_used_correctly", "trace_rip_trailing",
+    "trace_rip_lea", "trace_rip_indirect", "trace_rip_vex", "trace_rip_eip", "trace_rip_other",
+    "trace_not_rip",
     "source_same", "header", "text", "rdata", "data", "rsrc", "reloc", "unwind", "other",
     "operand_short_branch", "operand_near_branch", "operand_rip_disp", "operand_other_immediate",
     "operand_other_displacement", "operand_instruction_other", "operand_unclassified"
@@ -165,7 +169,13 @@ def observe_reference_difference(helper: Path, basis: Path, delta: Path,
             or any(r[k] > r["different"] for k in ("runs", "max_run", "near_e8", "near_e9", "source_same"))
             or sum(v for k, v in r.items() if k.startswith("operand_")) != r["different"]
             or r["best_mode"] > 255 or r["best_different"] > r["different"]
-            or (r["best_mode"] == 0 and r["best_different"] != r["different"])):
+            or (r["best_mode"] == 0 and r["best_different"] != r["different"])
+            or r["trace_available"] not in {0, 1}
+            or r["trace_source_bytes"] + r["trace_literal_bytes"] != r["different"] * r["trace_available"]
+            or r["trace_unique_origins"] > r["trace_source_bytes"]
+            or r["trace_conflicting_origins"] > r["trace_unique_origins"]
+            or r["trace_origins_used_correctly"] > r["trace_unique_origins"]
+            or sum(v for k, v in r.items() if k.startswith("trace_rip_") or k == "trace_not_rip") != r["trace_unique_origins"]):
         return None
     return r
 
