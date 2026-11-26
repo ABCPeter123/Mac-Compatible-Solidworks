@@ -1,0 +1,78 @@
+name: Report genuine framework installation run IDs
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netfx481-run-report-ci.yml'
+  workflow_run:
+    workflows:
+      - One-shot authenticated Wiage .NET 4.8 MSI after progress-drained CLR4 NGen
+      - Independent genuine .NET 4.8.1 Windows Update catalog experiment
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  issues: write
+
+concurrency:
+  group: original-netfx481-run-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_run' || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_branch == 'main'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # No checkout, artifact download, installer logs or untrusted code execution.
+      # Infrastructure status is never a framework or CAD compatibility claim.
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const routes = [
+              ["In-place recovery", "netfx48-wiage-ngen-progress-msi-once-ci.yml"],
+              ["Independent catalog WUSA", "netfx481-catalog-wusa-ci.yml"],
+            ];
+            const marker = "<!-- swcompat-netfx481-run-report -->";
+            const lines = [marker, "### Original framework installation run locator", "",
+              "These are GitHub Actions infrastructure outcomes, not evidence of a working .NET 4.8.1 or SOLIDWORKS installation.", ""];
+            for (const [label, workflow_id] of routes) {
+              const response = await github.rest.actions.listWorkflowRuns({
+                owner, repo, workflow_id, branch: "main", per_page: 10
+              });
+              const run = response.data.workflow_runs.find(r =>
+                r.head_repository?.full_name === owner + "/" + repo &&
+                r.head_branch === "main" &&
+                ["push", "workflow_dispatch"].includes(r.event));
+              if (!run) {
+                lines.push("- " + label + ": no matching main-branch run");
+                continue;
+              }
+              if (!Number.isSafeInteger(run.id) || !Number.isSafeInteger(run.run_attempt) ||
+                  !/^[a-f0-9]{40}$/.test(run.head_sha)) {
+                core.setFailed("Unexpected Actions run metadata");
+                return;
+              }
+              const status = ["queued", "in_progress", "completed", "waiting", "pending", "requested"].includes(run.status)
+                ? run.status : "unknown";
+              const conclusion = ["success", "failure", "cancelled", "skipped", "timed_out", "action_required", "neutral", "stale", "startup_failure"].includes(run.conclusion)
+                ? run.conclusion : "not available";
+              lines.push("- " + label + ": [run " + run.id + "](https://github.com/" + owner + "/" + repo + "/actions/runs/" + run.id + "), attempt " + run.run_attempt + ", commit " + run.head_sha.slice(0, 12) + ", " + status + ", conclusion " + conclusion);
+            }
+            lines.push("", "Inspect the actual installer job and independent native-runtime result before making compatibility claims.");
+            const body = lines.join("\n");
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: 115, per_page: 100
+            });
+            const last = comments.reverse().find(c =>
+              c.user?.login === "github-actions[bot]" &&
+              c.body?.startsWith(marker));
+            if (last?.body === body) {
+              core.info("Unchanged installation run locator");
+              return;
+            }
+            await github.rest.issues.createComment({owner, repo, issue_number: 115, body});
+            core.info("Published allowlisted run identifiers to existing issue");
