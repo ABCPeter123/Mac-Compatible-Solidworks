@@ -11,6 +11,18 @@ import argparse
 
 ANCHOR = "fn apply_parsed(source: &[u8], parsed: &Parsed<'_>, limits: &Limits) -> Result<Vec<u8>> {"
 INSERT = r'''
+/// Baseline modes plus specific RIP-relative policies. The previous modes
+/// remain first so the already recovered executable stays reproducible.
+fn swcompat_operand_modes() -> Vec<u8> {
+    let mut modes: Vec<u8> = (1..=23).collect();
+    for policy in 1..=7 {
+        for base in [0, 4, 8, 12] {
+            modes.push((policy << 5) | base);
+        }
+    }
+    modes
+}
+
 /// Experimental compatibility for producer-dependent PE normalization.
 /// The original digest is checked by every attempt; hashless input is refused.
 pub fn apply_pa30_compat(source: &[u8], delta: &[u8], limits: &Limits) -> Result<Vec<u8>> {
@@ -30,7 +42,7 @@ pub fn apply_pa30_compat(source: &[u8], delta: &[u8], limits: &Limits) -> Result
     // The four observed failures are AMD64 .text bytes. Try instruction-
     // granular normalization rather than disabling whole PE transforms.
     if matches!(info.file_type, 8 | 32) && info.flags & 0x200 != 0 {
-        for mode in 1..=23 {
+        for mode in swcompat_operand_modes() {
             let result = pe::with_swcompat_operand_mode(mode, || {
                 apply_once(source, &parsed, limits, false)
             });
@@ -188,7 +200,23 @@ pub fn diagnose_pa30_reference(source: &[u8], delta: &[u8], reference: &[u8],
         if source.get(i) == Some(&actual) { source_same += 1; }
     }
     let operand_counts = pe::swcompat_operand_differential(reference, &candidate);
+    // Measure the closest tested hypothesis using only a scalar mismatch
+    // count. No unchecked reconstruction or offsets are ever exported.
+    let mut best = different;
+    let mut best_mode = 0u8;
+    if matches!(info.file_type, 8 | 32) && info.flags & 0x200 != 0 {
+        for mode in swcompat_operand_modes() {
+            if let Ok(trial) = pe::with_swcompat_operand_mode(mode, || {
+                apply_once(source, &diagnostic, limits, true)
+            }) {
+                if trial.len() != reference.len() { continue; }
+                let count = trial.iter().zip(reference).filter(|(a,b)| a != b).count() as u64;
+                if count < best { best = count; best_mode = mode; }
+            }
+        }
+    }
     Ok(serde_json::json!({
+        "best_mode": best_mode, "best_different": best,
         "operand_short_branch": operand_counts[0],
         "operand_near_branch": operand_counts[1],
         "operand_rip_disp": operand_counts[2],
@@ -329,11 +357,44 @@ PE_NEW = r'''            let mode = SWCOMPAT_OPERAND_MODE.with(|v| v.get());
                 else { !is_vex || mode & 4 != 0 };
             if let Some(displacement) = displacement && permitted {
                 let cell = file + position + displacement;
-                let destination = next.wrapping_add(read32(output, cell)?);
-                let base = if mode & 8 != 0 {
-                    mapped(used, here).wrapping_add(size as u32)
-                } else { mapped(used, next) };
-                write32(output, cell, mapped(used, destination).wrapping_sub(base))?;
+                let old = read32(output, cell)?;
+                let rip = instruction.is_ip_rel_memory_operand();
+                let policy = if rip { mode >> 5 } else { 0 };
+                let disp_end = here.wrapping_add(displacement as u32 + 4);
+                let trailing = size.saturating_sub(displacement + 4) as u32;
+                // Native producers can anchor the transform to the end of
+                // the displacement field rather than to the next instruction.
+                // Keep the architectural displacement unchanged if the chosen
+                // producer mapping is identity.
+                let anchor = match policy {
+                    1 | 2 => disp_end,
+                    3 => next.wrapping_sub(1),
+                    4 => here.wrapping_add(displacement as u32),
+                    _ => next,
+                };
+                let destination = match policy {
+                    1 => disp_end.wrapping_add(old),
+                    4 => anchor.wrapping_add(old),
+                    _ => next.wrapping_add(old),
+                };
+                let base = match policy {
+                    2 => mapped(used, disp_end).wrapping_add(trailing),
+                    3 => mapped(used, anchor).wrapping_add(1),
+                    5 => mapped(used, here).wrapping_add(size as u32),
+                    _ if mode & 8 != 0 && policy == 0 => mapped(used, here).wrapping_add(size as u32),
+                    _ => mapped(used, anchor),
+                };
+                let mapped_destination = match policy {
+                    6 => mapped(used, destination.wrapping_sub(1)).wrapping_add(1),
+                    7 => {
+                        // Some PE producers leave RIP operands with a trailing
+                        // immediate unchanged. Near branches are not affected.
+                        if trailing != 0 { position += size; continue; }
+                        mapped(used, destination)
+                    }
+                    _ => mapped(used, destination),
+                };
+                write32(output, cell, mapped_destination.wrapping_sub(base))?;
             }'''
 
 
