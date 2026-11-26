@@ -11,6 +11,73 @@ from scripts.patch_wusa_ipd_dryrun import prepare, replace_once
 
 # A process launched as an apply candidate must explicitly request that mode.
 # The dry-run executable produced by the normal build is unchanged.
+def instrument_writes(main: str) -> str:
+    """Capture only first operation/error and bounded progress counters."""
+    main = replace_once(main, "static BOOL swcompat_apply_completed;",
+        r'''static BOOL swcompat_apply_completed;
+static DWORD swcompat_write_error;
+static unsigned swcompat_write_phase, swcompat_written_files;
+static unsigned swcompat_written_keys, swcompat_written_values, swcompat_written_assemblies;
+
+static void swcompat_write_failure(unsigned phase, DWORD error)
+{
+    if (!swcompat_write_phase)
+    {
+        swcompat_write_phase = phase;
+        swcompat_write_error = error;
+    }
+}
+
+static LONG swcompat_registry_result(LONG result, unsigned phase)
+{
+    if (result) swcompat_write_failure(phase, result);
+    else if (phase == 3) swcompat_written_keys++;
+    else swcompat_written_values++;
+    return result;
+}''')
+    main = replace_once(main, r'''        if (!create_parent_directory(target))
+        {
+            ERR("Failed to create parent directory for %s\n", debugstr_w(target));''',
+        r'''        if (!create_parent_directory(target))
+        {
+            swcompat_write_failure(1, GetLastError());
+            ERR("Failed to create parent directory for %s\n", debugstr_w(target));''')
+    main = replace_once(main, r'''        if (!(ret = CopyFileExW(source, target, NULL, NULL, NULL, 0)))
+        {
+            ERR("Failed to copy %s to %s\n", debugstr_w(source), debugstr_w(target));
+            goto error;
+        }''', r'''        if (!(ret = CopyFileExW(source, target, NULL, NULL, NULL, 0)))
+        {
+            swcompat_write_failure(2, GetLastError());
+            ERR("Failed to copy %s to %s\n", debugstr_w(source), debugstr_w(target));
+            goto error;
+        }
+        swcompat_written_files++;''')
+    for call in (
+        "RegSetValueExW(key, registrykv->name, 0, type, (void *)value, value_size)",
+        "RegSetValueExW(key, registrykv->name, 0, REG_MULTI_SZ, (void *)value, value_size)",
+        "RegSetValueExW(key, registrykv->name, 0, REG_DWORD, (void *)&value, sizeof(value))",
+        "RegSetValueExW(key, registrykv->name, 0, REG_BINARY, value, value_size)",
+        "RegCreateKeyExW(root, path, 0, NULL, 0, sam, NULL, &subkey, NULL)",
+    ):
+        main = replace_once(main, call, "swcompat_registry_result(" + call +
+                            (", 3)" if call.startswith("RegCreate") else ", 4)"))
+    main = replace_once(main, "    assembly->status = ASSEMBLY_STATUS_INSTALLED;",
+                        "    if (!dryrun) swcompat_written_assemblies++;\n"
+                        "    assembly->status = ASSEMBLY_STATUS_INSTALLED;")
+    main = replace_once(main, r'''    printf("SWCOMPAT_IPD_APPLY_SCHEMA=1\n");''',
+        r'''    printf("SWCOMPAT_IPD_APPLY_SCHEMA=2\n");''')
+    main = replace_once(main, r'''    printf("SWCOMPAT_IPD_DRYRUN_SCHEMA=1\n");''',
+        r'''    printf("SWCOMPAT_IPD_APPLY_PHASE=%u\n", swcompat_write_phase);
+    printf("SWCOMPAT_IPD_APPLY_WIN32=%08lX\n", (unsigned long)swcompat_write_error);
+    printf("SWCOMPAT_IPD_APPLY_FILES=%u\n", swcompat_written_files);
+    printf("SWCOMPAT_IPD_APPLY_KEYS=%u\n", swcompat_written_keys);
+    printf("SWCOMPAT_IPD_APPLY_VALUES=%u\n", swcompat_written_values);
+    printf("SWCOMPAT_IPD_APPLY_ASSEMBLIES=%u\n", swcompat_written_assemblies);
+    printf("SWCOMPAT_IPD_DRYRUN_SCHEMA=1\n");''')
+    return main
+
+
 def enable_apply(main: str) -> str:
     main = replace_once(main, "static BOOL swcompat_package_local;",
                         "static BOOL swcompat_package_local;\nstatic BOOL swcompat_apply_requested;\nstatic BOOL swcompat_apply_started;\nstatic BOOL swcompat_apply_completed;")
@@ -61,7 +128,7 @@ def enable_apply(main: str) -> str:
     printf("SWCOMPAT_IPD_DRYRUN_SCHEMA=1\n");''')
     main = replace_once(main, "    return passed ? 0 : 1;",
                         "    return swcompat_apply_completed ? 0 : 1;")
-    return main
+    return instrument_writes(main)
 
 
 def build(source: Path, destination: Path) -> None:
