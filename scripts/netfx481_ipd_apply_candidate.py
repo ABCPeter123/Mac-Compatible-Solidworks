@@ -138,7 +138,11 @@ def inspect(wine: Path, prefix: Path, fixture: Path, package: Path, digest: Path
               "framework481_confirmed": False, "solidworks_compatibility": "NOT_DEMONSTRATED"}
     env = os.environ.copy()
     env.update(WINEPREFIX=str(prefix), WINEARCH="win64", WINEDEBUG="-all")
-    env.pop("WINEDLLOVERRIDES", None)
+    # WUSA's CLSID_DOMDocument parser passed in clean Wine. Winetricks
+    # installs a native MSXML3 override into the persistent CLR4 prefix.
+    # Isolate WUSA's COM parser without changing the prefix's overrides
+    # or the independently measured native CLR baseline.
+    env["WINEDLLOVERRIDES"] = "msxml,msxml2,msxml3,msxml4,msxml6=b"
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
         try:
             run = subprocess.run(
