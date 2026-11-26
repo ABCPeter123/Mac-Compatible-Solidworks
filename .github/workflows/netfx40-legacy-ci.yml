@@ -93,6 +93,11 @@ on:
         type: boolean
         required: false
         default: false
+      try_481_ipd_apply_candidate:
+        description: 'Explicit isolated experimental IPD WUSA transaction; requires native CLR4 and complete package-local preflight'
+        type: boolean
+        required: false
+        default: false
       try_481_after_verified_partial48:
         description: 'Independent genuine 4.8.1 recovery after native 4.8 MSP 1603; never marks 4.8 complete'
         type: boolean
@@ -955,7 +960,7 @@ jobs:
     name: Try genuine .NET 4.0 after msxml3 in a fresh Apple Silicon Wine prefix
     needs: [authentic-netfx40-windows, absolute-path-regressions]
     runs-on: ${{ inputs.use_macos26_runner && 'macos-26' || 'macos-15' }}
-    timeout-minutes: ${{ inputs.signed_msp_reinstall && inputs.signed_msi_timeout_seconds == 1200 && 70 || inputs.progress_gated_native40_ngen && 55 || inputs.try_48_msi && inputs.signed_msi_timeout_seconds == 1200 && 55 || inputs.try_40_core_msi_recovery && inputs.probe_native40_ngen_if_ready && 55 || 35 }}
+    timeout-minutes: ${{ inputs.try_481_ipd_apply_candidate && 65 || inputs.signed_msp_reinstall && inputs.signed_msi_timeout_seconds == 1200 && 70 || inputs.progress_gated_native40_ngen && 55 || inputs.try_48_msi && inputs.signed_msi_timeout_seconds == 1200 && 55 || inputs.try_40_core_msi_recovery && inputs.probe_native40_ngen_if_ready && 55 || 35 }}
     env:
       SWCOMPAT_TRY_48_INTERMEDIATE: ${{ inputs.try_48_intermediate }}
       SWCOMPAT_TRY_48_DIRECT: ${{ inputs.try_48_direct }}
@@ -969,6 +974,9 @@ jobs:
         with:
           name: self-authored-netfx40-probes-and-signed-digests
           path: build
+      - name: Reject IPD apply candidate outside authenticated catalog arm
+        if: inputs.try_481_ipd_apply_candidate && !inputs.try_481_catalog_wusa
+        run: exit 1
       - name: Reject catalog WUSA outside independent native CLR4 trial
         if: inputs.try_481_catalog_wusa && (inputs.host_provenance_only || inputs.try_48_msi || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_payload_host || inputs.try_481_after_verified_partial48 || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner)
         shell: bash
@@ -1876,7 +1884,7 @@ jobs:
             --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
             --logs-dir "$RUNNER_TEMP/netfx40-msxml3-logs" set-winver win10
       - name: Apply original Microsoft catalog KB5011048 through actual Wine WUSA
-        if: inputs.try_481_catalog_wusa && env.SWCOMPAT_NATIVE40_READY == 'yes'
+        if: inputs.try_481_catalog_wusa && !inputs.try_481_ipd_apply_candidate && env.SWCOMPAT_NATIVE40_READY == 'yes'
         shell: bash
         run: |
           set -euo pipefail
@@ -1889,6 +1897,85 @@ jobs:
             --fixture build/netfx481_catalog_wusa.exe --loader build/netfx481_clr_load.exe \
             --managed build/netfx481_runtime_probe.exe --native40-report build/netfx40-msxml3-restart.json \
             --output build/netfx481-catalog-wusa.json
+      - name: Verify private IPD stage and compile independent WUSA candidates
+        if: inputs.try_481_ipd_apply_candidate && env.SWCOMPAT_NATIVE40_READY == 'yes'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p 'test_netfx481_ipd_apply_candidate.py' -v
+          brew install sevenzip mingw-w64
+          git clone --filter=blob:none --no-checkout https://github.com/CaddyGlow/ms-delta.git "$RUNNER_TEMP/swcompat-msdelta-source"
+          git -C "$RUNNER_TEMP/swcompat-msdelta-source" checkout --detach 6f25d63e8a8573015feb2f6a3d3f98861edbb22c
+          test "$(git -C "$RUNNER_TEMP/swcompat-msdelta-source" rev-parse HEAD)" = 6f25d63e8a8573015feb2f6a3d3f98861edbb22c
+          python3 -m scripts.patch_msdelta_compat "$RUNNER_TEMP/swcompat-msdelta-source/src/pa30.rs"
+          mkdir -p "$RUNNER_TEMP/swcompat-msdelta-source/src/bin"
+          cp probes/swcompat_verified_delta.rs "$RUNNER_TEMP/swcompat-msdelta-source/src/bin/swcompat-verified-delta.rs"
+          cargo +stable build --manifest-path "$RUNNER_TEMP/swcompat-msdelta-source/Cargo.toml" --locked --release --features cli --bin ms-delta --bin swcompat-verified-delta
+          python3 -m scripts.netfx481_native_delta \
+            --package build/KB5011048.msu --sha256-file build/netfx481-catalog.sha256 \
+            --sevenzip "$(realpath "$(command -v 7zz)")" \
+            --codec "$RUNNER_TEMP/swcompat-msdelta-source/target/release/ms-delta" \
+            --verified-codec "$RUNNER_TEMP/swcompat-msdelta-source/target/release/swcompat-verified-delta" \
+            --recipe-dir data/netfx481/recipes --stage-dir "$RUNNER_TEMP/netfx481-ipd-stage" \
+            --output build/netfx481-native-delta.json
+          python3 -m scripts.netfx481_native_delta_gate build/netfx481-native-delta.json
+          src="$RUNNER_TEMP/wusa-original"
+          mkdir -p "$src/wine"
+          base=https://raw.githubusercontent.com/wine-mirror/wine/wine-11.13
+          for name in main.c manifest.c wusa.h; do
+            curl --fail --location --retry 4 --retry-all-errors --max-time 60 --output "$src/$name" "$base/programs/wusa/$name"
+          done
+          curl --fail --location --retry 4 --retry-all-errors --max-time 60 --output "$src/wine/list.h" "$base/include/wine/list.h"
+          python3 -m scripts.patch_wusa_ipd_dryrun "$src" "$RUNNER_TEMP/wusa-ipd-dryrun"
+          python3 -m scripts.patch_wusa_ipd_apply_candidate "$src" "$RUNNER_TEMP/wusa-ipd-apply-candidate"
+          for mode in dryrun apply-candidate; do
+            dst="$RUNNER_TEMP/wusa-ipd-$mode"
+            x86_64-w64-mingw32-gcc -std=gnu11 -O2 -municode -mconsole -static -D_WIN32_WINNT=0x0601 \
+              -I"$dst" "$dst/main.c" "$dst/manifest.c" \
+              -o "$RUNNER_TEMP/swcompat-wusa-ipd-$mode.exe" \
+              -lcabinet -lshlwapi -lole32 -loleaut32 -ladvapi32 -lshell32 -luuid
+          done
+      - name: Run independent read-only preflight on actual persistent native CLR4
+        if: inputs.try_481_ipd_apply_candidate && env.SWCOMPAT_NATIVE40_READY == 'yes'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --logs-dir "$RUNNER_TEMP/netfx40-msxml3-logs" set-winver win10
+          python3 -m scripts.netfx481_ipd_wusa_dryrun \
+            --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --fixture "$RUNNER_TEMP/swcompat-wusa-ipd-dryrun.exe" \
+            --package build/KB5011048.msu --sha256-file build/netfx481-catalog.sha256 \
+            --stage "$RUNNER_TEMP/netfx481-ipd-stage" --output build/netfx481-ipd-wusa-dryrun.json
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx481_ipd_apply_candidate import preflight_ready
+          ready = preflight_ready(json.loads(Path("build/netfx481-ipd-wusa-dryrun.json").read_text()))
+          print("Authenticated native CLR4 package-local preflight ready:", ready)
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write("SWCOMPAT_IPD_APPLY_READY=" + ("yes" if ready else "no") + "\n")
+          PY
+      - name: Attempt gated original-payload IPD servicing and verify native CLR after restart
+        if: inputs.try_481_ipd_apply_candidate && env.SWCOMPAT_NATIVE40_READY == 'yes' && env.SWCOMPAT_IPD_APPLY_READY == 'yes'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx481_ipd_apply_candidate \
+            --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --fixture "$RUNNER_TEMP/swcompat-wusa-ipd-apply-candidate.exe" \
+            --package build/KB5011048.msu --sha256-file build/netfx481-catalog.sha256 \
+            --stage "$RUNNER_TEMP/netfx481-ipd-stage" \
+            --loader build/netfx481_clr_load.exe --managed build/netfx481_runtime_probe.exe \
+            --native40-report build/netfx40-msxml3-restart.json \
+            --preflight-report build/netfx481-ipd-wusa-dryrun.json \
+            --output build/netfx481-ipd-apply-candidate.json --agree-disposable-experimental-servicing
+      - name: Remove private IPD staged Microsoft content
+        if: always() && inputs.try_481_ipd_apply_candidate
+        shell: bash
+        run: |
+          rm -rf -- "$RUNNER_TEMP/netfx481-ipd-stage"
+          rm -f -- build/KB5011048.msu
       - name: Upgrade functioning Microsoft .NET 4.x CLR with original Microsoft 4.8.1
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && !inputs.try_481_catalog_wusa && ((!inputs.try_48_intermediate && !inputs.try_48_direct && !inputs.try_48_msi) || env.SWCOMPAT_NATIVE48_READY == 'yes' || env.SWCOMPAT_NATIVE481_RECOVERY == 'yes')
         shell: bash
@@ -2269,6 +2356,9 @@ jobs:
           name: original-netfx40-after-msxml3-privacy-safe-result
           path: |
             build/netfx40-prefix-readiness.json
+            build/netfx481-native-delta.json
+            build/netfx481-ipd-wusa-dryrun.json
+            build/netfx481-ipd-apply-candidate.json
             build/netfx40-native-ngen-drain.json
             build/netfx40-msxml3-prerequisite.json
             build/netfx40-msxml3-runtime.json
@@ -2303,6 +2393,7 @@ jobs:
           SWCOMPAT_CORE_NGEN: ${{ inputs.probe_native40_ngen_if_ready }}
           SWCOMPAT_TRY_481_RECOVERY: ${{ inputs.try_481_after_verified_partial48 }}
           SWCOMPAT_TRY_CATALOG: ${{ inputs.try_481_catalog_wusa }}
+          SWCOMPAT_TRY_IPD_APPLY: ${{ inputs.try_481_ipd_apply_candidate }}
         shell: bash
         run: |
           python3 - <<'PY'
@@ -2477,7 +2568,22 @@ jobs:
                           assert not intermediate_ready
                   catalog_requested = os.environ.get("SWCOMPAT_TRY_CATALOG") == "true"
                   catalog_path = Path("build/netfx481-catalog-wusa.json")
-                  assert catalog_path.is_file() == (catalog_requested and native40_ready)
+                  ipd_requested = os.environ.get("SWCOMPAT_TRY_IPD_APPLY") == "true"
+                  assert catalog_path.is_file() == (catalog_requested and native40_ready and not ipd_requested)
+                  ipd_preflight = Path("build/netfx481-ipd-wusa-dryrun.json")
+                  ipd_apply = Path("build/netfx481-ipd-apply-candidate.json")
+                  assert ipd_preflight.is_file() == (ipd_requested and native40_ready)
+                  if ipd_preflight.is_file():
+                      from scripts.netfx481_ipd_apply_candidate import preflight_ready
+                      eligible = preflight_ready(json.loads(ipd_preflight.read_text(encoding="ascii")))
+                      assert ipd_apply.is_file() == eligible
+                      if ipd_apply.is_file():
+                          result = json.loads(ipd_apply.read_text(encoding="ascii"))
+                          assert result["experimental"] is True and result["strict_cbs_equivalence"] is False
+                          assert result["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+                          print("Experimental IPD framework confirmed:", result["framework481_confirmed"])
+                  else:
+                      assert not ipd_apply.is_file()
                   if catalog_path.is_file():
                       from scripts.netfx481_catalog_wusa import valid as valid_catalog
                       catalog = json.loads(catalog_path.read_text(encoding="ascii"))
