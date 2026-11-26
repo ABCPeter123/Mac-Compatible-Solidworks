@@ -2419,7 +2419,7 @@ jobs:
                       not host_only and (
                           (not intermediate_required and not direct_required and not msi_required)
                           or intermediate_ready or recovery_eligible)), (
-                      "4.8.1 requires verified baseline or independently eligible recovery")
+                      "4.8.1 is forbidden in host-only mode and requires verified baseline or independently eligible recovery")
                   if host_only:
                       assert not intermediate_required and not direct_required and not msi_required
                       assert not intermediate_path.is_file() and not direct_path.is_file()
