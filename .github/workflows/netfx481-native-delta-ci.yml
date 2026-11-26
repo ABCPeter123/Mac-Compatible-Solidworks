@@ -4,6 +4,7 @@ on:
     paths:
       - 'scripts/netfx481_native_delta.py'
       - 'scripts/netfx481_cix_graph.py'
+      - 'scripts/patch_msdelta_compat.py'
       - 'probes/swcompat_verified_delta.rs'
       - 'tests/test_netfx481_native_delta.py'
       - '.github/workflows/netfx481-native-delta-ci.yml'
@@ -25,23 +26,18 @@ jobs:
           python-version: '3.12'
       - name: Test bounded decoder adapter
         run: python -m unittest discover -s tests -p test_netfx481_native_delta.py -v
-      - name: Build pinned MIT native MSDelta CLI
+      - name: Build pinned MSDelta CLI and intrinsic-hash compatibility adapter
         shell: bash
         run: |
           set -euo pipefail
           rustup update stable
-          cargo +stable install ms-delta --version 0.1.0 --features cli --locked
-      - name: Build verified hashless PA30 adapter from pinned upstream source
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          set -euo pipefail
           git clone --filter=blob:none --no-checkout https://github.com/CaddyGlow/ms-delta.git "$RUNNER_TEMP/swcompat-msdelta-source"
           git -C "$RUNNER_TEMP/swcompat-msdelta-source" checkout --detach 6f25d63e8a8573015feb2f6a3d3f98861edbb22c
           test "$(git -C "$RUNNER_TEMP/swcompat-msdelta-source" rev-parse HEAD)" = 6f25d63e8a8573015feb2f6a3d3f98861edbb22c
+          python -m scripts.patch_msdelta_compat "$RUNNER_TEMP/swcompat-msdelta-source/src/pa30.rs"
           mkdir -p "$RUNNER_TEMP/swcompat-msdelta-source/src/bin"
           cp probes/swcompat_verified_delta.rs "$RUNNER_TEMP/swcompat-msdelta-source/src/bin/swcompat-verified-delta.rs"
-          cargo +stable build --manifest-path "$RUNNER_TEMP/swcompat-msdelta-source/Cargo.toml" --locked --release --bin swcompat-verified-delta
+          cargo +stable build --manifest-path "$RUNNER_TEMP/swcompat-msdelta-source/Cargo.toml" --locked --release --features cli --bin ms-delta --bin swcompat-verified-delta
       - name: Install native macOS CAB reader
         if: runner.os == 'macOS'
         run: brew install sevenzip
@@ -58,7 +54,8 @@ jobs:
           python -m scripts.netfx481_native_delta \
             --package build/KB5011048.msu --sha256-file build/netfx481-catalog.sha256 \
             --sevenzip "$(realpath "$(command -v 7zz)")" \
-            --codec "$(realpath "$(command -v ms-delta)")" \
+            --codec "$RUNNER_TEMP/swcompat-msdelta-source/target/release/ms-delta" \
+            --verified-codec "$RUNNER_TEMP/swcompat-msdelta-source/target/release/swcompat-verified-delta" \
             --output build/netfx481-native-delta.json
       - name: Compare genuine portable reconstruction with native Windows IPD Expand oracle
         if: runner.os == 'Windows'
@@ -73,7 +70,7 @@ jobs:
             if ((Get-FileHash -LiteralPath $msu -Algorithm SHA1).Hash.ToLowerInvariant() -ne "411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e") { throw "Original package identity mismatch" }
             (Get-FileHash -LiteralPath $msu -Algorithm SHA256).Hash.ToLowerInvariant() |
               Set-Content -LiteralPath build/netfx481-catalog.sha256 -NoNewline -Encoding ascii
-            python -m scripts.netfx481_native_delta --package $msu --sha256-file build/netfx481-catalog.sha256 --sevenzip (Join-Path $env:ProgramFiles "7-Zip\7z.exe") --codec (Get-Command ms-delta.exe).Source --expand (Join-Path $env:WINDIR "System32\expand.exe") --verified-codec (Join-Path $env:RUNNER_TEMP "swcompat-msdelta-source\target\release\swcompat-verified-delta.exe") --output build/netfx481-native-delta.json
+            python -m scripts.netfx481_native_delta --package $msu --sha256-file build/netfx481-catalog.sha256 --sevenzip (Join-Path $env:ProgramFiles "7-Zip\7z.exe") --codec (Join-Path $env:RUNNER_TEMP "swcompat-msdelta-source\target\release\ms-delta.exe") --expand (Join-Path $env:WINDIR "System32\expand.exe") --verified-codec (Join-Path $env:RUNNER_TEMP "swcompat-msdelta-source\target\release\swcompat-verified-delta.exe") --output build/netfx481-native-delta.json
             if ($LASTEXITCODE -ne 0) { throw "Native delta reference failed" }
           } finally {
             if (Test-Path -LiteralPath $msu) { Remove-Item -LiteralPath $msu }
