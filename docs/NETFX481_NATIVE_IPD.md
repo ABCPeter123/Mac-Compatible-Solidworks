@@ -9,3 +9,7 @@ The regular Mac path uses the checked-in recipe and does not call Windows or syn
 ## Scope
 
 This milestone proves decompression, not installation. The current inspector keeps reconstructed files in a temporary private directory and removes them at exit. The next integration must safely materialize the original manifest paths for Wine servicing, retain the original package/catalog integrity and independently verify restarted native .NET 4.8.1. No SOLIDWORKS installation is claimed.
+
+## Read-only servicing preflight
+
+PR #278 adds explicit private staging and a separate dry-run-only probe built from Wine 11.13's LGPL WUSA source. The source is pinned by Git blob identity. The host checks the original MSU and the verified complete CIX tree immediately before invoking the probe. The probe substitutes the stage only when Wine's original cabinet scan finds the IPD marker; the original outer update XML and Wine's manifest/dependency processing are retained. The normal installation pass is removed, and only aggregate fixed-category errors are reported. This is not a replacement system WUSA, complete CBS implementation, signature verifier, or proof of a successful install. The current CI tests the pinned Wiage runtime in an isolated macOS 26 prefix, without installing Microsoft .NET or modifying a user prefix. Once the preflight is verified, resolve any actual manifest, dependency, file-path, or registry-expression gaps before allowing any installation trial.
