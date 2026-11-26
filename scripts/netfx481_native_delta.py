@@ -257,7 +257,7 @@ def valid_recipe(value, source_hash: str, patch_hash: str) -> bool:
 
 def replay_or_synthesize_recipe(helper: Path, basis: Path, delta: Path, target: Path,
                                 length: int, expected: Path | None, recipes: Path,
-                                work: Path) -> bool:
+                                work: Path, *, allow_synthesis: bool = False) -> bool:
     source_hash = sha256_file(basis).hex()
     patch_hash = sha256_file(delta).hex()
     recipe = recipes / (patch_hash + ".json")
@@ -265,7 +265,7 @@ def replay_or_synthesize_recipe(helper: Path, basis: Path, delta: Path, target: 
     if recipe.is_symlink():
         return False
     if not recipe.exists():
-        if expected is None or os.name != "nt":
+        if not allow_synthesis or expected is None or os.name != "nt":
             return False
         with tempfile.TemporaryFile() as log:
             try:
@@ -315,7 +315,8 @@ def replay_or_synthesize_recipe(helper: Path, basis: Path, delta: Path, target: 
 def reconstruct(codec: Path, raw_dir: Path, extracted: list[Path],
                 work: Path, expanded: Path | None,
                 verified_codec: Path | None = None,
-                recipe_dir: Path | None = None) -> dict:
+                recipe_dir: Path | None = None,
+                allow_synthesis: bool = False) -> dict:
     """Reconstruct every eligible CIX node with its declared private basis.
 
     Native Windows Expand is an independent oracle, never a source for the
@@ -431,7 +432,8 @@ def reconstruct(codec: Path, raw_dir: Path, extracted: list[Path],
                     expected = oracle.get(e.name) if expanded else None
                     if not expanded or (expected is not None and expected.stat().st_size == e.length):
                         ok = replay_or_synthesize_recipe(verified_codec, basis or empty_basis, delta,
-                                                         target, e.length, expected, recipe_dir, work)
+                                                         target, e.length, expected, recipe_dir, work,
+                                                         allow_synthesis=allow_synthesis)
                         if ok:
                             report["cix_recipe_recovered"] += 1
                 if (not ok and reason == "TARGET_HASH" and e.kind == "PA30"
@@ -505,7 +507,8 @@ def reconstruct(codec: Path, raw_dir: Path, extracted: list[Path],
 def inspect(package: Path, manifest: Path, sevenzip: Path, codec: Path,
             expand: Path | None = None,
             verified_codec: Path | None = None,
-            recipe_dir: Path | None = None) -> dict:
+            recipe_dir: Path | None = None,
+            allow_synthesis: bool = False) -> dict:
     paths = [package, manifest, sevenzip, codec] + ([expand] if expand else [])
     if any(p.is_symlink() for p in paths):
         raise ValueError("Linked inputs prohibited")
@@ -523,6 +526,8 @@ def inspect(package: Path, manifest: Path, sevenzip: Path, codec: Path,
             raise ValueError("Unexpected independent verifier")
     if not codec.is_file() or codec.name.casefold() not in {"ms-delta", "ms-delta.exe"}:
         raise ValueError("Expected pinned portable delta CLI")
+    if allow_synthesis and (not expand or recipe_dir is None or os.name != "nt"):
+        raise ValueError("Recipe synthesis requires explicit Windows reference and writable recipe directory")
     if recipe_dir is not None:
         if recipe_dir.is_symlink() or not recipe_dir.is_dir():
             raise ValueError("Invalid recipe directory")
@@ -572,7 +577,7 @@ def inspect(package: Path, manifest: Path, sevenzip: Path, codec: Path,
                     raise ValueError("Empty Windows reference expansion")
             graph_work = work / f"graph-{index}"
             graph_work.mkdir()
-            graph = reconstruct(codec, raw_dir, extracted, graph_work, expanded, verified_codec, recipe_dir)
+            graph = reconstruct(codec, raw_dir, extracted, graph_work, expanded, verified_codec, recipe_dir, allow_synthesis)
             # KB5011048 is pinned to a single IPD cabinet. Refuse a
             # second graph rather than silently mix unrelated tree digests.
             if "cix_tree_sha256" in report:
@@ -614,11 +619,14 @@ def main() -> int:
         p.add_argument("--" + key, required=True, type=Path)
     p.add_argument("--expand", type=Path)
     p.add_argument("--verified-codec", type=Path)
-    p.add_argument("--recipe-dir", type=Path)
+    p.add_argument("--recipe-dir", type=Path,
+                   default=Path(__file__).resolve().parents[1] / "data/netfx481/recipes")
+    p.add_argument("--synthesize-recipes", action="store_true",
+                   help="Research only: explicitly allow Windows-reference recipe synthesis")
     a = p.parse_args()
     if a.output.is_symlink() or a.output.exists():
         p.error("Report must be a fresh path")
-    r = inspect(a.package, a.sha256_file, a.sevenzip, a.codec, a.expand, a.verified_codec, a.recipe_dir)
+    r = inspect(a.package, a.sha256_file, a.sevenzip, a.codec, a.expand, a.verified_codec, a.recipe_dir, a.synthesize_recipes)
     a.output.write_text(json.dumps(r, sort_keys=True), encoding="ascii")
     for key, value in r.items():
         print("Native IPD delta reconstruction", key, value)
