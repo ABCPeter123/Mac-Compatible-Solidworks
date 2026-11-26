@@ -1,0 +1,46 @@
+name: Verified IPD manifest compatibility audit
+on:
+  pull_request:
+    paths:
+      - 'scripts/netfx481_ipd_manifest_audit.py'
+      - 'tests/test_netfx481_ipd_manifest_audit.py'
+      - '.github/workflows/netfx481-ipd-manifest-audit-ci.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ipd-manifest-audit-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  audit:
+    runs-on: windows-2025
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test independent manifest classifier
+        run: python -m unittest discover -s tests -p test_netfx481_ipd_manifest_audit.py -v
+      - name: Audit original verified Microsoft update with native Windows Expand
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force build | Out-Null
+          $msu = Join-Path (Resolve-Path build) "KB5011048.msu"
+          try {
+            curl.exe --fail --location --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 600 --connect-timeout 20 --max-time 120 --output $msu "https://catalog.s.download.windowsupdate.com/c/msdownload/update/software/ftpk/2023/09/windows10.0-kb5011048-x64_411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e.msu"
+            if ($LASTEXITCODE -ne 0 -or (Get-Item -LiteralPath $msu).Length -ne 71059034) { throw "Catalog download failed" }
+            if ((Get-FileHash -LiteralPath $msu -Algorithm SHA1).Hash.ToLowerInvariant() -ne "411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e") { throw "Original package identity mismatch" }
+            (Get-FileHash -LiteralPath $msu -Algorithm SHA256).Hash.ToLowerInvariant() | Set-Content -LiteralPath build/netfx481-catalog.sha256 -NoNewline -Encoding ascii
+            python -m scripts.netfx481_ipd_manifest_audit --package $msu --sha256-file build/netfx481-catalog.sha256 --sevenzip (Join-Path $env:ProgramFiles "7-Zip\7z.exe") --expand (Join-Path $env:WINDIR "System32\expand.exe") --output build/netfx481-ipd-manifest-audit.json
+            if ($LASTEXITCODE -ne 0) { throw "Manifest audit failed" }
+          } finally {
+            if (Test-Path -LiteralPath $msu) { Remove-Item -LiteralPath $msu }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ipd-manifest-audit-counts
+          path: build/netfx481-ipd-manifest-audit.json
+          if-no-files-found: error
+          retention-days: 3
