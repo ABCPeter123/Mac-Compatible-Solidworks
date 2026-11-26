@@ -131,7 +131,9 @@ def observe_decoder(command: list[str], root: Path, timeout: int) -> tuple[bool,
 
 DIFFERENTIAL_FIELDS = frozenset({
     "file_type", "flags", "different", "runs", "max_run", "near_e8", "near_e9",
-    "source_same", "header", "text", "rdata", "data", "rsrc", "reloc", "unwind", "other"
+    "source_same", "header", "text", "rdata", "data", "rsrc", "reloc", "unwind", "other",
+    "operand_short_branch", "operand_near_branch", "operand_rip_disp", "operand_other_immediate",
+    "operand_other_displacement", "operand_instruction_other", "operand_unclassified"
 })
 
 
@@ -159,7 +161,8 @@ def observe_reference_difference(helper: Path, basis: Path, delta: Path,
             or r["file_type"] not in {1, 2, 4, 8, 16, 32, 64, 128}
             or r["different"] > reference.stat().st_size
             or sum(r[k] for k in ("header", "text", "rdata", "data", "rsrc", "reloc", "unwind", "other")) != r["different"]
-            or any(r[k] > r["different"] for k in ("runs", "max_run", "near_e8", "near_e9", "source_same"))):
+            or any(r[k] > r["different"] for k in ("runs", "max_run", "near_e8", "near_e9", "source_same"))
+            or sum(v for k, v in r.items() if k.startswith("operand_")) != r["different"]):
         return None
     return r
 
