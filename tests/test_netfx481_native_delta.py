@@ -221,3 +221,14 @@ class CixGraphTests(unittest.TestCase):
         self.assertIn("mapped(used, disp_end).wrapping_add(trailing)", PE_NEW)
         self.assertIn("verify_hash(info, &output)?", INSERT)
         self.assertIn("best_different", INSERT)
+
+
+    def test_sparse_rip_preserves_original_digest_and_has_fixed_budget(self):
+        from scripts.patch_msdelta_compat import INSERT, PE_MODE, PE_NEW
+        self.assertIn("swcompat_sparse_rip(source, &parsed, limits)", INSERT)
+        self.assertIn("let mut hash_budget = 8usize * 1024 * 1024 * 1024", INSERT)
+        self.assertIn("verify_hash(info, &output).is_ok()", INSERT)
+        self.assertIn("info.flags & (1 | 0x0200_0000) != 0", INSERT)
+        self.assertIn("records.len() >= 32768", PE_MODE)
+        self.assertIn("swcompat_capture_rip(used, cell", PE_NEW)
+        self.assertIn("operand.alternatives", INSERT)
