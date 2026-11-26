@@ -43,7 +43,9 @@ pub fn apply_pa30_compat(source: &[u8], delta: &[u8], limits: &Limits) -> Result
     } else {
         bits.extend([0x200000, 0x400000]);
     }
-    let mut candidates = Vec::new();
+    // E8 restoration differs across producers; try the exact alternate
+    // interpretation only if the original digest still validates.
+    let mut candidates = vec![info.flags ^ 1];
     for &bit in &bits {
         candidates.push(info.flags ^ bit);
     }
@@ -82,6 +84,100 @@ pub fn apply_pa30_compat(source: &[u8], delta: &[u8], limits: &Limits) -> Result
         }
     }
     first
+}
+
+
+/// Private Windows-reference differential. Never returns candidate bytes.
+/// The independent reference must match the original intrinsic digest.
+/// A temporary parsed view suppresses validation solely to count differences
+/// in memory; no caller can install, retain or accept the candidate.
+#[cfg(feature = "cli")]
+pub fn diagnose_pa30_reference(source: &[u8], delta: &[u8], reference: &[u8],
+                               limits: &Limits) -> Result<serde_json::Value> {
+    if source.len() > limits.max_source_bytes || reference.len() > limits.max_output_bytes {
+        return Err(Error::Limit("PA30 diagnostic inputs"));
+    }
+    let parsed = parse(delta, limits)?;
+    let info = &parsed.info;
+    validate_hash(info)?;
+    if reference.len() != info.target_size {
+        return Err(Error::Integrity("diagnostic reference size"));
+    }
+    verify_hash(info, reference)?;
+    let diagnostic = Parsed {
+        info: Pa30Info { target_hash_algorithm: 0, target_hash: Vec::new(), ..info.clone() },
+        preprocessing: parsed.preprocessing,
+        patch: parsed.patch,
+    };
+    let candidate = apply_once(source, &diagnostic, limits, true)?;
+    if candidate.len() != reference.len() {
+        return Err(Error::Integrity("diagnostic candidate length"));
+    }
+    // Recognized PE file ranges only. Do not report offsets or section names.
+    let mut sections = Vec::new();
+    let mut header = 0usize;
+    let read16 = |n: usize| reference.get(n..n.checked_add(2)?)
+        .and_then(|v| v.try_into().ok()).map(u16::from_le_bytes);
+    let read32 = |n: usize| reference.get(n..n.checked_add(4)?)
+        .and_then(|v| v.try_into().ok()).map(u32::from_le_bytes);
+    if reference.get(..2) == Some(b"MZ") {
+        if let Some(nt) = read32(60).map(|v| v as usize) {
+            if nt <= reference.len().saturating_sub(24) && reference.get(nt..nt+4) == Some(b"PE\0\0") {
+                let optional = nt + 24;
+                let table = optional + read16(nt+20).unwrap_or(0) as usize;
+                header = (read32(optional+60).unwrap_or(0) as usize).min(reference.len());
+                for i in 0..usize::from(read16(nt+6).unwrap_or(0)).min(96) {
+                    let off = table + i*40;
+                    if off > reference.len().saturating_sub(40) { break; }
+                    let start = read32(off+20).unwrap_or(0) as usize;
+                    let size = read32(off+16).unwrap_or(0) as usize;
+                    let end = start.saturating_add(size).min(reference.len());
+                    let name = &reference[off..off+8];
+                    let category = if name.starts_with(b".text") { 1 }
+                        else if name.starts_with(b".rdata") { 2 }
+                        else if name.starts_with(b".data") { 3 }
+                        else if name.starts_with(b".rsrc") { 4 }
+                        else if name.starts_with(b".reloc") { 5 }
+                        else if name.starts_with(b".pdata") || name.starts_with(b".xdata") { 6 }
+                        else { 7 };
+                    if start < end { sections.push((start, end, category)); }
+                }
+            }
+        }
+    }
+    let mut different = 0u64;
+    let mut runs = 0u64;
+    let mut max_run = 0u64;
+    let mut current = 0u64;
+    let mut near_e8 = 0u64;
+    let mut near_e9 = 0u64;
+    let mut source_same = 0u64;
+    let mut categories = [0u64; 8];
+    for (i, (&actual, &expected)) in candidate.iter().zip(reference).enumerate() {
+        if actual == expected {
+            current = 0;
+            continue;
+        }
+        different += 1;
+        if current == 0 { runs += 1; }
+        current += 1;
+        max_run = max_run.max(current);
+        let cat = if i < header { 0 } else {
+            sections.iter().find(|(a,b,_)| i >= *a && i < *b).map(|v|v.2).unwrap_or(7)
+        };
+        categories[cat] += 1;
+        let start = i.saturating_sub(4);
+        if reference[start..i].contains(&0xe8) || candidate[start..i].contains(&0xe8) { near_e8 += 1; }
+        if reference[start..i].contains(&0xe9) || candidate[start..i].contains(&0xe9) { near_e9 += 1; }
+        if source.get(i) == Some(&actual) { source_same += 1; }
+    }
+    Ok(serde_json::json!({
+        "file_type": info.file_type, "flags": info.flags, "different": different,
+        "runs": runs, "max_run": max_run, "near_e8": near_e8, "near_e9": near_e9,
+        "source_same": source_same, "header": categories[0], "text": categories[1],
+        "rdata": categories[2], "data": categories[3], "rsrc": categories[4],
+        "reloc": categories[5], "unwind": categories[6], "other": categories[7],
+    }))
 }
 
 '''
