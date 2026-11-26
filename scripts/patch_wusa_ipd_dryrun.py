@@ -190,6 +190,18 @@ def patch_main(text: str) -> str:
     return text[:text.index(marker)] + ENTRY
 
 
+def patch_manifest(text: str) -> str:
+    # MinGW's msxml.h can expose interfaces before COBJMACROS is defined
+    # by upstream Wine's source. Use the identical COM ABI explicitly,
+    # not implicit function declarations or stubbed parser calls.
+    import re
+    pattern = r"\b(IXMLDOM(?:Element|NodeList|Node|Document))_([A-Za-z0-9_]+)\(([A-Za-z_][A-Za-z0-9_]*)(?=\s*[,)]|\s*$)"
+    converted, count = re.subn(pattern, lambda m: f"{m[3]}->lpVtbl->{m[2]}({m[3]}", text)
+    if count != 18:
+        raise ValueError("Unexpected pinned Wine COM call count")
+    return converted
+
+
 def git_blob(data: bytes) -> str:
     return hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()
 
@@ -211,6 +223,8 @@ def prepare(source: Path, destination: Path) -> None:
     for name, data in original.items():
         if name == "main.c":
             data = patch_main(data.decode("utf-8")).encode("utf-8")
+        elif name == "manifest.c":
+            data = patch_manifest(data.decode("utf-8")).encode("utf-8")
         (destination / name).write_bytes(data)
     (destination / "wine/debug.h").write_text(DEBUG, encoding="ascii")
 
