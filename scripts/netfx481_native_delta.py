@@ -241,9 +241,81 @@ def decode_one(codec: Path, raw: bytes, root: Path, serial: int) -> tuple[str, b
             target.unlink()
 
 
+def valid_recipe(value, source_hash: str, patch_hash: str) -> bool:
+    import re
+    return (
+        type(value) is dict
+        and set(value) == {"version", "source_sha256", "patch_sha256", "mode", "selectors"}
+        and type(value["version"]) is int and value["version"] == 1
+        and value["source_sha256"] == source_hash and value["patch_sha256"] == patch_hash
+        and type(value["mode"]) is int and value["mode"] in {0, 4}
+        and type(value["selectors"]) is dict and 1 <= len(value["selectors"]) <= 512
+        and all(re.fullmatch(r"[0-9a-f]{64}", k) and type(v) is int and 0 <= v < 64
+                for k, v in value["selectors"].items())
+    )
+
+
+def replay_or_synthesize_recipe(helper: Path, basis: Path, delta: Path, target: Path,
+                                length: int, expected: Path | None, recipes: Path,
+                                work: Path) -> bool:
+    source_hash = sha256_file(basis).hex()
+    patch_hash = sha256_file(delta).hex()
+    recipe = recipes / (patch_hash + ".json")
+    synthesized = False
+    if recipe.is_symlink():
+        return False
+    if not recipe.exists():
+        if expected is None or os.name != "nt":
+            return False
+        with tempfile.TemporaryFile() as log:
+            try:
+                result = subprocess.run([str(helper), "--synthesize-recipe", str(basis), str(delta), str(expected)],
+                                        cwd=work, stdin=subprocess.DEVNULL, stdout=log,
+                                        stderr=subprocess.DEVNULL, timeout=90, check=False)
+                if result.returncode != 0:
+                    return False
+                log.seek(0)
+                data = log.read(128 * 1024 + 1)
+            except (OSError, subprocess.TimeoutExpired):
+                return False
+        if len(data) > 128 * 1024:
+            return False
+        try:
+            value = json.loads(data)
+        except (ValueError, UnicodeError):
+            return False
+        if not valid_recipe(value, source_hash, patch_hash):
+            return False
+        # Keep only allowlisted algorithm metadata, no Microsoft file bytes.
+        with recipe.open("x", encoding="ascii") as f:
+            json.dump(value, f, sort_keys=True, separators=(",", ":"))
+        synthesized = True
+    if not recipe.is_file() or recipe.stat().st_size > 128 * 1024:
+        return False
+    try:
+        value = json.loads(recipe.read_text(encoding="ascii"))
+    except (OSError, ValueError, UnicodeError):
+        return False
+    if not valid_recipe(value, source_hash, patch_hash):
+        return False
+    if target.is_symlink() or target.is_file():
+        target.unlink()
+    ok = run_private([str(helper), str(basis), str(delta), str(target), str(length),
+                      sha256_file(expected).hex() if expected is not None else "-", str(recipe)],
+                     work, 90)
+    ok = (ok and target.is_file() and not target.is_symlink() and target.stat().st_size == length
+          and (expected is None or sha256_file(target) == sha256_file(expected)))
+    if not ok and synthesized:
+        recipe.unlink(missing_ok=True)
+    if ok and synthesized:
+        print("Native PA30 verified algorithm recipe", json.dumps(value, sort_keys=True, separators=(",", ":")))
+    return ok
+
+
 def reconstruct(codec: Path, raw_dir: Path, extracted: list[Path],
                 work: Path, expanded: Path | None,
-                verified_codec: Path | None = None) -> dict:
+                verified_codec: Path | None = None,
+                recipe_dir: Path | None = None) -> dict:
     """Reconstruct every eligible CIX node with its declared private basis.
 
     Native Windows Expand is an independent oracle, never a source for the
@@ -269,7 +341,7 @@ def reconstruct(codec: Path, raw_dir: Path, extracted: list[Path],
               "cix_empty_source_recovered": 0, "cix_external_hash_recovered": 0,
               "cix_parameter_budget_recovered": 0, "cix_compat_attempted": 0,
               "cix_compat_recovered": 0, "cix_compat_failed": 0,
-              "cix_differential_reports": 0,
+              "cix_differential_reports": 0, "cix_recipe_recovered": 0,
               "cix_target_hash_pa30": 0, "cix_target_hash_pa31": 0, "cix_target_hash_pa19": 0,
               **{"cix_error_" + k.lower(): 0 for k in ERROR_CLASSES},
               **{"cix_native_reference_" + k.lower(): 0
@@ -355,6 +427,14 @@ def reconstruct(codec: Path, raw_dir: Path, extracted: list[Path],
                                 report["cix_compat_failed"] += 1
                                 ok = False
                 if (not ok and reason == "TARGET_HASH" and e.kind == "PA30"
+                        and recipe_dir is not None and verified_codec is not None):
+                    expected = oracle.get(e.name) if expanded else None
+                    if not expanded or (expected is not None and expected.stat().st_size == e.length):
+                        ok = replay_or_synthesize_recipe(verified_codec, basis or empty_basis, delta,
+                                                         target, e.length, expected, recipe_dir, work)
+                        if ok:
+                            report["cix_recipe_recovered"] += 1
+                if (not ok and reason == "TARGET_HASH" and e.kind == "PA30"
                         and expanded and verified_codec is not None):
                     expected = oracle.get(e.name)
                     if expected is not None and expected.stat().st_size == e.length:
@@ -414,7 +494,8 @@ def reconstruct(codec: Path, raw_dir: Path, extracted: list[Path],
 
 def inspect(package: Path, manifest: Path, sevenzip: Path, codec: Path,
             expand: Path | None = None,
-            verified_codec: Path | None = None) -> dict:
+            verified_codec: Path | None = None,
+            recipe_dir: Path | None = None) -> dict:
     paths = [package, manifest, sevenzip, codec] + ([expand] if expand else [])
     if any(p.is_symlink() for p in paths):
         raise ValueError("Linked inputs prohibited")
@@ -432,6 +513,10 @@ def inspect(package: Path, manifest: Path, sevenzip: Path, codec: Path,
             raise ValueError("Unexpected independent verifier")
     if not codec.is_file() or codec.name.casefold() not in {"ms-delta", "ms-delta.exe"}:
         raise ValueError("Expected pinned portable delta CLI")
+    if recipe_dir is not None:
+        if recipe_dir.is_symlink() or not recipe_dir.is_dir():
+            raise ValueError("Invalid recipe directory")
+        recipe_dir = recipe_dir.resolve(strict=True)
     report = {"catalog_verified": True, "cab_count": 0, "ipd_cabs": 0,
               "candidate_streams": 0, "sampled_streams": 0, "decoded": 0,
               "failed": 0, "oracle_available": bool(expand), "oracle_matches": 0,
@@ -477,7 +562,7 @@ def inspect(package: Path, manifest: Path, sevenzip: Path, codec: Path,
                     raise ValueError("Empty Windows reference expansion")
             graph_work = work / f"graph-{index}"
             graph_work.mkdir()
-            graph = reconstruct(codec, raw_dir, extracted, graph_work, expanded, verified_codec)
+            graph = reconstruct(codec, raw_dir, extracted, graph_work, expanded, verified_codec, recipe_dir)
             for key, value in graph.items():
                 report[key] = report.get(key, 0) + value
             # Preserve the earlier independent empty-source control sample.
@@ -514,10 +599,11 @@ def main() -> int:
         p.add_argument("--" + key, required=True, type=Path)
     p.add_argument("--expand", type=Path)
     p.add_argument("--verified-codec", type=Path)
+    p.add_argument("--recipe-dir", type=Path)
     a = p.parse_args()
     if a.output.is_symlink() or a.output.exists():
         p.error("Report must be a fresh path")
-    r = inspect(a.package, a.sha256_file, a.sevenzip, a.codec, a.expand, a.verified_codec)
+    r = inspect(a.package, a.sha256_file, a.sevenzip, a.codec, a.expand, a.verified_codec, a.recipe_dir)
     a.output.write_text(json.dumps(r, sort_keys=True), encoding="ascii")
     for key, value in r.items():
         print("Native IPD delta reconstruction", key, value)
