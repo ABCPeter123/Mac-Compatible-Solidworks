@@ -1,12 +1,25 @@
 //! Hash-verified PA30 compatibility adapter. No integrity bypass.
 //! The expected size and SHA-256 come from an independent Windows reference
 //! for the exact authenticated original MSU. Never accept an unchecked output.
-use ms_delta::{Error, Limits, pa30::{apply_pa30_with_verifier, apply_pa30_compat, diagnose_pa30_reference, inspect_pa30}};
+use ms_delta::{Error, Limits, pa30::{apply_pa30_with_verifier, apply_pa30_compat, diagnose_pa30_reference, inspect_pa30, apply_pa30_recipe, synthesize_pa30_recipe}};
 use sha2::{Digest, Sha256};
 use std::{env, fs, io::Write, path::Path};
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = env::args_os().collect();
+    if args.len() == 5 && args[1] == "--synthesize-recipe" {
+        if !cfg!(windows) { return Err("Windows oracle required".into()); }
+        let limits = Limits::default();
+        let mut inputs = Vec::new();
+        for arg in &args[2..] {
+            let p = Path::new(arg);
+            let m = fs::symlink_metadata(p)?;
+            if !m.is_file() || m.len() > 64 * 1024 * 1024 { return Err("invalid recipe input".into()); }
+            inputs.push(fs::read(p)?);
+        }
+        println!("{}", synthesize_pa30_recipe(&inputs[0], &inputs[1], &inputs[2], &limits)?);
+        return Ok(());
+    }
     if args.len() == 5 && args[1] == "--diagnose" {
         if !cfg!(windows) {
             return Err("native Windows reference required".into());
@@ -26,7 +39,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", report);
         return Ok(());
     }
-    if args.len() != 6 {
+    if args.len() != 6 && args.len() != 7 {
         return Err("expected source delta target size sha256".into());
     }
     let limit = Limits::default();
@@ -62,7 +75,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         })?
     } else {
         // Every compatibility candidate must pass the original PA30 hash.
-        apply_pa30_compat(&source, &delta, &limit)?
+        if args.len() == 7 {
+            let p = Path::new(&args[6]);
+            let m = fs::symlink_metadata(p)?;
+            if !m.is_file() || m.len() > 128 * 1024 { return Err("invalid recipe".into()); }
+            apply_pa30_recipe(&source, &delta, &limit, &fs::read_to_string(p)?)?
+        } else {
+            apply_pa30_compat(&source, &delta, &limit)?
+        }
     };
     if reconstructed.len() != size || (expected != "-" &&
             format!("{:x}", Sha256::digest(&reconstructed)) != expected) {
