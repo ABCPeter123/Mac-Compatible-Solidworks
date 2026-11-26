@@ -79,6 +79,76 @@ def run_private(command: list[str], root: Path, timeout: int) -> bool:
     return result.returncode == 0
 
 
+ERROR_CLASSES = ("UNSUPPORTED", "INTEGRITY", "LIMIT", "INVALID", "LZX",
+                 "ALLOCATION", "CLI_USAGE", "TIMEOUT", "START_FAILED", "OTHER",
+                 "FRAMING", "MISSING_OUTPUT")
+
+
+def classify_decoder_error(raw: bytes) -> str:
+    # Only fixed categories leave the process; paths and vendor bytes do not.
+    text = raw[:65536].decode("utf-8", errors="replace").lower()
+    for needle, category in (
+        ("unsupported", "UNSUPPORTED"), ("not implemented", "UNSUPPORTED"),
+        ("integrity check failed", "INTEGRITY"), ("limit exceeded", "LIMIT"),
+        ("invalid delta", "INVALID"), ("lzx delta decode failed", "LZX"),
+        ("allocation failed", "ALLOCATION"), ("usage:", "CLI_USAGE"),
+        ("unexpected argument", "CLI_USAGE"), ("required arguments", "CLI_USAGE"),
+    ):
+        if needle in text:
+            return category
+    return "OTHER"
+
+
+def observe_decoder(command: list[str], root: Path, timeout: int) -> tuple[bool, str]:
+    with tempfile.TemporaryFile() as log:
+        try:
+            process = subprocess.run(command, cwd=root, stdin=subprocess.DEVNULL,
+                                     stdout=log, stderr=log, timeout=timeout, check=False)
+        except subprocess.TimeoutExpired:
+            return False, "TIMEOUT"
+        except OSError:
+            return False, "START_FAILED"
+        if process.returncode == 0:
+            return True, "OTHER"
+        log.seek(0)
+        return False, classify_decoder_error(log.read(65536))
+
+
+def native_delta_reference(raw: bytes, basis: Path | None,
+                           expected: Path | None, length: int) -> str:
+    """Native Windows ApplyDeltaB check; never retain or use its result as a basis."""
+    if os.name != "nt" or expected is None or expected.stat().st_size != length:
+        return "UNAVAILABLE"
+    import ctypes as c
+    from ctypes import wintypes
+    class Input(c.Structure):
+        _fields_ = [("start", c.c_void_p), ("size", c.c_size_t), ("editable", wintypes.BOOL)]
+    class Output(c.Structure):
+        _fields_ = [("start", c.c_void_p), ("size", c.c_size_t)]
+    dll = c.WinDLL("msdelta.dll", use_last_error=True, winmode=0x800)
+    apply = dll.ApplyDeltaB
+    apply.argtypes = [c.c_int64, Input, Input, c.POINTER(Output)]
+    apply.restype = wintypes.BOOL
+    free = dll.DeltaFree
+    free.argtypes = [c.c_void_p]
+    free.restype = wintypes.BOOL
+    source = basis.read_bytes() if basis else b""
+    src = c.create_string_buffer(source)
+    delta = c.create_string_buffer(raw)
+    out = Output()
+    try:
+        if not apply(0, Input(c.addressof(src) if source else None, len(source), False),
+                     Input(c.addressof(delta), len(raw), False), c.byref(out)):
+            return "REJECTED"
+        if out.size != length or (out.size and not out.start):
+            return "MISMATCH"
+        digest = hashlib.sha256(c.string_at(out.start, out.size) if out.size else b"").digest()
+        return "MATCH" if digest == sha256_file(expected) else "MISMATCH"
+    finally:
+        if out.start:
+            free(out.start)
+
+
 def decode_one(codec: Path, raw: bytes, root: Path, serial: int) -> tuple[str, bytes | None]:
     """Do actual portable empty-source patch reconstruction, with bounded output."""
     if len(raw) > MAX_FILE:
@@ -128,7 +198,11 @@ def reconstruct(codec: Path, raw_dir: Path, extracted: list[Path],
               "cix_raw": sum(e.kind == "RAW" for e in entries.values()),
               "cix_reconstructed": 0, "cix_delta_reconstructed": 0, "cix_delta_failed": 0,
               "cix_basis_blocked": 0, "cix_missing_source": 0, "cix_size_mismatch": 0,
-              "cix_oracle_matches": 0, "cix_oracle_mismatches": 0, "cix_oracle_missing": 0}
+              "cix_oracle_matches": 0, "cix_oracle_mismatches": 0, "cix_oracle_missing": 0,
+              "cix_empty_source_recovered": 0,
+              **{"cix_error_" + k.lower(): 0 for k in ERROR_CLASSES},
+              **{"cix_native_reference_" + k.lower(): 0
+                 for k in ("MATCH", "MISMATCH", "REJECTED", "UNAVAILABLE")}}
     oracle = {}
     if expanded:
         for p in files(expanded):
@@ -137,6 +211,8 @@ def reconstruct(codec: Path, raw_dir: Path, extracted: list[Path],
                 raise ValueError("Ambiguous reference member")
             oracle[key] = p
     outputs: dict[str, Path] = {}
+    empty_basis = work / "cix-empty-basis"
+    empty_basis.write_bytes(b"")
     total = 0
     # A cumulative budget limits even valid authenticated decompression.
     for fid in ordered:
@@ -162,6 +238,7 @@ def reconstruct(codec: Path, raw_dir: Path, extracted: list[Path],
             framing = format_and_offset(raw[:8], raw)
             if framing is None or framing[0] != e.kind.lower():
                 report["cix_delta_failed"] += 1
+                report["cix_error_framing"] += 1
                 continue
             delta = work / ("cix-delta-" + fid)
             delta.write_bytes(raw[framing[1]:])
@@ -170,13 +247,26 @@ def reconstruct(codec: Path, raw_dir: Path, extracted: list[Path],
             if basis is not None:
                 command += ["--source", str(basis)]
             try:
-                ok = run_private(command, work, 45)
+                ok, reason = observe_decoder(command, work, 45)
+                # A null source and an explicit empty input are distinct CLI
+                # representations. Only retry nodes whose CIX declares no basis.
+                if not ok and basis is None and reason not in {"TIMEOUT", "START_FAILED", "LIMIT"}:
+                    if target.is_symlink() or target.is_file():
+                        target.unlink()
+                    ok, reason = observe_decoder(command + ["--source", str(empty_basis)], work, 45)
+                    if ok and target.is_file() and not target.is_symlink() and target.stat().st_size == e.length:
+                        report["cix_empty_source_recovered"] += 1
             finally:
                 delta.unlink(missing_ok=True)
             if not ok or target.is_symlink() or not target.is_file():
                 if target.is_symlink() or target.is_file():
                     target.unlink()
                 report["cix_delta_failed"] += 1
+                report["cix_error_" + (reason if not ok else "MISSING_OUTPUT").lower()] += 1
+                if expanded:
+                    reference = native_delta_reference(raw[framing[1]:], basis,
+                                                       oracle.get(e.name), e.length)
+                    report["cix_native_reference_" + reference.lower()] += 1
                 continue
             if target.stat().st_size != e.length:
                 target.unlink()
