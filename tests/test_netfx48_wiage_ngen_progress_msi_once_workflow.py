@@ -89,6 +89,32 @@ class Signed48AfterProgressNgenTests(unittest.TestCase):
         self.assertEqual(caller.count("signed_msi_timeout_seconds: 1200"), 1)
         self.assertNotIn("signed_msi_timeout_seconds: 420", caller)
 
+    def test_actual_signed_servicing_stack_is_in_the_installer_shell(self):
+        caller = CALLER.read_text(encoding="utf-8")
+        reusable = REUSE.read_text(encoding="utf-8")
+        self.assertIn("signed_msi_host_stack64: true", caller)
+        self.assertEqual(reusable.count("signed_msi_host_stack64:"), 1)
+        guard = reusable.split(
+            "- name: Reject signed MSI servicing host stack outside native reinstall arm", 1
+        )[1].split("- name: Reject explicit signed MSP reinstall", 1)[0]
+        for field in ("inputs.signed_msi_host_stack64",
+                      "!inputs.signed_msp_reinstall", "!inputs.signed_msp_win32_exit",
+                      "!inputs.ngen_host_stack64",
+                      "inputs.signed_msi_timeout_seconds != 1200", "exit 1"):
+            self.assertIn(field, guard)
+        msi = reusable.split(
+            "- name: Extract authenticated original .NET 4.8 x64 MSI and MSP "
+            "after genuine CLR4.0", 1)[1].split(
+            "- name: Gate 4.8.1 on authenticated original MSI", 1)[0]
+        self.assertIn("SWCOMPAT_MSI_HOST_STACK64: ${{ inputs.signed_msi_host_stack64 }}", msi)
+        self.assertIn('if [[ "$SWCOMPAT_MSI_HOST_STACK64" == "true" ]]', msi)
+        self.assertIn('[[ "$(ulimit -s)" == "65520" ]]', msi)
+        self.assertLess(msi.index("ulimit -s 65520"),
+                        msi.index("python3 -m scripts.netfx40_to_48_signed_msi"))
+        self.assertIn("Original signed MSI/MSP launch host stack KiB: 65520", msi)
+        self.assertIn("--patch-reinstall", msi)
+        self.assertNotIn("continue-on-error", msi)
+
     def test_grace_requires_authentic_original_stack_and_signed_msi(self):
         reuse = REUSE.read_text(encoding="utf-8")
         self.assertEqual(reuse.count("progress_gated_native40_ngen:"), 2)

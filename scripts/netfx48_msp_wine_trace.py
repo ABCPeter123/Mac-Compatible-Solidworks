@@ -34,6 +34,23 @@ TRACE_ACTION = re.compile(
     r'\(L"([^\r\n]{1,512})"\)\s*$'
 )
 FINAL_ACTIONS = {"InstallFinalize", "ExecuteAction"}
+# Wine 11.13 dlls/msi/action.c ITERATE_Actions reports failure of the
+# immediate execute/UI sequence, outside execute_script's deferred actions.
+# A failure here may explain an otherwise completely unclassified 1603.
+SEQUENCE_HALTED = re.compile(
+    r'(?i)\bExecution halted,\s+action\s+L"([^\r\n]{1,2048})"'
+    r'\s+returned\s+([0-9]{1,5})\s*$'
+)
+STANDARD_PHASES = {
+    "InstallFinalize": "FINALIZE", "InstallExecute": "EXECUTE",
+    "InstallExecuteAgain": "EXECUTE", "ExecuteAction": "EXECUTE",
+    "InstallInitialize": "INITIALIZE", "InstallValidate": "VALIDATE",
+    "CostInitialize": "COST", "FileCost": "COST", "CostFinalize": "COST",
+    "InstallFiles": "FILES", "PatchFiles": "PATCH",
+    "PublishProduct": "PUBLISH", "RegisterProduct": "PUBLISH",
+    "LaunchConditions": "CONDITION",
+}
+
 
 ACTION_CLASS = {
     "PATCH": re.compile(r"(?i)patchfiles|apply_patch|patch_package"),
@@ -52,6 +69,8 @@ STATUSES = {"NOT_RUN", "CLASSIFIED", "NO_MSI_ERRORS", "TOO_LARGE", "UNREADABLE"}
 RETURNS = {"NOT_SEEN", "WIN32_1603", "OTHER_NONZERO", "ZERO"}
 SIGNALS = {
     "INSTALL_SCRIPT_HALTED", "ROLLBACK_SCRIPT_HALTED",
+    "MSI_COMMIT_SCRIPT_HALTED", "MSI_FINALIZE_ASSEMBLY_FAILURE",
+    "MSI_FINALIZE_PATCH_FAILURE", "MSI_FINALIZE_PATCHED_ASSEMBLY_FAILURE",
     "MSI_CABINET_FAILURE", "MSI_CUSTOM_DLL_FAILURE",
     "MSI_CUSTOM_ACTION_PIPE_FAILURE", "MSI_CUSTOM_ACTION_RETURN_INVALID",
     "MSI_SERVICE_OPERATION_FAILURE", "MSI_PATCH_FAILURE",
@@ -65,6 +84,11 @@ SIGNALS = {
     "MSI_REG_PRODUCT_OTHER", "MSI_REG_PRODUCT_UNKNOWN",
     "MSI_REG_CACHE_PRESENT", "MSI_REG_CACHE_MISSING", "MSI_REG_CACHE_UNKNOWN",
     "MSI_REG_QUERY_FAILED",
+} | {"MSI_SEQUENCE_ACTION_" + phase
+     for phase in set(STANDARD_PHASES.values()) | (ACTIONS - {"NOT_SEEN"})
+} | {"MSI_SEQUENCE_RETURN_" + value for value in {"WIN32_1603", "OTHER_NONZERO"}
+} | {"MSI_COMMIT_ACTION_" + action for action in ACTIONS - {"NOT_SEEN"}
+} | {"MSI_COMMIT_RETURN_" + value for value in {"WIN32_1603", "OTHER_NONZERO"}
 } | {"MSI_SEQ_" + context + "_" + state
      for context in ("USER", "MACHINE")
      for state in ("APPLICABLE", "EXCLUDED", "TARGET_MISMATCH",
@@ -188,6 +212,8 @@ def _classify_lines(lines: Iterable[str]) -> dict:
     last_nonfinal: str | None = None
     finalize_seen = False
     terminal_error_seen = False
+    sequence_seen = False
+    commit_seen = False
     found = False
     for line in lines:
         if len(line) > MAX_LINE:
@@ -213,7 +239,24 @@ def _classify_lines(lines: Iterable[str]) -> dict:
         for signal, rule in SIGNAL_MATCH.items():
             if rule.search(line):
                 signals.add(signal)
-        if match.group(1).casefold() == "execute_script":
+        function = match.group(1).casefold()
+        if function == "iterate_actions" and not sequence_seen:
+            failure = SEQUENCE_HALTED.search(line)
+            if failure and failure.group(2) != "0":
+                action, code = failure.groups()
+                phase = STANDARD_PHASES.get(action, _action(action))
+                signals.update({"MSI_SEQUENCE_ACTION_" + phase,
+                                "MSI_SEQUENCE_RETURN_" + _return(code)})
+                sequence_seen = True
+        if function == "action_installfinalize":
+            # Exact upstream error messages, without file identities.
+            if "Failed to install patched assembly" in line:
+                signals.add("MSI_FINALIZE_PATCHED_ASSEMBLY_FAILURE")
+            elif "Failed to apply patch to file:" in line:
+                signals.add("MSI_FINALIZE_PATCH_FAILURE")
+            elif "Failed to install assembly" in line:
+                signals.add("MSI_FINALIZE_ASSEMBLY_FAILURE")
+        if function == "execute_script":
             failure = HALTED.search(line)
             if failure:
                 script, action, code = failure.groups()
@@ -224,6 +267,11 @@ def _classify_lines(lines: Iterable[str]) -> dict:
                     report["first_forward_action"] = _action(action)
                     report["first_forward_return"] = _return(code)
                     signals.add("INSTALL_SCRIPT_HALTED")
+                elif script == "1" and not commit_seen and code != "0":
+                    signals.update({"MSI_COMMIT_SCRIPT_HALTED",
+                                    "MSI_COMMIT_ACTION_" + _action(action),
+                                    "MSI_COMMIT_RETURN_" + _return(code)})
+                    commit_seen = True
                 elif script == "2" and report["first_rollback_action"] == "NOT_SEEN":
                     report["first_rollback_action"] = _action(action)
                     report["first_rollback_return"] = _return(code)
