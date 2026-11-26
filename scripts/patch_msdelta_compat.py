@@ -229,6 +229,170 @@ fn swcompat_sparse_rip(source: &[u8], parsed: &Parsed<'_>, limits: &Limits) -> R
     Ok(None)
 }
 
+/// A recipe contains only source-location commitments and indexes into
+/// algorithm-derived displacement alternatives, never reconstructed bytes.
+/// It is specific to the original source and patch SHA256. The independent
+/// reference is required for synthesis, but not for replay on Apple Silicon.
+#[cfg(feature = "cli")]
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SwcompatRecipe {
+    version: u8,
+    source_sha256: String,
+    patch_sha256: String,
+    mode: u8,
+    selectors: std::collections::BTreeMap<String, usize>,
+}
+
+#[cfg(feature = "cli")]
+fn swcompat_digest(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+#[cfg(feature = "cli")]
+fn swcompat_operand_key(patch_hash: &str, cell: u32) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    hash.update(b"swcompat-rip-recipe-v1:");
+    hash.update(patch_hash.as_bytes());
+    hash.update(cell.to_le_bytes());
+    format!("{:x}", hash.finalize())
+}
+
+#[cfg(feature = "cli")]
+fn swcompat_recipe_candidate(source: &[u8], parsed: &Parsed<'_>, limits: &Limits,
+    mode: u8) -> Result<(Vec<u8>, Vec<u32>, Vec<pe::SwcompatRipOperand>)> {
+    let info = &parsed.info;
+    if !matches!(mode, 0 | 4) || !matches!(info.file_type, 8 | 32)
+        || info.flags & 0x200 == 0 || info.flags & (1 | 0x0200_0000) != 0
+        || info.target_size > 16 * 1024 * 1024 {
+        return Err(Error::Unsupported("RIP recipe format"));
+    }
+    validate_hash(info)?;
+    let diagnostic = Parsed {
+        info: Pa30Info { target_hash_algorithm: 0, target_hash: Vec::new(), ..info.clone() },
+        preprocessing: parsed.preprocessing, patch: parsed.patch,
+    };
+    let previous = SWCOMPAT_TRACE.with(|v| v.replace(Some(Vec::with_capacity(info.target_size))));
+    let (decoded, operands) = pe::with_swcompat_rip_capture(|| {
+        pe::with_swcompat_operand_mode(mode, || apply_once(source, &diagnostic, limits, true))
+    });
+    let trace = SWCOMPAT_TRACE.with(|v| v.replace(previous));
+    let output = decoded?;
+    let trace = trace.ok_or(Error::Invalid("RIP recipe provenance"))?;
+    if output.len() != trace.len() || output.len() != info.target_size {
+        return Err(Error::Integrity("RIP recipe length"));
+    }
+    Ok((output, trace, operands))
+}
+
+#[cfg(feature = "cli")]
+fn swcompat_replay_recipe(source: &[u8], delta: &[u8], limits: &Limits,
+    recipe: &SwcompatRecipe) -> Result<Vec<u8>> {
+    if recipe.version != 1 || recipe.selectors.is_empty() || recipe.selectors.len() > 512
+        || recipe.source_sha256 != swcompat_digest(source)
+        || recipe.patch_sha256 != swcompat_digest(delta) {
+        return Err(Error::Integrity("RIP recipe identity"));
+    }
+    let parsed = parse(delta, limits)?;
+    let (mut output, trace, operands) = swcompat_recipe_candidate(source, &parsed, limits, recipe.mode)?;
+    let mut used = std::collections::BTreeSet::new();
+    let mut overrides = std::collections::BTreeMap::new();
+    for operand in operands {
+        let key = swcompat_operand_key(&recipe.patch_sha256, operand.cell);
+        let Some(&choice) = recipe.selectors.get(&key) else { continue; };
+        let value = operand.alternatives.get(choice).ok_or(Error::Invalid("RIP recipe selector"))?;
+        if !used.insert(key) { return Err(Error::Invalid("RIP recipe duplicate operand")); }
+        for (j, byte) in value.to_le_bytes().into_iter().enumerate() {
+            if let Some(prior) = overrides.insert(operand.cell + j as u32, byte) && prior != byte {
+                return Err(Error::Integrity("RIP recipe conflicting operands"));
+            }
+        }
+    }
+    if used.len() != recipe.selectors.len() {
+        return Err(Error::Invalid("RIP recipe unmatched selector"));
+    }
+    for (i, &origin) in trace.iter().enumerate() {
+        if let Some(&byte) = overrides.get(&origin) { output[i] = byte; }
+    }
+    verify_hash(&parsed.info, &output)?;
+    Ok(output)
+}
+
+#[cfg(feature = "cli")]
+pub fn apply_pa30_recipe(source: &[u8], delta: &[u8], limits: &Limits, recipe_json: &str) -> Result<Vec<u8>> {
+    if recipe_json.len() > 128 * 1024 { return Err(Error::Limit("RIP recipe JSON")); }
+    let recipe = serde_json::from_str::<SwcompatRecipe>(recipe_json)
+        .map_err(|_| Error::Invalid("RIP recipe JSON"))?;
+    swcompat_replay_recipe(source, delta, limits, &recipe)
+}
+
+/// Solve the joint operand selection problem against the genuine Windows
+/// reference. Output is only a validated recipe, never vendor file content.
+#[cfg(feature = "cli")]
+pub fn synthesize_pa30_recipe(source: &[u8], delta: &[u8], reference: &[u8],
+    limits: &Limits) -> Result<String> {
+    let parsed = parse(delta, limits)?;
+    validate_hash(&parsed.info)?;
+    if reference.len() != parsed.info.target_size {
+        return Err(Error::Integrity("RIP recipe reference size"));
+    }
+    verify_hash(&parsed.info, reference)?;
+    let patch_hash = swcompat_digest(delta);
+    for mode in [0u8, 4] {
+        let Ok((output, trace, operands)) = swcompat_recipe_candidate(source, &parsed, limits, mode) else { continue; };
+        // Every observed use of a source byte must agree, including uses
+        // which were already correct. Literals cannot be repaired by recipes.
+        let mut required = std::collections::BTreeMap::new();
+        let mut bad = std::collections::BTreeSet::new();
+        let mut inconsistent = false;
+        for (i, &origin) in trace.iter().enumerate() {
+            if output[i] != reference[i] {
+                if origin == SWCOMPAT_NO_ORIGIN { inconsistent = true; break; }
+                bad.insert(origin);
+            }
+        }
+        if inconsistent || bad.is_empty() { continue; }
+        let mut covered = std::collections::BTreeSet::new();
+        for op in &operands {
+            if (0..4).any(|j| bad.contains(&(op.cell+j))) {
+                covered.extend(op.cell..op.cell+4);
+            }
+        }
+        if !bad.is_subset(&covered) { continue; }
+        for (i, &origin) in trace.iter().enumerate() {
+            if covered.contains(&origin) {
+                if let Some(prior) = required.insert(origin, reference[i]) && prior != reference[i] {
+                    inconsistent = true; break;
+                }
+            }
+        }
+        if inconsistent { continue; }
+        let mut selectors = std::collections::BTreeMap::new();
+        let mut resolved = std::collections::BTreeSet::new();
+        for op in operands {
+            if !(0..4).any(|j| bad.contains(&(op.cell+j))) { continue; }
+            if let Some(choice) = op.alternatives.iter().position(|v| {
+                let bytes = v.to_le_bytes();
+                (0..4).all(|j| required.get(&(op.cell+j as u32)).is_none_or(|b| *b == bytes[j]))
+            }) {
+                selectors.insert(swcompat_operand_key(&patch_hash, op.cell), choice);
+                resolved.extend(op.cell..op.cell+4);
+            }
+        }
+        if !bad.is_subset(&resolved) || selectors.len() > 512 { continue; }
+        let recipe = SwcompatRecipe {
+            version: 1, source_sha256: swcompat_digest(source), patch_sha256: patch_hash.clone(),
+            mode, selectors,
+        };
+        if let Ok(replay) = swcompat_replay_recipe(source, delta, limits, &recipe) && replay == reference {
+            return serde_json::to_string(&recipe).map_err(|_| Error::Invalid("RIP recipe serialization"));
+        }
+    }
+    Err(Error::Integrity("No joint semantic RIP solution"))
+}
+
 #[cfg(test)]
 mod swcompat_provenance_tests {
     use super::*;
