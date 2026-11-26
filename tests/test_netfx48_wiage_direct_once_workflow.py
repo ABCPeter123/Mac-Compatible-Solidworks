@@ -47,8 +47,8 @@ class SignedWiageNetfx48OnceTests(unittest.TestCase):
                            start)
         gate = source[start:end]
         self.assertIn('"$SWCOMPAT_MACOS26" != "true"', gate)
-        self.assertIn('"$SWCOMPAT_HOST_ONLY:$SWCOMPAT_WIAGE_TRY_DIRECT:$SWCOMPAT_WIAGE_TRY_MSI"', gate)
-        self.assertIn("true:false:false|false:true:false|false:false:true)", gate)
+        self.assertIn('"$SWCOMPAT_HOST_ONLY:$SWCOMPAT_WIAGE_TRY_DIRECT:$SWCOMPAT_WIAGE_TRY_MSI:$SWCOMPAT_WIAGE_TRY_CATALOG"', gate)
+        self.assertIn("true:false:false:false|false:true:false:false|false:false:true:false|false:false:false:true)", gate)
         self.assertIn('"$SWCOMPAT_WIAGE_TRY_INTERMEDIATE" != "false"', gate)
         self.assertIn('"$SWCOMPAT_WIAGE_TRY_PAYLOAD" != "false"', gate)
         self.assertIn("SWCOMPAT_NATIVE40_READY == 'yes'", source)
