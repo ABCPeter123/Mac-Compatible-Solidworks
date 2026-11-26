@@ -93,6 +93,16 @@ class WusaDryRunTests(unittest.TestCase):
         self.assertNotIn("install_updates(state, FALSE)", code)
         self.assertNotIn("ret = TRUE", code)
 
+    def test_xml_loader_requires_synchronous_document_and_disables_external_resolution(self):
+        import inspect
+        from scripts.patch_wusa_ipd_dryrun import patch_xml_loader
+        code = inspect.getsource(patch_xml_loader)
+        self.assertIn("put_async(document, VARIANT_FALSE)", code)
+        self.assertIn("put_resolveExternals(document, VARIANT_FALSE)", code)
+        self.assertIn("put_validateOnParse(document, VARIANT_FALSE)", code)
+        self.assertIn("success != VARIANT_TRUE", code)
+        self.assertIn("XML COM activation failed", code)
+
     def test_git_blob_identity(self):
         self.assertEqual(git_blob(b""), "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391")
 
