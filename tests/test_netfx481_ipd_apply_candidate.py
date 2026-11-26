@@ -39,7 +39,7 @@ class ApplyCandidateTests(unittest.TestCase):
             raw = bytearray(512)
             raw[:2] = b"MZ"
             struct.pack_into("<I", raw, 0x3c, 128)
-            raw[128:132] = b"PE\\0\\0"
+            raw[128:132] = b"PE\0\0"
             struct.pack_into("<H", raw, 132, machine)
             struct.pack_into("<H", raw, 148, 240)
             struct.pack_into("<H", raw, 152, magic)
