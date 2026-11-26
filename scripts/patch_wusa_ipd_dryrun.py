@@ -45,7 +45,7 @@ void swcompat_wusa_event(const char *format)
     if (strstr(format, "Assembly %s not found")) category = 0;
     else if (strstr(format, "Required file %s not found")) category = 1;
     else if (strstr(format, "expression")) category = 2;
-    else if (strstr(format, "Unsupported registry value type")) category = 3;
+    else if (strstr(format, "Unsupported registry value type") || strstr(format, "Invalid registry numeric data")) category = 3;
     else if (strstr(format, "circular dependency")) category = 4;
     else if (strstr(format, "No updates found")) category = 5;
     else if (strstr(format, "Failed to extract")) category = 6;
@@ -82,11 +82,72 @@ OLD_INSTALL = r'''    /* installation */
 NEW_INSTALL = r'''    /* This research executable has no installation mode. */
     ret = swcompat_ipd_count == 1;'''
 
+OLD_DWORD = r'''    DWORD value = registrykv->value_type ? wcstoul(registrykv->value_type, NULL, 16) : 0;
+    BOOL ret = TRUE;'''
+NEW_DWORD = r'''    DWORD value;
+    BOOL ret = TRUE;
+
+    if (!swcompat_parse_dword(registrykv->value, &value))
+    {
+        ERR("Invalid registry numeric data\n");
+        return FALSE;
+    }'''
+
+NUMERIC = r'''
+static int swcompat_hex_digit(WCHAR c)
+{
+    if (c >= L'0' && c <= L'9') return c - L'0';
+    if (c >= L'a' && c <= L'f') return c - L'a' + 10;
+    if (c >= L'A' && c <= L'F') return c - L'A' + 10;
+    return -1;
+}
+
+/* Match Wine's intended hexadecimal interpretation, but use the manifest's
+ * actual value field and reject overflow, missing and malformed input. */
+static BOOL swcompat_parse_dword(const WCHAR *text, DWORD *out)
+{
+    DWORD value = 0;
+    unsigned count = 0;
+    int digit;
+    if (!text || !out) return FALSE;
+    if (text[0] == L'0' && (text[1] == L'x' || text[1] == L'X')) text += 2;
+    while (*text)
+    {
+        if (count == 8 || (digit = swcompat_hex_digit(*text++)) < 0) return FALSE;
+        value = (value << 4) | (DWORD)digit;
+        count++;
+    }
+    if (!count) return FALSE;
+    *out = value;
+    return TRUE;
+}
+
+static BOOL swcompat_numeric_selftest(void)
+{
+    DWORD value;
+    return swcompat_parse_dword(L"0x00000001", &value) && value == 1
+        && swcompat_parse_dword(L"FFFFFFFF", &value) && value == 0xffffffff
+        && swcompat_parse_dword(L"0", &value) && value == 0
+        && !swcompat_parse_dword(L"REG_DWORD", &value)
+        && !swcompat_parse_dword(L"0x", &value)
+        && !swcompat_parse_dword(L"100000000", &value)
+        && !swcompat_parse_dword(L"-1", &value)
+        && !swcompat_parse_dword(L"1g", &value)
+        && !swcompat_parse_dword(NULL, &value);
+}
+'''
+
 ENTRY = r'''int __cdecl wmain(int argc, WCHAR *argv[])
 {
     struct installer_state state;
     BOOL passed;
     unsigned i;
+    if (argc == 2 && !wcscmp(argv[1], L"--selftest"))
+    {
+        BOOL ok = swcompat_numeric_selftest();
+        printf("SWCOMPAT_WUSA_REGISTRY_SELFTEST=%s\n", ok ? "PASS" : "FAIL");
+        return ok ? 0 : 1;
+    }
     if (argc != 3 || !is_directory(argv[2])) return 2;
     swcompat_stage = argv[2];
     state.norestart = TRUE;
@@ -112,13 +173,33 @@ def patch_main(text: str) -> str:
     text = replace_once(text, "WINE_DEFAULT_DEBUG_CHANNEL(wusa);", "WINE_DEFAULT_DEBUG_CHANNEL(wusa);\n" + EVENTS)
     text = replace_once(text, OLD_IPD, NEW_IPD)
     text = replace_once(text, OLD_INSTALL, NEW_INSTALL)
+    text = replace_once(text, OLD_DWORD, NEW_DWORD)
+    text = replace_once(text, "static BOOL install_registry_dword(", NUMERIC + "static BOOL install_registry_dword(")
     # The upstream parser's dry-run branch passes an uninitialized HKEY to
     # its no-write registry routines. Initialize it for defined C behavior.
     text = replace_once(text, "    HKEY root, subkey;", "    HKEY root, subkey = NULL;")
+    text = replace_once(text, "    if (!(output = malloc(length))) return NULL;",
+                        "    if (!(output = malloc(length ? length : 1))) return NULL;")
+    text = replace_once(text, "        *p++ = wcstoul(number, 0, 16);",
+                        "        if (swcompat_hex_digit(number[0]) < 0 || swcompat_hex_digit(number[1]) < 0)\n"
+                        "        {\n            free(output);\n            return NULL;\n        }\n"
+                        "        *p++ = (swcompat_hex_digit(number[0]) << 4) | swcompat_hex_digit(number[1]);")
     marker = "static void restart_as_x86_64(void)"
     if text.count(marker) != 1 or text.count("int __cdecl wmain(") != 1:
         raise ValueError("Unexpected WUSA entrypoint")
     return text[:text.index(marker)] + ENTRY
+
+
+def patch_manifest(text: str) -> str:
+    # MinGW's msxml.h can expose interfaces before COBJMACROS is defined
+    # by upstream Wine's source. Use the identical COM ABI explicitly,
+    # not implicit function declarations or stubbed parser calls.
+    import re
+    pattern = r"\b(IXMLDOM(?:Element|NodeList|Node|Document))_([A-Za-z0-9_]+)\(([A-Za-z_][A-Za-z0-9_]*)(?=\s*[,)]|\s*$)"
+    converted, count = re.subn(pattern, lambda m: f"{m[3]}->lpVtbl->{m[2]}({m[3]}", text)
+    if count != 18:
+        raise ValueError("Unexpected pinned Wine COM call count")
+    return converted
 
 
 def git_blob(data: bytes) -> str:
@@ -142,6 +223,8 @@ def prepare(source: Path, destination: Path) -> None:
     for name, data in original.items():
         if name == "main.c":
             data = patch_main(data.decode("utf-8")).encode("utf-8")
+        elif name == "manifest.c":
+            data = patch_manifest(data.decode("utf-8")).encode("utf-8")
         (destination / name).write_bytes(data)
     (destination / "wine/debug.h").write_text(DEBUG, encoding="ascii")
 
