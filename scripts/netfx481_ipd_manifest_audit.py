@@ -98,6 +98,11 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
     file_targets = defaultdict(set)
     runtime_payloads = Counter()
     release_registry = Counter()
+    runtime_directives = Counter()
+    runtime_attributes = Counter()
+    runtime_architectures = Counter()
+    directory_expressions = Counter()
+    directory_flags = Counter()
     resource_name_relations = Counter()
     absent_names = Counter()
     absent_arch = Counter()
@@ -141,6 +146,32 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
             if tag not in {"assemblyIdentity", "dependency", "package", "file",
                            "registryKeys", "trustInfo", "configuration", "deployment"}:
                 ignored_features[tag if re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_.-]{0,64}", tag) else "other"] += 1
+            if tag == "runtime":
+                runtime_architectures[ident[1] if ident[1] in {"amd64", "x86", "wow64", "msil", "neutral"} else "other"] += 1
+                for node in element.iter():
+                    feature = local(node.tag)
+                    if not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_.-]{0,64}", feature):
+                        feature = "other"
+                    runtime_directives[feature] += 1
+                    for attr in node.attrib:
+                        attr = local(attr)
+                        if re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_.-]{0,64}", attr):
+                            runtime_attributes[feature + "/" + attr] += 1
+            if tag == "directories":
+                for directory in children(element, "directory"):
+                    value = directory.get("destinationPath", "")
+                    tokens = re.findall(r"\$\(([^)]+)\)", value)
+                    for token in tokens:
+                        token = token.casefold()
+                        directory_expressions[token if re.fullmatch(r"[a-z][a-z0-9_.-]{0,79}", token) else "other"] += 1
+                    if not value:
+                        directory_flags["missing_path"] += 1
+                    elif not tokens:
+                        directory_flags["no_expression"] += 1
+                    if directory.get("owner"):
+                        directory_flags["explicit_owner"] += 1
+                    if children(directory, "securityDescriptor"):
+                        directory_flags["security_descriptor"] += 1
             if tag in {"deployment", "configuration", "directories"}:
                 for node in element.iter():
                     feature = local(node.tag)
@@ -377,6 +408,11 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
             "file_destination_collisions": sum(len(v) > 1 for v in file_targets.values()),
             "runtime_payload_operations": dict(sorted(runtime_payloads.items())),
             "release_registry": dict(sorted(release_registry.items())),
+            "runtime_directives": dict(sorted(runtime_directives.items())),
+            "runtime_directive_attributes": dict(sorted(runtime_attributes.items())),
+            "runtime_directive_architectures": dict(sorted(runtime_architectures.items())),
+            "directory_expressions": dict(sorted(directory_expressions.items())),
+            "directory_flags": dict(sorted(directory_flags.items())),
             "missing_source_categories": dict(sorted(missing_files.items())),
             "missing_dependency_categories": dict(sorted(missing_dependencies.items())),
             "absent_dependency_kinds": {k: counts["absent_" + k] for k in ("install", "prerequisite", "unspecified", "package_component")},
