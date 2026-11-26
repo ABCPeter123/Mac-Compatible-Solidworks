@@ -169,11 +169,11 @@ jobs:
           export MAGE_BACKGROUND_EXE=rundll32.exe:services.exe:explorer.exe:conhost.exe
           export WINEMSYNC=1
           test -x "$SWCOMPAT_WINE"
-          python -m swcompat --prefix "$RUNNER_TEMP/netfx481-ipd-wusa-prefix" \
+          python -m swcompat --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
             --logs-dir "$RUNNER_TEMP/netfx481-ipd-wusa-logs" init --timeout 120 --skip-bootstrap-mono-gecko
-          touch "$RUNNER_TEMP/netfx481-ipd-wusa-prefix/.swcompat-netfx481-disposable"
+          touch "$RUNNER_TEMP/netfx40-msxml3-prefix/.swcompat-netfx481-disposable"
           python -m scripts.netfx40_prefix_readiness --wine "$SWCOMPAT_WINE" \
-            --prefix "$RUNNER_TEMP/netfx481-ipd-wusa-prefix" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
             --output build/netfx481-ipd-prefix-readiness.json --agree-disposable-prefix
       - name: Exercise original WUSA dependency and file preflight against verified IPD stage
         shell: bash
@@ -183,7 +183,7 @@ jobs:
           export WINEMSYNC=1
           python -m scripts.netfx481_ipd_wusa_dryrun \
             --wine "$RUNNER_TEMP/ipd-wine-engine/wiage/bin/wine" \
-            --prefix "$RUNNER_TEMP/netfx481-ipd-wusa-prefix" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
             --fixture "$RUNNER_TEMP/swcompat-wusa-ipd-dryrun.exe" \
             --package build/KB5011048.msu --sha256-file build/netfx481-catalog.sha256 \
             --stage "$RUNNER_TEMP/netfx481-ipd-stage" \
@@ -192,8 +192,8 @@ jobs:
         if: always()
         shell: bash
         run: |
-          if [[ -x "$RUNNER_TEMP/ipd-wine-engine/wiage/bin/wineserver" && -f "$RUNNER_TEMP/netfx481-ipd-wusa-prefix/.swcompat-netfx481-disposable" ]]; then
-            WINEPREFIX="$RUNNER_TEMP/netfx481-ipd-wusa-prefix" "$RUNNER_TEMP/ipd-wine-engine/wiage/bin/wineserver" -k || true
+          if [[ -x "$RUNNER_TEMP/ipd-wine-engine/wiage/bin/wineserver" && -f "$RUNNER_TEMP/netfx40-msxml3-prefix/.swcompat-netfx481-disposable" ]]; then
+            WINEPREFIX="$RUNNER_TEMP/netfx40-msxml3-prefix" "$RUNNER_TEMP/ipd-wine-engine/wiage/bin/wineserver" -k || true
           fi
           rm -f -- build/KB5011048.msu "$RUNNER_TEMP/wiage-ipd-runtime.tar.gz"
           rm -rf -- "$RUNNER_TEMP/netfx481-ipd-stage"
