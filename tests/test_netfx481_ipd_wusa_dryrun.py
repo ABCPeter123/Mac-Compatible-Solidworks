@@ -1,7 +1,7 @@
 """Tests for the dry-run-only WUSA integration."""
 from pathlib import Path
 import unittest
-from scripts.patch_wusa_ipd_dryrun import patch_main, OLD_IPD, OLD_INSTALL, OLD_DWORD, git_blob, patch_manifest, patch_file_names, patch_full_preflight
+from scripts.patch_wusa_ipd_dryrun import patch_main, OLD_IPD, OLD_INSTALL, OLD_DWORD, git_blob, patch_manifest, patch_file_names, patch_full_preflight, patch_neutral_preflight
 from scripts.netfx481_ipd_wusa_dryrun import parse_packet, CATEGORIES
 
 
@@ -67,6 +67,17 @@ class WusaDryRunTests(unittest.TestCase):
         self.assertIn("install_registry(item, TRUE)", patched)
         self.assertIn("if (!install_updates(state, TRUE)) goto done;", patched)
         self.assertNotIn("install_updates(state, FALSE)", patched)
+
+    def test_neutral_trial_never_changes_strict_installation_result(self):
+        import inspect
+        code = inspect.getsource(patch_neutral_preflight)
+        self.assertIn("dryrun && swcompat_neutral && dependency->resource_prerequisite", code)
+        self.assertIn("GetUserDefaultUILanguage()", code)
+        self.assertIn("GetSystemDefaultUILanguage()", code)
+        self.assertIn("!swcompat_counts[17] && !swcompat_counts[19]", code)
+        self.assertIn("swcompat_counts[20] == swcompat_counts[18]", code)
+        self.assertNotIn("install_updates(state, FALSE)", code)
+        self.assertNotIn("ret = TRUE", code)
 
     def test_git_blob_identity(self):
         self.assertEqual(git_blob(b""), "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391")
