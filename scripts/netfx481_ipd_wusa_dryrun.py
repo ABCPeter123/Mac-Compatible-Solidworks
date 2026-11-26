@@ -56,7 +56,7 @@ def inspect(wine: Path, prefix: Path, fixture: Path, package: Path,
             digest: Path, stage: Path) -> dict:
     runner = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
     if (os.name == "nt" or prefix.is_symlink() or stage.is_symlink()
-            or prefix.resolve().parent != runner or prefix.name != "netfx481-ipd-wusa-prefix"
+            or prefix.resolve().parent != runner or prefix.name != "netfx40-msxml3-prefix"
             or stage.resolve().parent != runner or stage.name != "netfx481-ipd-stage"
             or fixture.is_symlink() or fixture.name != "swcompat-wusa-ipd-dryrun.exe"):
         raise ValueError("Only isolated native Mac WUSA experiment")
