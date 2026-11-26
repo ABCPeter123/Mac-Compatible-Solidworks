@@ -315,14 +315,14 @@ concurrency:
   # Keep experiments from distinct commits separated, even when the reusable
   # workflow is called on the same branch and shares the workflow name.
   # Preserve existing cancellation behavior for ordinary non-experiment CI.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.try_wow64_managed && format('wow64-{0}-{1}-{2}-{3}', github.sha, inputs.wine_baseline, inputs.use_macos26_runner, inputs.wow64_host_stack64) || inputs.try_40_core_msi_recovery && format('core-{0}-{1}-{2}', github.sha, inputs.probe_native40_ngen_if_ready, inputs.use_macos26_runner) || (inputs.try_48_msi || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_481_ipd_apply_candidate) && github.sha || 'shared' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.try_wow64_managed && format('wow64-{0}-{1}-{2}-{3}', github.sha, inputs.wine_baseline, inputs.use_macos26_runner, inputs.wow64_host_stack64) || inputs.try_40_core_msi_recovery && format('core-{0}-{1}-{2}', github.sha, inputs.probe_native40_ngen_if_ready, inputs.use_macos26_runner) || inputs.try_481_ipd_apply_candidate && format('ipd-{0}', github.sha) || (inputs.try_48_msi || inputs.try_48_direct || inputs.try_48_intermediate) && github.sha || 'shared' }}
   cancel-in-progress: ${{ !inputs.try_48_msi && !inputs.try_48_direct && !inputs.try_48_intermediate && !inputs.try_wow64_managed && !inputs.try_40_core_msi_recovery }}
 
 jobs:
   absolute-path-regressions:
     name: Verify .NET 4.0 native CLR false-positive regressions on POSIX
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: ${{ inputs.try_481_ipd_apply_candidate && 12 || 5 }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -367,6 +367,31 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx48_msi_registration.py' -v
           python -m unittest discover -s tests -p 'test_netfx48_msp_patch_sequence.py' -v
 
+      - name: Compile exact pinned Wine source for IPD preflight and apply candidate before native CLR installation
+        if: inputs.try_481_ipd_apply_candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64-posix
+          src="$RUNNER_TEMP/wusa-original"
+          mkdir -p "$src/wine"
+          base=https://raw.githubusercontent.com/wine-mirror/wine/wine-11.13
+          for name in main.c manifest.c wusa.h; do
+            curl --fail --location --retry 4 --retry-all-errors --max-time 60 --output "$src/$name" "$base/programs/wusa/$name"
+          done
+          curl --fail --location --retry 4 --retry-all-errors --max-time 60 --output "$src/wine/list.h" "$base/include/wine/list.h"
+          python -m scripts.patch_wusa_ipd_dryrun "$src" "$RUNNER_TEMP/wusa-ipd-dryrun"
+          python -m scripts.patch_wusa_ipd_apply_candidate "$src" "$RUNNER_TEMP/wusa-ipd-apply-candidate"
+          for mode in dryrun apply-candidate; do
+            dst="$RUNNER_TEMP/wusa-ipd-$mode"
+            x86_64-w64-mingw32-gcc-posix -std=gnu11 -O2 -municode -mconsole -static -D_WIN32_WINNT=0x0601 \
+              -I"$dst" "$dst/main.c" "$dst/manifest.c" \
+              -o "$RUNNER_TEMP/swcompat-wusa-ipd-$mode.exe" \
+              -lcabinet -lshlwapi -lole32 -loleaut32 -ladvapi32 -lshell32 -luuid
+          done
+          echo "Pinned Wine dry-run and experimental apply candidates compiled"
+  
   authentic-netfx40-windows:
     name: Authenticate original Microsoft .NET 4.0 and compile CLR probes
     runs-on: windows-2025
