@@ -88,6 +88,11 @@ on:
         type: boolean
         required: false
         default: false
+      signed_msi_host_stack64:
+        description: 'Only isolated native explicit-reinstall signed MSI/MSP: inherit 65520 KiB macOS stack'
+        type: boolean
+        required: false
+        default: false
       signed_msp_reinstall:
         description: 'Explicit Microsoft silent MSP REINSTALL=ALL REINSTALLMODE=ecmus, native monitor only'
         type: boolean
@@ -962,6 +967,12 @@ jobs:
         run: |
           echo "NGen preflight requires a standalone authenticated Wiage signed MSI arm."
           exit 1
+      - name: Reject signed MSI servicing host stack outside native reinstall arm
+        if: inputs.signed_msi_host_stack64 && (!inputs.signed_msp_reinstall || !inputs.signed_msp_win32_exit || !inputs.ngen_host_stack64 || inputs.signed_msi_timeout_seconds != 1200)
+        shell: bash
+        run: |
+          echo "Signed MSI host stack experiment requires the isolated native reinstall profile and bounded 1200s prerequisite."
+          exit 1
       - name: Reject explicit signed MSP reinstall without native Win32 monitoring
         if: inputs.signed_msp_reinstall && !inputs.signed_msp_win32_exit
         shell: bash
@@ -1667,12 +1678,21 @@ jobs:
           SWCOMPAT_MSI_WIN10: ${{ inputs.signed_msi_win10_profile }}
           SWCOMPAT_MSP_WIN32: ${{ inputs.signed_msp_win32_exit }}
           SWCOMPAT_MSP_REINSTALL: ${{ inputs.signed_msp_reinstall }}
+          SWCOMPAT_MSI_HOST_STACK64: ${{ inputs.signed_msi_host_stack64 }}
         run: |
           set -euo pipefail
           cache_flags=()
           if [[ "$SWCOMPAT_MSP_WIN32" == "true" ]]; then
             cache_flags+=(--patch-fixture build/netfx48_msp_win32_status.exe)
             echo "Original signed x64 MSP Win32 32-bit DWORD exit instrumentation enabled"
+          fi
+          if [[ "$SWCOMPAT_MSI_HOST_STACK64" == "true" ]]; then
+            # Each Actions step starts a new shell: the CLR4 NGen stack
+            # setting is not inherited from its previous shell. Apply it
+            # here to the actual original MSI/MSP process tree.
+            ulimit -s 65520
+            [[ "$(ulimit -s)" == "65520" ]] || { echo "Original signed MSI servicing host stack not applied" >&2; exit 1; }
+            echo "Original signed MSI/MSP launch host stack KiB: 65520"
           fi
           if [[ "$SWCOMPAT_MSP_REINSTALL" == "true" ]]; then
             cache_flags+=(--patch-reinstall)
