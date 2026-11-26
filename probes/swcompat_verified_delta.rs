@@ -1,12 +1,31 @@
 //! Hash-verified PA30 compatibility adapter. No integrity bypass.
 //! The expected size and SHA-256 come from an independent Windows reference
 //! for the exact authenticated original MSU. Never accept an unchecked output.
-use ms_delta::{Error, Limits, pa30::{apply_pa30_with_verifier, apply_pa30_compat, inspect_pa30}};
+use ms_delta::{Error, Limits, pa30::{apply_pa30_with_verifier, apply_pa30_compat, diagnose_pa30_reference, inspect_pa30}};
 use sha2::{Digest, Sha256};
 use std::{env, fs, io::Write, path::Path};
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = env::args_os().collect();
+    if args.len() == 5 && args[1] == "--diagnose" {
+        if !cfg!(windows) {
+            return Err("native Windows reference required".into());
+        }
+        let limits = Limits::default();
+        let mut inputs = Vec::new();
+        for arg in &args[2..] {
+            let path = Path::new(arg);
+            if fs::symlink_metadata(path)?.file_type().is_symlink()
+                || !fs::metadata(path)?.is_file()
+                || fs::metadata(path)?.len() > limits.max_output_bytes as u64 {
+                return Err("invalid reference input".into());
+            }
+            inputs.push(fs::read(path)?);
+        }
+        let report = diagnose_pa30_reference(&inputs[0], &inputs[1], &inputs[2], &limits)?;
+        println!("{}", report);
+        return Ok(());
+    }
     if args.len() != 6 {
         return Err("expected source delta target size sha256".into());
     }
