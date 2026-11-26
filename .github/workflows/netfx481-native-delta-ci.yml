@@ -4,6 +4,8 @@ on:
     paths:
       - 'scripts/netfx481_native_delta.py'
       - 'scripts/netfx481_native_delta_gate.py'
+      - 'scripts/netfx481_ipd_stage.py'
+      - 'tests/test_netfx481_ipd_stage.py'
       - 'scripts/netfx481_cix_graph.py'
       - 'data/netfx481/recipes/**'
       - 'scripts/patch_msdelta_compat.py'
@@ -27,6 +29,8 @@ jobs:
           python-version: '3.12'
       - name: Test bounded decoder adapter
         run: python -m unittest discover -s tests -p test_netfx481_native_delta.py -v
+      - name: Test private staging safety
+        run: python -m unittest discover -s tests -p test_netfx481_ipd_stage.py -v
       - name: Build pinned MSDelta CLI and intrinsic-hash compatibility adapter
         shell: bash
         run: |
@@ -75,6 +79,8 @@ jobs:
           python-version: '3.12'
       - name: Test bounded decoder adapter
         run: python -m unittest discover -s tests -p test_netfx481_native_delta.py -v
+      - name: Test private staging safety
+        run: python -m unittest discover -s tests -p test_netfx481_ipd_stage.py -v
       - name: Build pinned MSDelta CLI and intrinsic-hash compatibility adapter
         shell: bash
         run: |
@@ -104,9 +110,30 @@ jobs:
             --sevenzip "$(realpath "$(command -v 7zz)")" \
             --codec "$RUNNER_TEMP/swcompat-msdelta-source/target/release/ms-delta" \
             --verified-codec "$RUNNER_TEMP/swcompat-msdelta-source/target/release/swcompat-verified-delta" \
-            --recipe-dir data/netfx481/recipes --output build/netfx481-native-delta.json
+            --recipe-dir data/netfx481/recipes --stage-dir "$RUNNER_TEMP/netfx481-ipd-stage" \
+            --output build/netfx481-native-delta.json
+      - name: Validate fully materialized private Apple Silicon tree
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, json
+          from pathlib import Path
+          from scripts.netfx481_ipd_stage import inventory, digest_tree
+          from scripts.netfx481_native_delta_gate import EXPECTED_TREE_SHA256
+          root = Path(os.environ['RUNNER_TEMP']) / 'netfx481-ipd-stage'
+          files = inventory(root)
+          assert len(files) == 2446 and digest_tree(files) == EXPECTED_TREE_SHA256
+          report = json.loads(Path('build/netfx481-native-delta.json').read_text())
+          assert report['stage_verified'] is True and report['stage_files'] == 2446
+          print('Private stage contains all 2446 exact manifest-path files')
+          PY
       - name: Require complete tree and independently verified Windows digest
         run: python -m scripts.netfx481_native_delta_gate build/netfx481-native-delta.json
+      - name: Remove private staged Microsoft files
+        if: always()
+        shell: bash
+        run: |
+          rm -rf -- "$RUNNER_TEMP/netfx481-ipd-stage"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
