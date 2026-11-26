@@ -215,7 +215,9 @@ def reconstruct(codec: Path, raw_dir: Path, extracted: list[Path],
               "cix_basis_blocked": 0, "cix_missing_source": 0, "cix_size_mismatch": 0,
               "cix_oracle_matches": 0, "cix_oracle_mismatches": 0, "cix_oracle_missing": 0,
               "cix_empty_source_recovered": 0, "cix_external_hash_recovered": 0,
-              "cix_parameter_budget_recovered": 0,
+              "cix_parameter_budget_recovered": 0, "cix_compat_attempted": 0,
+              "cix_compat_recovered": 0, "cix_compat_failed": 0,
+              "cix_target_hash_pa30": 0, "cix_target_hash_pa31": 0, "cix_target_hash_pa19": 0,
               **{"cix_error_" + k.lower(): 0 for k in ERROR_CLASSES},
               **{"cix_native_reference_" + k.lower(): 0
                  for k in ("MATCH", "MISMATCH", "REJECTED", "UNAVAILABLE")}}
@@ -280,6 +282,25 @@ def reconstruct(codec: Path, raw_dir: Path, extracted: list[Path],
                     ok, reason = observe_decoder(command + ["--max-parameter-bytes", "33554432"], work, 45)
                     if ok and target.is_file() and not target.is_symlink() and target.stat().st_size == e.length:
                         report["cix_parameter_budget_recovered"] += 1
+                if not ok and reason == "TARGET_HASH":
+                    report["cix_target_hash_" + framing[0]] += 1
+                    if e.kind == "PA30" and verified_codec is not None:
+                        expected = oracle.get(e.name) if expanded else None
+                        if not expanded or (expected is not None and expected.stat().st_size == e.length):
+                            report["cix_compat_attempted"] += 1
+                            if target.is_symlink() or target.is_file():
+                                target.unlink()
+                            ok = run_private([str(verified_codec), str(basis or empty_basis), str(delta),
+                                              str(target), str(e.length),
+                                              sha256_file(expected).hex() if expected is not None else "-"],
+                                             work, 120)
+                            if (ok and target.is_file() and not target.is_symlink()
+                                    and target.stat().st_size == e.length
+                                    and (expected is None or sha256_file(target) == sha256_file(expected))):
+                                report["cix_compat_recovered"] += 1
+                            else:
+                                report["cix_compat_failed"] += 1
+                                ok = False
                 # The upstream verifier API is restricted to CALG_NONE + empty
                 # intrinsic hash. Supply an independent native Windows Expand
                 # digest, never a digest derived from the decoder's own output.
@@ -342,8 +363,8 @@ def inspect(package: Path, manifest: Path, sevenzip: Path, codec: Path,
             raise ValueError("Native Windows Expand oracle required")
         expand = expand.resolve(strict=True)
     if verified_codec is not None:
-        if verified_codec.is_symlink() or not expand:
-            raise ValueError("Independent Windows reference required")
+        if verified_codec.is_symlink():
+            raise ValueError("Linked compatibility decoder forbidden")
         verified_codec = verified_codec.resolve(strict=True)
         if not verified_codec.is_file() or verified_codec.name.casefold() not in {"swcompat-verified-delta", "swcompat-verified-delta.exe"}:
             raise ValueError("Unexpected independent verifier")
