@@ -232,3 +232,24 @@ class CixGraphTests(unittest.TestCase):
         self.assertIn("records.len() >= 32768", PE_MODE)
         self.assertIn("swcompat_capture_rip(used, cell", PE_NEW)
         self.assertIn("operand.alternatives", INSERT)
+
+
+    def test_recipe_schema_is_bound_to_source_and_delta_and_contains_only_selectors(self):
+        source, delta, selector = "a" * 64, "b" * 64, "c" * 64
+        value = {"version": 1, "source_sha256": source, "patch_sha256": delta,
+                 "mode": 4, "selectors": {selector: 2}}
+        self.assertTrue(p.valid_recipe(value, source, delta))
+        self.assertFalse(p.valid_recipe(value, "d" * 64, delta))
+        self.assertFalse(p.valid_recipe(value, source, "e" * 64))
+        self.assertFalse(p.valid_recipe(dict(value, mode=True), source, delta))
+        self.assertFalse(p.valid_recipe(dict(value, selectors={selector: 64}), source, delta))
+        self.assertFalse(p.valid_recipe(dict(value, payload="vendor bytes"), source, delta))
+
+    def test_joint_recipe_replay_still_verifies_intrinsic_digest(self):
+        from scripts.patch_msdelta_compat import INSERT
+        self.assertIn("swcompat_replay_recipe(source, delta, limits, &recipe)", INSERT)
+        self.assertIn("verify_hash(&parsed.info, &output)?", INSERT)
+        self.assertIn("replay == reference", INSERT)
+        self.assertIn("recipe.source_sha256 != swcompat_digest(source)", INSERT)
+        self.assertIn("recipe.patch_sha256 != swcompat_digest(delta)", INSERT)
+        self.assertIn("bad.is_subset(&resolved)", INSERT)
