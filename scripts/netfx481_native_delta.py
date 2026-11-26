@@ -14,6 +14,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 import zlib
+import shutil
+from scripts.netfx481_cix_graph import parse as parse_cix, order as cix_order, path_key
 
 from scripts.netfx481_catalog_wusa import verify_package
 from scripts.netfx481_servicing_inventory import _invoke_sevenzip, _safe_embedded
@@ -103,6 +105,98 @@ def decode_one(codec: Path, raw: bytes, root: Path, serial: int) -> tuple[str, b
             target.unlink()
 
 
+def reconstruct(codec: Path, raw_dir: Path, extracted: list[Path],
+                work: Path, expanded: Path | None) -> dict:
+    """Reconstruct every eligible CIX node with its declared private basis.
+
+    Native Windows Expand is an independent oracle, never a source for the
+    portable graph. Exact logical destination paths and sizes are compared.
+    """
+    index = {}
+    for p in extracted:
+        key = path_key(p.relative_to(raw_dir).as_posix())
+        if key in index:
+            raise ValueError("Ambiguous extracted member")
+        index[key] = p
+    manifest = index.get("_manifest_.cix.xml")
+    if manifest is None or manifest.stat().st_size > 16 * 1024 * 1024:
+        raise ValueError("Missing or oversized CIX")
+    entries, unsupported = parse_cix(manifest.read_bytes())
+    ordered, unresolved = cix_order(entries)
+    report = {"cix_entries": len(entries) + unsupported, "cix_unsupported": unsupported,
+              "cix_unresolved": len(unresolved), "cix_basis": sum(e.basis is not None for e in entries.values()),
+              "cix_raw": sum(e.kind == "RAW" for e in entries.values()),
+              "cix_reconstructed": 0, "cix_delta_reconstructed": 0, "cix_delta_failed": 0,
+              "cix_basis_blocked": 0, "cix_missing_source": 0, "cix_size_mismatch": 0,
+              "cix_oracle_matches": 0, "cix_oracle_mismatches": 0, "cix_oracle_missing": 0}
+    oracle = {}
+    if expanded:
+        for p in files(expanded):
+            key = path_key(p.relative_to(expanded).as_posix())
+            if key in oracle:
+                raise ValueError("Ambiguous reference member")
+            oracle[key] = p
+    outputs: dict[str, Path] = {}
+    total = 0
+    # A cumulative budget limits even valid authenticated decompression.
+    for fid in ordered:
+        e = entries[fid]
+        source = index.get(e.source)
+        if source is None or source.stat().st_size > MAX_FILE:
+            report["cix_missing_source"] += 1
+            continue
+        basis = outputs.get(e.basis) if e.basis else None
+        if e.basis and basis is None:
+            report["cix_basis_blocked"] += 1
+            continue
+        target = work / ("cix-target-" + fid)
+        if target.exists() or target.is_symlink() or total + e.length > MAX_TOTAL:
+            raise ValueError("CIX output collision or total limit")
+        if e.kind == "RAW":
+            if source.stat().st_size != e.length:
+                report["cix_size_mismatch"] += 1
+                continue
+            shutil.copyfile(source, target)
+        else:
+            raw = source.read_bytes()
+            framing = format_and_offset(raw[:8], raw)
+            if framing is None or framing[0] != e.kind.lower():
+                report["cix_delta_failed"] += 1
+                continue
+            delta = work / ("cix-delta-" + fid)
+            delta.write_bytes(raw[framing[1]:])
+            command = [str(codec), "apply", "--format", framing[0], "--delta",
+                       str(delta), "--output", str(target)]
+            if basis is not None:
+                command += ["--source", str(basis)]
+            try:
+                ok = run_private(command, work, 45)
+            finally:
+                delta.unlink(missing_ok=True)
+            if not ok or target.is_symlink() or not target.is_file():
+                if target.is_symlink() or target.is_file():
+                    target.unlink()
+                report["cix_delta_failed"] += 1
+                continue
+            if target.stat().st_size != e.length:
+                target.unlink()
+                report["cix_size_mismatch"] += 1
+                continue
+            report["cix_delta_reconstructed"] += 1
+        outputs[fid] = target
+        total += e.length
+        report["cix_reconstructed"] += 1
+        if expanded:
+            reference = oracle.get(e.name)
+            if reference is None:
+                report["cix_oracle_missing"] += 1
+            elif reference.stat().st_size == e.length and sha256_file(target) == sha256_file(reference):
+                report["cix_oracle_matches"] += 1
+            else:
+                report["cix_oracle_mismatches"] += 1
+    return report
+
+
 def inspect(package: Path, manifest: Path, sevenzip: Path, codec: Path,
             expand: Path | None = None) -> dict:
     paths = [package, manifest, sevenzip, codec] + ([expand] if expand else [])
@@ -148,6 +242,7 @@ def inspect(package: Path, manifest: Path, sevenzip: Path, codec: Path,
                 continue
             report["ipd_cabs"] += 1
             oracle_hashes: set[bytes] = set()
+            expanded = None
             if expand:
                 expanded = root / f"expanded-{index}"
                 expanded.mkdir()
@@ -158,7 +253,12 @@ def inspect(package: Path, manifest: Path, sevenzip: Path, codec: Path,
                         oracle_hashes.add(sha256_file(p))
                 if not oracle_hashes:
                     raise ValueError("Empty Windows reference expansion")
-            # Prefer small streams and deterministic order to bound CI cost.
+            graph_work = work / f"graph-{index}"
+            graph_work.mkdir()
+            graph = reconstruct(codec, raw_dir, extracted, graph_work, expanded)
+            for key, value in graph.items():
+                report[key] = report.get(key, 0) + value
+            # Preserve the earlier independent empty-source control sample.
             for p in sorted(extracted, key=lambda p: (p.stat().st_size, str(p))):
                 if not 8 <= p.stat().st_size <= MAX_FILE:
                     continue
