@@ -93,6 +93,11 @@ on:
         type: boolean
         required: false
         default: false
+      signed_msi_fresh_host_session:
+        description: 'Only isolated signed servicing stack arm: recycle disposable Wine session after verified NGen'
+        type: boolean
+        required: false
+        default: false
       signed_msp_reinstall:
         description: 'Explicit Microsoft silent MSP REINSTALL=ALL REINSTALLMODE=ecmus, native monitor only'
         type: boolean
@@ -967,6 +972,12 @@ jobs:
         run: |
           echo "NGen preflight requires a standalone authenticated Wiage signed MSI arm."
           exit 1
+      - name: Reject fresh signed MSI session outside inherited stack arm
+        if: inputs.signed_msi_fresh_host_session && !inputs.signed_msi_host_stack64
+        shell: bash
+        run: |
+          echo "Fresh signed MSI session requires the isolated inherited stack arm."
+          exit 1
       - name: Reject signed MSI servicing host stack outside native reinstall arm
         if: inputs.signed_msi_host_stack64 && (!inputs.signed_msp_reinstall || !inputs.signed_msp_win32_exit || !inputs.ngen_host_stack64 || inputs.signed_msi_timeout_seconds != 1200)
         shell: bash
@@ -1679,6 +1690,7 @@ jobs:
           SWCOMPAT_MSP_WIN32: ${{ inputs.signed_msp_win32_exit }}
           SWCOMPAT_MSP_REINSTALL: ${{ inputs.signed_msp_reinstall }}
           SWCOMPAT_MSI_HOST_STACK64: ${{ inputs.signed_msi_host_stack64 }}
+          SWCOMPAT_MSI_FRESH_SESSION: ${{ inputs.signed_msi_fresh_host_session }}
         run: |
           set -euo pipefail
           cache_flags=()
@@ -1693,6 +1705,25 @@ jobs:
             ulimit -s 65520
             [[ "$(ulimit -s)" == "65520" ]] || { echo "Original signed MSI servicing host stack not applied" >&2; exit 1; }
             echo "Original signed MSI/MSP launch host stack KiB: 65520"
+          fi
+          if [[ "$SWCOMPAT_MSI_FRESH_SESSION" == "true" ]]; then
+            # Existing Wine services may predate the new host stack. Recycle
+            # only the marked CI session after both real NGen drains succeeded.
+            # The signed MSI inspector revalidates native CLR before servicing.
+            python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx48_native_ngen_drain import valid
+          from scripts.netfx40_legacy import _terminate_private_setup_wineserver
+          report = json.loads(Path("build/netfx40-native-ngen-drain.json").read_text(encoding="ascii"))
+          if not valid(report) or not report["ready"] or report["x64"] != "SUCCESS" or report["x86"] != "SUCCESS":
+              raise SystemExit("Fresh servicing session requires both genuine NGen drains")
+          wine = Path(os.environ["SWCOMPAT_WINE"]).resolve(strict=True)
+          prefix = Path(os.environ["RUNNER_TEMP"]) / "netfx40-msxml3-prefix"
+          if not _terminate_private_setup_wineserver(wine, prefix):
+              raise SystemExit("Disposable Wine session did not terminate safely; servicing blocked")
+          print("Original signed MSI/MSP prior Wine session terminated; fresh launch required")
+          PY
           fi
           if [[ "$SWCOMPAT_MSP_REINSTALL" == "true" ]]; then
             cache_flags+=(--patch-reinstall)

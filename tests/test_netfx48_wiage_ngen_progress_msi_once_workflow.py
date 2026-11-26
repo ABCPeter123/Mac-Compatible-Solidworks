@@ -115,6 +115,20 @@ class Signed48AfterProgressNgenTests(unittest.TestCase):
         self.assertIn("--patch-reinstall", msi)
         self.assertNotIn("continue-on-error", msi)
 
+    def test_fresh_servicing_session_is_opt_in_and_follows_verified_ngen(self):
+        caller = CALLER.read_text(encoding="utf-8")
+        reusable = REUSE.read_text(encoding="utf-8")
+        self.assertNotIn("signed_msi_fresh_host_session:", caller)
+        self.assertEqual(reusable.count("signed_msi_fresh_host_session:"), 1)
+        self.assertIn("default: false", reusable.split("signed_msi_fresh_host_session:", 1)[1].split("signed_msp_reinstall:", 1)[0])
+        self.assertIn("inputs.signed_msi_fresh_host_session && !inputs.signed_msi_host_stack64", reusable)
+        msi = reusable.split("- name: Extract authenticated original .NET 4.8 x64 MSI and MSP after genuine CLR4.0", 1)[1].split("- name: Gate 4.8.1 on authenticated original MSI", 1)[0]
+        for required in ("build/netfx40-native-ngen-drain.json", 'not valid(report)', 'not report["ready"]', 'report["x64"] != "SUCCESS"', 'report["x86"] != "SUCCESS"', 'if not _terminate_private_setup_wineserver(wine, prefix):', 'servicing blocked'):
+            self.assertIn(required, msi)
+        self.assertLess(msi.index("ulimit -s 65520"), msi.index("if not _terminate_private_setup_wineserver"))
+        self.assertLess(msi.index("if not _terminate_private_setup_wineserver"), msi.index("python3 -m scripts.netfx40_to_48_signed_msi"))
+        self.assertNotIn("continue-on-error", msi)
+
     def test_grace_requires_authentic_original_stack_and_signed_msi(self):
         reuse = REUSE.read_text(encoding="utf-8")
         self.assertEqual(reuse.count("progress_gated_native40_ngen:"), 2)
