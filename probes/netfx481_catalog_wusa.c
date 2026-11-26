@@ -17,18 +17,25 @@ int wmain(int argc, wchar_t **argv) {
     STARTUPINFOW si = {0};
     PROCESS_INFORMATION pi = {0};
     DWORD code = 0xffffffffu, length;
-    if (argc == 2 && wcscmp(argv[1], L"--selftest") == 0) {
-        packet("SELFTEST", 3010);
-        return 0;
-    }
-    if (argc != 2 || wcscmp(argv[1], L"--apply-catalog-481") != 0) return 2;
-    length = GetSystemDirectoryW(exe, MAX_PATH);
-    if (!length || length >= MAX_PATH - 12 ||
-        wcscat_s(exe, MAX_PATH, L"\\wusa.exe") != 0 ||
-        swprintf_s(command, 2 * MAX_PATH,
-          L"\"%ls\" \"C:\\swcompat-netfx481-catalog\\KB5011048.msu\" /quiet /norestart", exe) < 0) {
-        packet("START_FAILED", code);
-        return 1;
+    BOOL selftest = FALSE;
+    if (argc != 2) return 2;
+    if (wcscmp(argv[1], L"--exit-3010") == 0) return 3010;
+    selftest = wcscmp(argv[1], L"--selftest") == 0;
+    if (selftest) {
+        length = GetModuleFileNameW(NULL, exe, MAX_PATH);
+        if (!length || length >= MAX_PATH ||
+            swprintf_s(command, 2 * MAX_PATH, L"\"%ls\" --exit-3010", exe) < 0)
+            return 2;
+    } else {
+        if (wcscmp(argv[1], L"--apply-catalog-481") != 0) return 2;
+        length = GetSystemDirectoryW(exe, MAX_PATH);
+        if (!length || length >= MAX_PATH - 12 ||
+            wcscat_s(exe, MAX_PATH, L"\\wusa.exe") != 0 ||
+            swprintf_s(command, 2 * MAX_PATH,
+              L"\"%ls\" \"C:\\swcompat-netfx481-catalog\\KB5011048.msu\" /quiet /norestart", exe) < 0) {
+            packet("START_FAILED", code);
+            return 1;
+        }
     }
     si.cb = sizeof(si);
     if (!CreateProcessW(exe, command, NULL, NULL, FALSE, CREATE_NO_WINDOW,
@@ -45,6 +52,6 @@ int wmain(int argc, wchar_t **argv) {
     }
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
-    packet("EXIT", code);
-    return 0;
+    packet(selftest ? "SELFTEST" : "EXIT", code);
+    return selftest && code != 3010 ? 1 : 0;
 }
