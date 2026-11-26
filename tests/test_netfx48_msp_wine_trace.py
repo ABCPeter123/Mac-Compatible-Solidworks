@@ -24,8 +24,8 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
             "first_forward_return": "WIN32_1603",
             "first_rollback_action": "SERVICE",
             "first_rollback_return": "WIN32_1603",
-            "signals": ["INSTALL_SCRIPT_HALTED", "MSI_SERVICE_OPERATION_FAILURE",
-                        "ROLLBACK_SCRIPT_HALTED"],
+            "signals": ["INSTALL_SCRIPT_HALTED", "MSI_SEQUENCE_ACTION_FINALIZE", "MSI_SEQUENCE_RETURN_WIN32_1603",
+                        "MSI_SERVICE_OPERATION_FAILURE", "ROLLBACK_SCRIPT_HALTED"],
         })
         self.assertNotIn("SECRET", str(result))
         self.assertNotIn("PRIVATE_PATH", str(result))
@@ -168,7 +168,10 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
                 self.assertTrue(t.valid(result))
                 self.assertEqual(result["first_forward_action"], "NOT_SEEN")
                 self.assertEqual(result["first_rollback_action"], "NOT_SEEN")
-                self.assertEqual(result["signals"], [want])
+                expected = [want]
+                if b'ITERATE_Actions Execution halted' in raw:
+                    expected += ["MSI_SEQUENCE_ACTION_FINALIZE", "MSI_SEQUENCE_RETURN_WIN32_1603"]
+                self.assertEqual(result["signals"], sorted(expected))
                 self.assertNotIn("PRIVATE", str(result))
                 self.assertNotIn("GUID", str(result))
         # A later finalization cascade must not hide an earlier Wine
@@ -178,9 +181,44 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
             b'0011:err:msi:ITERATE_Actions Execution halted, '
             b'action L"InstallFinalize" returned 1603\n')
         self.assertEqual(two["signals"], [
+            "MSI_SEQUENCE_ACTION_FINALIZE", "MSI_SEQUENCE_RETURN_WIN32_1603",
             "MSI_UNATTRIBUTED_PATCH_ENGINE", "MSI_UNATTRIBUTED_SCRIPT_ENGINE",
         ])
         self.assertTrue(t.valid(two))
+
+    def test_immediate_sequence_failure_is_not_deferred_failure(self):
+        for name, category in (("CA_ScheduleCacheGACAssembly_PRIVATE", "ASSEMBLY"),
+                               ("InstallValidate", "VALIDATE"),
+                               ("InstallFinalize", "FINALIZE"),
+                               ("CA_PrivateThing", "CUSTOM")):
+            with self.subTest(category=category):
+                raw = (
+                    f'0011:err:msi:ITERATE_Actions Execution halted, action L"{name}" returned 1603\n'
+                    '0011:err:msi:ITERATE_Actions Execution halted, action L"InstallFinalize" returned 5\n'
+                ).encode("ascii")
+                report = t.classify_stream(BytesIO(raw))
+                self.assertTrue(t.valid(report))
+                self.assertEqual(report["first_forward_action"], "NOT_SEEN")
+                self.assertIn("MSI_SEQUENCE_ACTION_" + category, report["signals"])
+                self.assertIn("MSI_SEQUENCE_RETURN_WIN32_1603", report["signals"])
+                self.assertNotIn("MSI_SEQUENCE_RETURN_OTHER_NONZERO", report["signals"])
+                self.assertNotIn("PRIVATE", str(report))
+
+    def test_commit_and_finalize_failure_remain_distinct_from_forward_and_rollback(self):
+        raw = (
+            b'0001:err:msi:ACTION_InstallFinalize Failed to install patched assembly\n'
+            b'0001:err:msi:execute_script Execution of script 1 halted; action L"CA_Ngen_PRIVATE" returned 1603\n'
+            b'0001:err:msi:ITERATE_Actions Execution halted, action L"InstallFinalize" returned 1603\n'
+        )
+        report = t.classify(raw)
+        self.assertTrue(t.valid(report))
+        self.assertEqual(report["first_forward_action"], "NOT_SEEN")
+        self.assertEqual(report["first_rollback_action"], "NOT_SEEN")
+        for signal in ("MSI_FINALIZE_PATCHED_ASSEMBLY_FAILURE",
+                       "MSI_COMMIT_SCRIPT_HALTED", "MSI_COMMIT_ACTION_NGEN",
+                       "MSI_COMMIT_RETURN_WIN32_1603", "MSI_SEQUENCE_ACTION_FINALIZE"):
+            self.assertIn(signal, report["signals"])
+        self.assertNotIn("PRIVATE", str(report))
 
     def test_trace_action_prior_to_finalize_is_only_observational_context(self):
         # Wine action.c traces action dispatch before the generic finalizer
@@ -197,6 +235,7 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
         self.assertTrue(t.valid(report))
         self.assertEqual(report["first_forward_action"], "NOT_SEEN")
         self.assertEqual(report["signals"], [
+            "MSI_SEQUENCE_ACTION_FINALIZE", "MSI_SEQUENCE_RETURN_WIN32_1603",
             "MSI_TRACE_FINALIZE_OBSERVED",
             "MSI_TRACE_NONFINAL_TYPE_LIBRARY",
             "MSI_UNATTRIBUTED_SCRIPT_ENGINE",
@@ -237,6 +276,7 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
         self.assertEqual(report["signals"], [
             "MSI_REG_CACHE_MISSING",
             "MSI_REG_PRODUCT_INSTALLED",
+            "MSI_SEQUENCE_ACTION_FINALIZE", "MSI_SEQUENCE_RETURN_WIN32_1603",
             "MSI_UNATTRIBUTED_SCRIPT_ENGINE",
         ])
         self.assertNotIn("ProductCode", str(report))
@@ -283,6 +323,7 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
         self.assertTrue(t.valid(result))
         self.assertEqual(result["signals"], [
             "MSI_REG_CACHE_PRESENT", "MSI_REG_PRODUCT_INSTALLED",
+            "MSI_SEQUENCE_ACTION_FINALIZE", "MSI_SEQUENCE_RETURN_WIN32_1603",
             "MSI_SEQ_MACHINE_PRODUCT_UNKNOWN", "MSI_SEQ_USER_APPLICABLE",
             "MSI_UNATTRIBUTED_SCRIPT_ENGINE",
         ])
@@ -324,6 +365,7 @@ class OriginalMSPPrivateWineMSIErrors(TestCase):
         report = t.classify_stream(BytesIO(raw))
         self.assertEqual(report["status"], "CLASSIFIED")
         self.assertEqual(report["signals"], [
+            "MSI_SEQUENCE_ACTION_FINALIZE", "MSI_SEQUENCE_RETURN_WIN32_1603",
             "MSI_TRACE_NONFINAL_TYPE_LIBRARY",
             "MSI_UNATTRIBUTED_SCRIPT_ENGINE",
         ])
