@@ -11,6 +11,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: native-ipd-decoder-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   decode:
     strategy:
@@ -80,4 +83,4 @@ jobs:
           name: native-delta-allowlisted-result-${{ matrix.os }}
           path: build/netfx481-native-delta.json
           if-no-files-found: error
-          retention-days: 7
+          retention-days: ${{ github.event_name == 'pull_request' && 3 || 7 }}
