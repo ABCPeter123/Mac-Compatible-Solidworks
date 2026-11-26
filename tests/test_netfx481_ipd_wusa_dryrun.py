@@ -37,6 +37,7 @@ class WusaDryRunTests(unittest.TestCase):
     def test_renamed_payload_is_same_assembly_only(self):
         main = "\n".join([
             "static BOOL install_files_copy(",
+            "    int csidl = 0;",
             "    if (!(target = path_combine(target_path, fileop->source))) goto error;",
             "    if (!(source = path_combine(source_path, fileop->source))) goto error;",
             "if (!(ret = PathFileExistsW(source)))",
@@ -52,6 +53,9 @@ class WusaDryRunTests(unittest.TestCase):
         self.assertIn("GetFileAttributesW(source) == INVALID_FILE_ATTRIBUTES", m)
         self.assertIn("swcompat_regular_file(source)", m)
         self.assertIn("FILE_ATTRIBUTE_REPARSE_POINT", m)
+        self.assertIn('L"assembly.empty"', m)
+        self.assertIn("p == start || p[-1]", m)
+        self.assertIn("swcompat_counts[14]++", m)
         self.assertIn('get_xml_attribute(root, L"name")', x)
         self.assertIn("free(entry->name)", x)
         self.assertIn("WCHAR       *name;", h)
