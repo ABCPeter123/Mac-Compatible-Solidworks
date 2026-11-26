@@ -1,7 +1,7 @@
 """Tests for the dry-run-only WUSA integration."""
 from pathlib import Path
 import unittest
-from scripts.patch_wusa_ipd_dryrun import patch_main, OLD_IPD, OLD_INSTALL, OLD_DWORD, git_blob, patch_manifest
+from scripts.patch_wusa_ipd_dryrun import patch_main, OLD_IPD, OLD_INSTALL, OLD_DWORD, git_blob, patch_manifest, patch_file_names, patch_full_preflight
 from scripts.netfx481_ipd_wusa_dryrun import parse_packet, CATEGORIES
 
 
@@ -33,6 +33,36 @@ class WusaDryRunTests(unittest.TestCase):
         self.assertIn("node->lpVtbl->Release(node)", converted)
         with self.assertRaises(ValueError):
             patch_manifest("IXMLDOMNode_Release(node);")
+
+    def test_renamed_payload_is_same_assembly_only(self):
+        main = "\n".join([
+            "static BOOL install_files_copy(",
+            "    if (!(target = path_combine(target_path, fileop->source))) goto error;",
+            "    if (!(source = path_combine(source_path, fileop->source))) goto error;",
+            "if (!(ret = PathFileExistsW(source)))",
+        ])
+        manifest = "\n".join([
+            "    free(entry->source);\n    free(entry->target);",
+            '    if (!(entry->source = get_xml_attribute(root, L"sourceName"))) goto error;',
+        ])
+        header = "    WCHAR       *source;\n    WCHAR       *target;"
+        m, x, h = patch_file_names(main, manifest, header)
+        self.assertIn("path_combine(target_path, fileop->name)", m)
+        self.assertIn("path_combine(source_path, fileop->name)", m)
+        self.assertIn("GetFileAttributesW(source) == INVALID_FILE_ATTRIBUTES", m)
+        self.assertIn("swcompat_regular_file(source)", m)
+        self.assertIn("FILE_ATTRIBUTE_REPARSE_POINT", m)
+        self.assertIn('get_xml_attribute(root, L"name")', x)
+        self.assertIn("free(entry->name)", x)
+        self.assertIn("WCHAR       *name;", h)
+
+    def test_full_preflight_does_not_replace_dependency_traversal(self):
+        text = "    /* perform dry run */\n    if (!install_updates(state, TRUE)) goto done;"
+        patched = patch_full_preflight(text)
+        self.assertIn("install_files(item, TRUE)", patched)
+        self.assertIn("install_registry(item, TRUE)", patched)
+        self.assertIn("if (!install_updates(state, TRUE)) goto done;", patched)
+        self.assertNotIn("install_updates(state, FALSE)", patched)
 
     def test_git_blob_identity(self):
         self.assertEqual(git_blob(b""), "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391")
