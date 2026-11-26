@@ -62,6 +62,8 @@ class CatalogWusaTests(unittest.TestCase):
         self.assertIn("try_481_catalog_wusa: true", caller)
         self.assertIn("try_48_msi: false", caller)
         self.assertIn("workflow_dispatch:", caller)
+        self.assertIn("branches: [main]", caller)
+        self.assertIn("      - '.github/workflows/netfx481-catalog-wusa-ci.yml'", caller)
         self.assertNotIn("pull_request:", caller)
         for marker in ("build/netfx481-catalog.sha256", "build/netfx481_catalog_wusa.exe",
                        "build/netfx481-catalog-wusa.json", "and not catalog_requested"):
