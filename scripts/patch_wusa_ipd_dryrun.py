@@ -36,7 +36,7 @@ void swcompat_wusa_event(const char *format);
 '''
 
 EVENTS = r'''
-static unsigned swcompat_counts[16];
+static unsigned swcompat_counts[20];
 static const WCHAR *swcompat_stage;
 static unsigned swcompat_ipd_count;
 void swcompat_wusa_event(const char *format)
@@ -80,7 +80,7 @@ OLD_INSTALL = r'''    /* installation */
     TRACE("Installation finished\n");
     ret = TRUE;'''
 NEW_INSTALL = r'''    /* This research executable has no installation mode. */
-    ret = swcompat_ipd_count == 1 && !swcompat_counts[12] && !swcompat_counts[13];'''
+    ret = swcompat_ipd_count == 1 && !swcompat_counts[12] && !swcompat_counts[13] && !swcompat_counts[17] && !swcompat_counts[18] && !swcompat_counts[19];'''
 
 OLD_DWORD = r'''    DWORD value = registrykv->value_type ? wcstoul(registrykv->value_type, NULL, 16) : 0;
     BOOL ret = TRUE;'''
@@ -282,6 +282,74 @@ def patch_full_preflight(main: str) -> str:
     /* perform dry run */''')
 
 
+def patch_resource_dependencies(main: str, manifest: str, header: str) -> tuple[str, str, str]:
+    """Keep mandatory and language resource prerequisites separate.
+
+    This is a graph survey, not an applicability decision. No missing
+    prerequisite is treated as installed or skipped in install_updates.
+    """
+    header = replace_once(header,
+        "    struct assembly_identity identity;\n};\n\nstruct fileop_entry",
+        "    struct assembly_identity identity;\n    BOOL resource_prerequisite;\n};\n\nstruct fileop_entry")
+    manifest = replace_once(manifest,
+        "    struct assembly_entry *assembly = context;\n    struct dependency_entry *entry;\n\n    if (wcscmp(tagname, L\"dependentAssembly\"))",
+        "    struct swcompat_dependency_context *ctx = context;\n"
+        "    struct assembly_entry *assembly = ctx->assembly;\n"
+        "    struct dependency_entry *entry;\n\n"
+        "    if (wcscmp(tagname, L\"dependentAssembly\"))")
+    manifest = replace_once(manifest, "static BOOL read_dependency(IXMLDOMElement *child,",
+        "struct swcompat_dependency_context { struct assembly_entry *assembly; BOOL resource; };\n\n"
+        "static BOOL read_dependency(IXMLDOMElement *child,")
+    manifest = replace_once(manifest,
+        '            TRACE("Found dependency %s\\n", debugstr_w(entry->identity.name));',
+        r'''            WCHAR *kind = get_xml_attribute(child, L"dependencyType");
+            size_t n = wcslen(entry->identity.name);
+            entry->resource_prerequisite = ctx->resource && kind &&
+                !wcscmp(kind, L"prerequisite") &&
+                !wcscmp(entry->identity.language, L"*") &&
+                n > 10 && !wcsicmp(entry->identity.name + n - 10, L".resources");
+            free(kind);
+            TRACE("Found dependency %s\n", debugstr_w(entry->identity.name));''')
+    manifest = replace_once(manifest,
+        "    return call_xml_callbacks(root, read_dependency, assembly);",
+        r'''    WCHAR *resource = get_xml_attribute(root, L"resourceType");
+    struct swcompat_dependency_context ctx = { assembly, resource && !wcscmp(resource, L"Resources") };
+    BOOL ret = call_xml_callbacks(root, read_dependency, &ctx);
+    free(resource);
+    return ret;''')
+    # Exact matching is deliberately separate from Wine's historical
+    # version-relaxed lookup. Do not turn a version mismatch into success.
+    main = replace_once(main, "    /* perform dry run */", r'''    {
+        struct assembly_entry *item, *candidate;
+        struct dependency_entry *dep;
+        LIST_FOR_EACH_ENTRY(item, &state->assemblies, struct assembly_entry, entry)
+        {
+            LIST_FOR_EACH_ENTRY(dep, &item->dependencies, struct dependency_entry, entry)
+            {
+                BOOL exact = FALSE, version_only = FALSE;
+                LIST_FOR_EACH_ENTRY(candidate, &state->assemblies, struct assembly_entry, entry)
+                {
+                    struct assembly_identity *a = &candidate->identity, *b = &dep->identity;
+                    if (!a->name || !a->architecture || !a->language || !a->pubkey_token || !a->version)
+                        continue;
+                    if (wcsicmp(a->name, b->name) ||
+                        !compare_assembly_string(a->architecture, b->architecture) ||
+                        !compare_assembly_string(a->language, b->language) ||
+                        !compare_assembly_string(a->pubkey_token, b->pubkey_token)) continue;
+                    if (compare_assembly_string(a->version, b->version)) exact = TRUE;
+                    else version_only = TRUE;
+                }
+                if (exact) swcompat_counts[16]++;
+                else if (version_only) swcompat_counts[17]++;
+                else if (dep->resource_prerequisite) swcompat_counts[18]++;
+                else swcompat_counts[19]++;
+            }
+        }
+    }
+    /* perform dry run */''')
+    return main, manifest, header
+
+
 def git_blob(data: bytes) -> str:
     return hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()
 
@@ -302,7 +370,8 @@ def prepare(source: Path, destination: Path) -> None:
         patch_main(original["main.c"].decode("utf-8")),
         patch_manifest(original["manifest.c"].decode("utf-8")),
         original["wusa.h"].decode("utf-8"))
-    original["main.c"] = patch_full_preflight(main).encode("utf-8")
+    main, manifest, header = patch_resource_dependencies(patch_full_preflight(main), manifest, header)
+    original["main.c"] = main.encode("utf-8")
     original["manifest.c"] = manifest.encode("utf-8")
     original["wusa.h"] = header.encode("utf-8")
     destination.mkdir()
