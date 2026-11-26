@@ -188,6 +188,49 @@ jobs:
             --package build/KB5011048.msu --sha256-file build/netfx481-catalog.sha256 \
             --stage "$RUNNER_TEMP/netfx481-ipd-stage" \
             --output build/netfx481-ipd-wusa-dryrun.json
+      - name: Compare installed MSXML3 parser with isolated builtin parser on original verified IPD stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          export MAGE_BACKGROUND_EXE=rundll32.exe:services.exe:explorer.exe:conhost.exe
+          export WINEMSYNC=1
+          export SWCOMPAT_WINE="$RUNNER_TEMP/ipd-wine-engine/wiage/bin/wine"
+          brew install winetricks
+          winetricks --version | grep -F '20260125'
+          python -m scripts.netfx40_msxml3_prerequisite \
+            --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --winetricks "$(realpath "$(command -v winetricks)")" \
+            --output build/netfx481-ipd-msxml3-prerequisite.json \
+            --timeout 300 --agree-disposable-prefix
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.netfx40_msxml3_prerequisite import validate
+          r = json.loads(Path("build/netfx481-ipd-msxml3-prerequisite.json").read_text())
+          assert validate(r) and r["status"] == "VERB_SUCCEEDED"
+          assert r["x86_dll_changed"] or r["x64_dll_changed"]
+          PY
+          for mode in default builtin; do
+            set -- python -m scripts.netfx481_ipd_wusa_dryrun \
+              --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+              --fixture "$RUNNER_TEMP/swcompat-wusa-ipd-dryrun.exe" \
+              --package build/KB5011048.msu --sha256-file build/netfx481-catalog.sha256 \
+              --stage "$RUNNER_TEMP/netfx481-ipd-stage" \
+              --output "build/netfx481-ipd-msxml3-$mode.json"
+            if [ "$mode" = default ]; then set -- "$@" --control-default-xml; fi
+            "$@"
+          done
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts.netfx481_ipd_apply_candidate import preflight_ready
+          reports = {mode: json.loads(Path(f"build/netfx481-ipd-msxml3-{mode}.json").read_text())
+                     for mode in ("default", "builtin")}
+          summary = {mode: {"ready": preflight_ready(r), "load_failure": r["events"].get("load_failure"),
+                            "no_updates": r["events"].get("no_updates")} for mode, r in reports.items()}
+          print("Native MSXML3 A/B control", json.dumps(summary, sort_keys=True))
+          assert summary["builtin"]["ready"], "Builtin parser does not restore full original update preflight"
+          PY
       - name: Remove private staged Microsoft files
         if: always()
         shell: bash
@@ -204,5 +247,8 @@ jobs:
           path: |
             build/netfx481-native-delta.json
             build/netfx481-ipd-wusa-dryrun.json
+            build/netfx481-ipd-msxml3-prerequisite.json
+            build/netfx481-ipd-msxml3-default.json
+            build/netfx481-ipd-msxml3-builtin.json
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 3 || 7 }}
