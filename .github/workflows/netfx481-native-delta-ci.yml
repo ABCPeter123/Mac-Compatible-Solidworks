@@ -1,0 +1,73 @@
+name: Native IPD decoder on genuine KB5011048
+on:
+  pull_request:
+    paths:
+      - 'scripts/netfx481_native_delta.py'
+      - 'tests/test_netfx481_native_delta.py'
+      - '.github/workflows/netfx481-native-delta-ci.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  decode:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test bounded decoder adapter
+        run: python -m unittest discover -s tests -p test_netfx481_native_delta.py -v
+      - name: Build pinned MIT native MSDelta CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup update stable
+          cargo +stable install ms-delta --version 0.1.0 --features cli --locked
+      - name: Install native macOS CAB reader
+        if: runner.os == 'macOS'
+        run: brew install sevenzip
+      - name: Download original pinned Microsoft update and exercise native decompression on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          curl --fail --location --retry 3 --max-time 600 --output build/KB5011048.msu \
+            'https://catalog.s.download.windowsupdate.com/c/msdownload/update/software/ftpk/2023/09/windows10.0-kb5011048-x64_411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e.msu'
+          trap 'rm -f build/KB5011048.msu' EXIT
+          python -c 'import hashlib; from pathlib import Path; p=Path("build/KB5011048.msu"); data=p.read_bytes(); assert len(data)==71059034 and hashlib.sha1(data).hexdigest()=="411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e"; Path("build/netfx481-catalog.sha256").write_text(hashlib.sha256(data).hexdigest())'
+          python -m scripts.netfx481_native_delta \
+            --package build/KB5011048.msu --sha256-file build/netfx481-catalog.sha256 \
+            --sevenzip "$(realpath "$(command -v 7zz)")" \
+            --codec "$(realpath "$(command -v ms-delta)")" \
+            --output build/netfx481-native-delta.json
+      - name: Compare genuine portable reconstruction with native Windows IPD Expand oracle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force build | Out-Null
+          $msu = Join-Path (Resolve-Path build) "KB5011048.msu"
+          try {
+            curl.exe --fail --location --retry 3 --max-time 600 --output $msu "https://catalog.s.download.windowsupdate.com/c/msdownload/update/software/ftpk/2023/09/windows10.0-kb5011048-x64_411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e.msu"
+            if ($LASTEXITCODE -ne 0 -or (Get-Item -LiteralPath $msu).Length -ne 71059034) { throw "Catalog download failed" }
+            if ((Get-FileHash -LiteralPath $msu -Algorithm SHA1).Hash.ToLowerInvariant() -ne "411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e") { throw "Original package identity mismatch" }
+            (Get-FileHash -LiteralPath $msu -Algorithm SHA256).Hash.ToLowerInvariant() |
+              Set-Content -LiteralPath build/netfx481-catalog.sha256 -NoNewline -Encoding ascii
+            python -m scripts.netfx481_native_delta --package $msu --sha256-file build/netfx481-catalog.sha256 --sevenzip (Join-Path $env:ProgramFiles "7-Zip\7z.exe") --codec (Get-Command ms-delta.exe).Source --expand (Join-Path $env:WINDIR "System32\expand.exe") --output build/netfx481-native-delta.json
+            if ($LASTEXITCODE -ne 0) { throw "Native delta reference failed" }
+          } finally {
+            if (Test-Path -LiteralPath $msu) { Remove-Item -LiteralPath $msu }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-delta-allowlisted-result-${{ matrix.os }}
+          path: build/netfx481-native-delta.json
+          if-no-files-found: error
+          retention-days: 7
