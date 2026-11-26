@@ -1,0 +1,47 @@
+name: Inspect genuine catalog package delta layout
+on:
+  pull_request:
+    paths:
+      - 'scripts/netfx481_catalog_cab_inventory.py'
+      - 'tests/test_netfx481_catalog_cab_inventory.py'
+      - '.github/workflows/netfx481-catalog-cab-inventory-ci.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inventory:
+    runs-on: windows-2025
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test fixed-schema catalog inventory
+        run: python -m unittest discover -s tests -p test_netfx481_catalog_cab_inventory.py -v
+      - name: Inspect exact official x64 KB5011048 MSU and embedded CABs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force build | Out-Null
+          $msu = Join-Path (Resolve-Path build) "KB5011048.msu"
+          $url = "https://catalog.s.download.windowsupdate.com/c/msdownload/update/software/ftpk/2023/09/windows10.0-kb5011048-x64_411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e.msu"
+          try {
+            curl.exe --fail --location --retry 3 --max-time 600 --output $msu $url
+            if ($LASTEXITCODE -ne 0 -or (Get-Item -LiteralPath $msu).Length -ne 71059034) { throw "Original catalog download failed" }
+            if ((Get-FileHash -LiteralPath $msu -Algorithm SHA1).Hash.ToLowerInvariant() -ne "411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e") { throw "Original catalog identity mismatch" }
+            (Get-FileHash -LiteralPath $msu -Algorithm SHA256).Hash.ToLowerInvariant() |
+              Set-Content -LiteralPath build/netfx481-catalog.sha256 -NoNewline -Encoding ascii
+            $sevenzip = Join-Path $env:ProgramFiles "7-Zip\7z.exe"
+            if (!(Test-Path -LiteralPath $sevenzip)) { throw "Native archive reader unavailable" }
+            python -m scripts.netfx481_catalog_cab_inventory --package $msu --sha256-file build/netfx481-catalog.sha256 --sevenzip $sevenzip --output build/netfx481-catalog-cab-inventory.json
+            if ($LASTEXITCODE -ne 0) { throw "Catalog inventory failed" }
+          } finally {
+            if (Test-Path -LiteralPath $msu) { Remove-Item -LiteralPath $msu }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: original-catalog-cab-layout-allowlisted-result
+          path: build/netfx481-catalog-cab-inventory.json
+          if-no-files-found: error
+          retention-days: 7
