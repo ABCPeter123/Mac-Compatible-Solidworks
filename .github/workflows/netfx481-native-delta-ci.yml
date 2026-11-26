@@ -46,7 +46,7 @@ jobs:
           Set-Content -LiteralPath build/pa30-recipes/schema.txt -Value 'swcompat-rip-recipe-v1' -Encoding ascii
           $msu = Join-Path (Resolve-Path build) "KB5011048.msu"
           try {
-            curl.exe --fail --location --retry 3 --max-time 600 --output $msu "https://catalog.s.download.windowsupdate.com/c/msdownload/update/software/ftpk/2023/09/windows10.0-kb5011048-x64_411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e.msu"
+            curl.exe --fail --location --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 600 --connect-timeout 20 --max-time 120 --output $msu "https://catalog.s.download.windowsupdate.com/c/msdownload/update/software/ftpk/2023/09/windows10.0-kb5011048-x64_411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e.msu"
             if ($LASTEXITCODE -ne 0 -or (Get-Item -LiteralPath $msu).Length -ne 71059034) { throw "Catalog download failed" }
             if ((Get-FileHash -LiteralPath $msu -Algorithm SHA1).Hash.ToLowerInvariant() -ne "411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e") { throw "Original package identity mismatch" }
             (Get-FileHash -LiteralPath $msu -Algorithm SHA256).Hash.ToLowerInvariant() |
@@ -107,9 +107,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build
-          curl --fail --location --retry 3 --max-time 600 --output build/KB5011048.msu \
-            'https://catalog.s.download.windowsupdate.com/c/msdownload/update/software/ftpk/2023/09/windows10.0-kb5011048-x64_411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e.msu'
           trap 'rm -f build/KB5011048.msu' EXIT
+          curl --fail --location --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 600 --connect-timeout 20 --max-time 120 --output build/KB5011048.msu \
+            'https://catalog.s.download.windowsupdate.com/c/msdownload/update/software/ftpk/2023/09/windows10.0-kb5011048-x64_411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e.msu'
           python -c 'import hashlib; from pathlib import Path; p=Path("build/KB5011048.msu"); data=p.read_bytes(); assert len(data)==71059034 and hashlib.sha1(data).hexdigest()=="411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e"; Path("build/netfx481-catalog.sha256").write_text(hashlib.sha256(data).hexdigest())'
           python -m scripts.netfx481_native_delta \
             --package build/KB5011048.msu --sha256-file build/netfx481-catalog.sha256 \
