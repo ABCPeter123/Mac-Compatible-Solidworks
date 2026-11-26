@@ -46,5 +46,29 @@ class ManifestAuditTests(unittest.TestCase):
             self.assertNotIn("0x1234", str(report))
 
 
+    def test_source_alias_and_reachable_dependency_classification(self):
+        from scripts.netfx481_ipd_manifest_audit import identity
+        import xml.etree.ElementTree as ET
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            manifest = root / "one.manifest"
+            manifest.write_text(
+                f'<assembly><assemblyIdentity {IDENT}/>'
+                f'<dependency><dependentAssembly><assemblyIdentity {OTHER}/></dependentAssembly></dependency>'
+                '<file sourceName="not-real.dll" name="actual.dll" destinationPath="$(runtime.system32)"/>'
+                '<registryKeys><registryKey keyName="test">'
+                '<registryValue valueType="REG_SZ" value="$(runtime.testpath)\\private"/>'
+                '</registryKey></registryKeys></assembly>')
+            payload = root / "payload"
+            payload.write_bytes(b"fixture")
+            report = audit_members({"one.manifest": manifest, "one/actual.dll": payload},
+                                   [identity(ET.fromstring(f'<assemblyIdentity {IDENT}/>'))])
+            self.assertEqual(report["missing_source_categories"], {"same_assembly_destination_name": 1})
+            self.assertEqual(report["missing_dependency_categories"], {"name_not_packaged": 1})
+            self.assertEqual(report["unknown_runtime_tokens"], {"runtime.testpath": 1})
+            self.assertEqual(report["reachable"], {"resolved": 1, "unresolved": 1, "update_roots": 1})
+            self.assertNotIn("private", str(report))
+
+
 if __name__ == "__main__":
     unittest.main()
