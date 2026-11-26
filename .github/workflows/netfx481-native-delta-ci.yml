@@ -41,6 +41,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/swcompat-msdelta-source/src/bin"
           cp probes/swcompat_verified_delta.rs "$RUNNER_TEMP/swcompat-msdelta-source/src/bin/swcompat-verified-delta.rs"
           cargo +stable build --manifest-path "$RUNNER_TEMP/swcompat-msdelta-source/Cargo.toml" --locked --release --features cli --bin ms-delta --bin swcompat-verified-delta
+          cargo +stable test --manifest-path "$RUNNER_TEMP/swcompat-msdelta-source/Cargo.toml" --locked --release --features cli --lib swcompat_provenance_tests
       - name: Install native macOS CAB reader
         if: runner.os == 'macOS'
         run: brew install sevenzip
