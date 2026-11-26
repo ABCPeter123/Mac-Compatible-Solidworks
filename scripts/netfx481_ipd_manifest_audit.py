@@ -78,11 +78,17 @@ class Assembly:
     deps: list[tuple[str, ...]]
 
 
-def audit_members(members: dict[str, Path]) -> dict:
+def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] | None = None) -> dict:
     counts = Counter()
     features = Counter()
     assemblies = []
     index = defaultdict(list)
+    missing_files = Counter()
+    missing_dependencies = Counter()
+    expression_tokens = Counter()
+    basenames = defaultdict(list)
+    for key in members:
+        basenames[key.rsplit("/", 1)[-1]].append(key)
     for name, path in sorted(members.items()):
         if "/" in name or not name.endswith((".manifest", ".mum")):
             continue
@@ -142,6 +148,15 @@ def audit_members(members: dict[str, Path]) -> dict:
                     key = (parent + "/" + source.replace("\\", "/")).casefold()
                     if key not in members:
                         counts["missing_wusa_source"] += 1
+                        dest_name = element.get("name", "").replace("\\", "/").casefold()
+                        if dest_name and parent + "/" + dest_name in members:
+                            missing_files["same_assembly_destination_name"] += 1
+                        else:
+                            options = basenames[source.replace("\\", "/").casefold().rsplit("/", 1)[-1]]
+                            category = ("unique_source_basename_elsewhere" if len(options) == 1
+                                        else "ambiguous_source_basename" if options
+                                        else "source_basename_absent")
+                            missing_files[category] += 1
                 if not target:
                     counts["missing_destination_path"] += 1
                 else:
@@ -168,6 +183,10 @@ def audit_members(members: dict[str, Path]) -> dict:
                         for expr in re.findall(r"\$\(([^)]+)\)", val):
                             if expr.casefold() not in WUSA_EXPRESSIONS:
                                 counts["unknown_registry_expression"] += 1
+                                # Only bounded public CBS runtime identifiers,
+                                # never registry strings or their values.
+                                token = expr.casefold()
+                                expression_tokens[token if re.fullmatch(r"runtime\.[a-z0-9_.]{1,64}", token) else "other"] += 1
     for assembly in assemblies:
         for ref in assembly.deps:
             candidates = index.get(ref[0], ())
@@ -181,6 +200,31 @@ def audit_members(members: dict[str, Path]) -> dict:
                 counts["dependency_version_only"] += 1
             else:
                 counts["dependency_absent"] += 1
+                if candidates:
+                    if any(c.identity[1] == ref[1] for c in candidates):
+                        missing_dependencies["same_name_arch_identity_mismatch"] += 1
+                    else:
+                        missing_dependencies["same_name_other_arch"] += 1
+                else:
+                    missing_dependencies["name_not_packaged"] += 1
+    reachable = Counter()
+    if update_roots is not None:
+        pending = list(update_roots)
+        visited = set()
+        while pending:
+            ref = pending.pop()
+            if ref in visited:
+                continue
+            visited.add(ref)
+            exact = [c for c in index.get(ref[0], ()) if compatible(c.identity, ref)]
+            if len(exact) == 1:
+                reachable["resolved"] += 1
+                pending.extend(exact[0].deps)
+            elif exact:
+                reachable["ambiguous"] += 1
+            else:
+                reachable["unresolved"] += 1
+        reachable["update_roots"] = len(update_roots)
     keys = ("root_documents", "xml", "dcm", "unsafe_xml", "non_xml", "oversized",
             "unexpected_root", "incomplete_identity", "complete_identity",
             "assembly_dependencies", "package_dependencies", "unsupported_dependency_type",
@@ -191,7 +235,12 @@ def audit_members(members: dict[str, Path]) -> dict:
             "unknown_registry_expression", "dependency_exact", "dependency_ambiguous",
             "dependency_version_only", "dependency_absent")
     return {"counts": {k: counts[k] for k in keys},
-            "root_features": dict(sorted(features.items())), "servicing_performed": False}
+            "root_features": dict(sorted(features.items())),
+            "missing_source_categories": dict(sorted(missing_files.items())),
+            "missing_dependency_categories": dict(sorted(missing_dependencies.items())),
+            "unknown_runtime_tokens": dict(sorted(expression_tokens.items())),
+            "reachable": dict(sorted(reachable.items())),
+            "servicing_performed": False}
 
 
 def inspect(stage: Path):
@@ -225,6 +274,26 @@ def inspect_windows(package: Path, digest: Path, sevenzip: Path, expand: Path):
         packages, partial = _safe_embedded(cabs)
         if state != "OK" or partial:
             raise ValueError("Original cabinet extraction failed")
+        outer = root / "outer-xml"
+        outer.mkdir()
+        state, _ = _invoke_sevenzip(sevenzip, ["x", "-y", "-o" + str(outer),
+                                               str(package), "*.xml"], root, timeout=150)
+        if state != "OK":
+            raise ValueError("Original outer update XML extraction failed")
+        update_roots = []
+        for p in files(outer):
+            kind, doc = parse_xml(p)
+            if doc is None or local(doc.tag) != "unattend":
+                continue
+            for servicing in children(doc, "servicing"):
+                for pkg in children(servicing, "package"):
+                    if pkg.get("action") != "install":
+                        continue
+                    for node in children(pkg, "assemblyIdentity"):
+                        ref = identity(node)
+                        if ref is None:
+                            raise ValueError("Incomplete original update identity")
+                        update_roots.append(ref)
         result = None
         for i, cab in enumerate(packages):
             if cab.suffix.casefold() != ".cab":
@@ -255,7 +324,7 @@ def inspect_windows(package: Path, digest: Path, sevenzip: Path, expand: Path):
             members = {e.name: index[e.name] for e in entries.values() if e.name in index}
             if len(members) != EXPECTED_COUNT or digest_tree(members) != EXPECTED_TREE_SHA256:
                 raise ValueError("Windows reference tree differs from validated CIX tree")
-            result = audit_members(members)
+            result = audit_members(members, update_roots)
         if result is None:
             raise ValueError("Missing original IPD cabinet")
         return result
