@@ -55,6 +55,13 @@ pub fn apply_pa30_compat(source: &[u8], delta: &[u8], limits: &Limits) -> Result
             }
         }
     }
+    // A single anomalous source operand can be reused hundreds of times.
+    // Use the compressed provenance to try an instruction-local alternate
+    // without altering all other correctly normalized operands.
+    if let Ok(Some(output)) = swcompat_sparse_rip(source, &parsed, limits) {
+        verify_hash(info, &output)?;
+        return Ok(output);
+    }
     // Known source preprocessing flags in the pinned pe::preprocess_cli.
     // Do not alter compression framing, reserved flags or expected hash.
     let mut bits: Vec<u64> = vec![2, 4, 8, 16, 32, 0x2000];
@@ -143,6 +150,83 @@ fn swcompat_trace_copy(source_len: usize, output_len: usize, offset: usize, leng
             trace.push(origin);
         }
     });
+}
+
+/// Only algorithm-derived displacement alternatives are allowed. A candidate
+/// stays private until the original embedded target digest verifies.
+fn swcompat_sparse_rip(source: &[u8], parsed: &Parsed<'_>, limits: &Limits) -> Result<Option<Vec<u8>>> {
+    let info = &parsed.info;
+    if !matches!(info.file_type, 8 | 32) || info.flags & 0x200 == 0
+        || info.flags & (1 | 0x0200_0000) != 0 || info.target_size > 16 * 1024 * 1024 {
+        return Ok(None);
+    }
+    validate_hash(info)?;
+    let diagnostic = Parsed {
+        info: Pa30Info { target_hash_algorithm: 0, target_hash: Vec::new(), ..info.clone() },
+        preprocessing: parsed.preprocessing, patch: parsed.patch,
+    };
+    // Absolute bound on bytes hashed across all alternative trials.
+    let mut hash_budget = 8usize * 1024 * 1024 * 1024;
+    for mode in [0u8, 4] {
+        let previous = SWCOMPAT_TRACE.with(|v| v.replace(Some(Vec::with_capacity(info.target_size))));
+        let (decoded, operands) = pe::with_swcompat_rip_capture(|| {
+            pe::with_swcompat_operand_mode(mode, || apply_once(source, &diagnostic, limits, true))
+        });
+        let trace = SWCOMPAT_TRACE.with(|v| v.replace(previous));
+        let Ok(mut output) = decoded else { continue; };
+        let Some(trace) = trace else { continue; };
+        if output.len() != trace.len() || output.len() != info.target_size { continue; }
+        // Map only eligible operand bytes. Never enumerate arbitrary target
+        // bytes. Bounded inverted indexes keep trial cost proportional to the
+        // actual propagated output positions.
+        let mut positions: std::collections::BTreeMap<u32, Vec<usize>> = std::collections::BTreeMap::new();
+        for operand in &operands {
+            for j in 0..4 { positions.entry(operand.cell + j).or_default(); }
+        }
+        for (i, &origin) in trace.iter().enumerate() {
+            if let Some(list) = positions.get_mut(&origin) { list.push(i); }
+        }
+        let mut trials = Vec::new();
+        for operand in operands {
+            let weight: usize = (0..4).map(|j| positions.get(&(operand.cell+j)).map_or(0, Vec::len)).sum();
+            if weight != 0 { trials.push((operand, weight)); }
+        }
+        // VEX cases and unusually reused source operands are most likely to
+        // expose the observed producer-dependent normalization difference.
+        trials.sort_unstable_by_key(|(op, weight)| (!op.vex, std::cmp::Reverse(*weight)));
+        for (operand, _) in trials {
+            let mut baseline = [None; 4];
+            for j in 0..4 {
+                if let Some(&p) = positions.get(&(operand.cell+j as u32)).and_then(|v| v.first()) {
+                    baseline[j] = Some(output[p]);
+                }
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            for value in operand.alternatives {
+                let bytes = value.to_le_bytes();
+                let key = std::array::from_fn::<u8,4,_>(|j| if baseline[j].is_some() { bytes[j] } else { 0 });
+                if !seen.insert(key) || (0..4).all(|j| baseline[j].is_none_or(|b| b == bytes[j])) {
+                    continue;
+                }
+                if output.len() > hash_budget { return Ok(None); }
+                hash_budget -= output.len();
+                for j in 0..4 {
+                    if let Some(list) = positions.get(&(operand.cell+j as u32)) {
+                        for &p in list { output[p] = bytes[j]; }
+                    }
+                }
+                if verify_hash(info, &output).is_ok() {
+                    return Ok(Some(output));
+                }
+                for j in 0..4 {
+                    if let Some(b) = baseline[j] && let Some(list) = positions.get(&(operand.cell+j as u32)) {
+                        for &p in list { output[p] = b; }
+                    }
+                }
+            }
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -355,6 +439,67 @@ pub(super) fn with_swcompat_operand_mode<T>(mode: u8, f: impl FnOnce() -> T) -> 
     f()
 }
 
+pub(super) struct SwcompatRipOperand {
+    pub(super) cell: u32,
+    pub(super) vex: bool,
+    pub(super) alternatives: Vec<u32>,
+}
+
+thread_local! {
+    static SWCOMPAT_RIP_CAPTURE: std::cell::RefCell<Option<Vec<SwcompatRipOperand>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+pub(super) fn with_swcompat_rip_capture<T>(f: impl FnOnce() -> T) -> (T, Vec<SwcompatRipOperand>) {
+    let prior = SWCOMPAT_RIP_CAPTURE.with(|v| v.replace(Some(Vec::new())));
+    let value = f();
+    let records = SWCOMPAT_RIP_CAPTURE.with(|v| v.replace(prior)).unwrap_or_default();
+    (value, records)
+}
+
+fn swcompat_capture_rip(used: &RiftTable, cell: usize, here: u32, next: u32,
+                        displacement: usize, old: u32, vex: bool) {
+    SWCOMPAT_RIP_CAPTURE.with(|v| {
+        let mut active = v.borrow_mut();
+        let Some(records) = active.as_mut() else { return; };
+        if records.len() >= 32768 { return; }
+        let Ok(cell) = u32::try_from(cell) else { return; };
+        let dest = next.wrapping_add(old);
+        let field = here.wrapping_add(displacement as u32);
+        let field_end = field.wrapping_add(4);
+        let mapped_dest = mapped(used, dest);
+        let mapped_next = mapped(used, next);
+        let mapped_here = mapped(used, here).wrapping_add(next.wrapping_sub(here));
+        let mapped_end = mapped(used, field_end).wrapping_add(next.wrapping_sub(field_end));
+        let mut candidates = vec![
+            old,
+            mapped_dest.wrapping_sub(mapped_next),
+            mapped_dest.wrapping_sub(mapped_here),
+            mapped_dest.wrapping_sub(mapped_end),
+            mapped_dest.wrapping_sub(next),
+            dest.wrapping_sub(mapped_next),
+            dest.wrapping_sub(mapped_here),
+            mapped(used, dest.wrapping_sub(1)).wrapping_add(1).wrapping_sub(mapped_next),
+            mapped(used, dest.wrapping_add(1)).wrapping_sub(1).wrapping_sub(mapped_next),
+            mapped_dest.wrapping_sub(mapped(used, next.wrapping_sub(1)).wrapping_add(1)),
+            mapped_dest.wrapping_sub(mapped(used, next.wrapping_add(1)).wrapping_sub(1)),
+            mapped(used, field_end.wrapping_add(old)).wrapping_sub(mapped(used, field_end)),
+            mapped(used, field.wrapping_add(old)).wrapping_sub(mapped(used, field)),
+        ];
+        // The producer can map the referenced object's beginning, ending
+        // boundary, or a nearby byte of a multi-byte memory operand.
+        for width in [2u32, 4, 8, 16, 32] {
+            for base in [mapped_next, mapped_here] {
+                candidates.push(mapped(used, dest.wrapping_add(width-1)).wrapping_sub(width-1).wrapping_sub(base));
+                candidates.push(mapped(used, dest.wrapping_sub(width-1)).wrapping_add(width-1).wrapping_sub(base));
+            }
+        }
+        candidates.sort_unstable();
+        candidates.dedup();
+        records.push(SwcompatRipOperand { cell, vex, alternatives: candidates });
+    });
+}
+
 /// Classify the distinct source dictionary offsets traced by mismatched
 /// output bytes. All output fields are counts, not vendor data or offsets.
 #[cfg(feature = "cli")]
@@ -507,6 +652,10 @@ PE_NEW = r'''            let mode = SWCOMPAT_OPERAND_MODE.with(|v| v.get());
             // legacy encodings. Bit 3 uses a mapped instruction-start anchor.
             let permitted = if mode & 16 != 0 { is_legacy }
                 else { !is_vex || mode & 4 != 0 };
+            if let Some(disp) = displacement && instruction.is_ip_rel_memory_operand() {
+                let cell = file + position + disp;
+                swcompat_capture_rip(used, cell, here, next, disp, read32(output, cell)?, is_vex);
+            }
             if let Some(displacement) = displacement && permitted {
                 let cell = file + position + displacement;
                 let old = read32(output, cell)?;
