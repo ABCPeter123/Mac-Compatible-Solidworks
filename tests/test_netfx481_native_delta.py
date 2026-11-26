@@ -210,3 +210,14 @@ class CixGraphTests(unittest.TestCase):
             self.assertEqual(result.count("static SWCOMPAT_OPERAND_MODE:"), 1)
             with self.assertRaises(ValueError):
                 patch_pe(pth)
+
+
+    def test_rip_policies_keep_intrinsic_integrity_and_scope(self):
+        from scripts.patch_msdelta_compat import INSERT, PE_NEW
+        self.assertIn("for mode in swcompat_operand_modes()", INSERT)
+        self.assertIn("for policy in 1..=7", INSERT)
+        self.assertIn("if rip { mode >> 5 } else { 0 }", PE_NEW)
+        self.assertIn("disp_end", PE_NEW)
+        self.assertIn("mapped(used, disp_end).wrapping_add(trailing)", PE_NEW)
+        self.assertIn("verify_hash(info, &output)?", INSERT)
+        self.assertIn("best_different", INSERT)
