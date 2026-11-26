@@ -81,13 +81,27 @@ def run_private(command: list[str], root: Path, timeout: int) -> bool:
 
 ERROR_CLASSES = ("UNSUPPORTED", "INTEGRITY", "LIMIT", "INVALID", "LZX",
                  "ALLOCATION", "CLI_USAGE", "TIMEOUT", "START_FAILED", "OTHER",
-                 "FRAMING", "MISSING_OUTPUT")
+                 "FRAMING", "MISSING_OUTPUT", "HASH_ALGORITHM", "TARGET_HASH", "PARAMETER_LIMIT",
+                 "TRANSFORM", "SOURCE_ARCH", "PE_METADATA", "MATCH_WINDOW", "IO")
 
 
 def classify_decoder_error(raw: bytes) -> str:
     # Only fixed categories leave the process; paths and vendor bytes do not.
     text = raw[:65536].decode("utf-8", errors="replace").lower()
+    # Rust main returns Result, so its termination diagnostic uses Debug,
+    # e.g. Error: Integrity("PA30 target hash mismatch"), not Display.
     for needle, category in (
+        ("pa30 target hash algorithm", "HASH_ALGORITHM"),
+        ("pa30 target hash mismatch", "TARGET_HASH"),
+        ("pa30 parameter memory", "PARAMETER_LIMIT"),
+        ("pa30 parameter blocks", "PARAMETER_LIMIT"),
+        ("pa30 unknown transform flag", "TRANSFORM"),
+        ("pa30 source architecture", "SOURCE_ARCH"),
+        ("cli metadata", "PE_METADATA"), ("pa30 match window", "MATCH_WINDOW"),
+        ("error: integrity(", "INTEGRITY"), ("error: invalid(", "INVALID"),
+        ("error: unsupported(", "UNSUPPORTED"), ("error: limit(", "LIMIT"),
+        ("error: codec(", "LZX"), ("error: allocation", "ALLOCATION"),
+        ("error: io(", "IO"),
         ("unsupported", "UNSUPPORTED"), ("not implemented", "UNSUPPORTED"),
         ("integrity check failed", "INTEGRITY"), ("limit exceeded", "LIMIT"),
         ("invalid delta", "INVALID"), ("lzx delta decode failed", "LZX"),
@@ -176,7 +190,8 @@ def decode_one(codec: Path, raw: bytes, root: Path, serial: int) -> tuple[str, b
 
 
 def reconstruct(codec: Path, raw_dir: Path, extracted: list[Path],
-                work: Path, expanded: Path | None) -> dict:
+                work: Path, expanded: Path | None,
+                verified_codec: Path | None = None) -> dict:
     """Reconstruct every eligible CIX node with its declared private basis.
 
     Native Windows Expand is an independent oracle, never a source for the
@@ -199,7 +214,8 @@ def reconstruct(codec: Path, raw_dir: Path, extracted: list[Path],
               "cix_reconstructed": 0, "cix_delta_reconstructed": 0, "cix_delta_failed": 0,
               "cix_basis_blocked": 0, "cix_missing_source": 0, "cix_size_mismatch": 0,
               "cix_oracle_matches": 0, "cix_oracle_mismatches": 0, "cix_oracle_missing": 0,
-              "cix_empty_source_recovered": 0,
+              "cix_empty_source_recovered": 0, "cix_external_hash_recovered": 0,
+              "cix_parameter_budget_recovered": 0,
               **{"cix_error_" + k.lower(): 0 for k in ERROR_CLASSES},
               **{"cix_native_reference_" + k.lower(): 0
                  for k in ("MATCH", "MISMATCH", "REJECTED", "UNAVAILABLE")}}
@@ -256,6 +272,32 @@ def reconstruct(codec: Path, raw_dir: Path, extracted: list[Path],
                     ok, reason = observe_decoder(command + ["--source", str(empty_basis)], work, 45)
                     if ok and target.is_file() and not target.is_symlink() and target.stat().st_size == e.length:
                         report["cix_empty_source_recovered"] += 1
+                # Raise only the explicitly failed parameter-workspace limit.
+                # All source/output/window limits and intrinsic hashes remain.
+                if not ok and reason == "PARAMETER_LIMIT":
+                    if target.is_symlink() or target.is_file():
+                        target.unlink()
+                    ok, reason = observe_decoder(command + ["--max-parameter-bytes", "33554432"], work, 45)
+                    if ok and target.is_file() and not target.is_symlink() and target.stat().st_size == e.length:
+                        report["cix_parameter_budget_recovered"] += 1
+                # The upstream verifier API is restricted to CALG_NONE + empty
+                # intrinsic hash. Supply an independent native Windows Expand
+                # digest, never a digest derived from the decoder's own output.
+                if (not ok and reason == "HASH_ALGORITHM" and e.kind == "PA30"
+                        and verified_codec is not None and expanded):
+                    expected = oracle.get(e.name)
+                    if expected is not None and expected.stat().st_size == e.length:
+                        if target.is_symlink() or target.is_file():
+                            target.unlink()
+                        ok = run_private([str(verified_codec), str(basis or empty_basis), str(delta),
+                                          str(target), str(e.length), sha256_file(expected).hex()],
+                                         work, 45)
+                        if (ok and target.is_file() and not target.is_symlink()
+                                and target.stat().st_size == e.length
+                                and sha256_file(target) == sha256_file(expected)):
+                            report["cix_external_hash_recovered"] += 1
+                        else:
+                            ok = False
             finally:
                 delta.unlink(missing_ok=True)
             if not ok or target.is_symlink() or not target.is_file():
@@ -288,7 +330,8 @@ def reconstruct(codec: Path, raw_dir: Path, extracted: list[Path],
 
 
 def inspect(package: Path, manifest: Path, sevenzip: Path, codec: Path,
-            expand: Path | None = None) -> dict:
+            expand: Path | None = None,
+            verified_codec: Path | None = None) -> dict:
     paths = [package, manifest, sevenzip, codec] + ([expand] if expand else [])
     if any(p.is_symlink() for p in paths):
         raise ValueError("Linked inputs prohibited")
@@ -298,6 +341,12 @@ def inspect(package: Path, manifest: Path, sevenzip: Path, codec: Path,
         if os.name != "nt":
             raise ValueError("Native Windows Expand oracle required")
         expand = expand.resolve(strict=True)
+    if verified_codec is not None:
+        if verified_codec.is_symlink() or not expand:
+            raise ValueError("Independent Windows reference required")
+        verified_codec = verified_codec.resolve(strict=True)
+        if not verified_codec.is_file() or verified_codec.name.casefold() not in {"swcompat-verified-delta", "swcompat-verified-delta.exe"}:
+            raise ValueError("Unexpected independent verifier")
     if not codec.is_file() or codec.name.casefold() not in {"ms-delta", "ms-delta.exe"}:
         raise ValueError("Expected pinned portable delta CLI")
     report = {"catalog_verified": True, "cab_count": 0, "ipd_cabs": 0,
@@ -345,7 +394,7 @@ def inspect(package: Path, manifest: Path, sevenzip: Path, codec: Path,
                     raise ValueError("Empty Windows reference expansion")
             graph_work = work / f"graph-{index}"
             graph_work.mkdir()
-            graph = reconstruct(codec, raw_dir, extracted, graph_work, expanded)
+            graph = reconstruct(codec, raw_dir, extracted, graph_work, expanded, verified_codec)
             for key, value in graph.items():
                 report[key] = report.get(key, 0) + value
             # Preserve the earlier independent empty-source control sample.
@@ -381,10 +430,11 @@ def main() -> int:
     for key in ("package", "sha256-file", "sevenzip", "codec", "output"):
         p.add_argument("--" + key, required=True, type=Path)
     p.add_argument("--expand", type=Path)
+    p.add_argument("--verified-codec", type=Path)
     a = p.parse_args()
     if a.output.is_symlink() or a.output.exists():
         p.error("Report must be a fresh path")
-    r = inspect(a.package, a.sha256_file, a.sevenzip, a.codec, a.expand)
+    r = inspect(a.package, a.sha256_file, a.sevenzip, a.codec, a.expand, a.verified_codec)
     a.output.write_text(json.dumps(r, sort_keys=True), encoding="ascii")
     for key, value in r.items():
         print("Native IPD delta reconstruction", key, value)
