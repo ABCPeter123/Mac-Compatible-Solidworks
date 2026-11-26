@@ -108,3 +108,6 @@ jobs:
       signed_msp_win32_exit: true
       signed_msp_reinstall: true
       signed_msi_host_stack64: true
+      # Independent in-place update only after a persistent, authenticated 4.8 CLR.
+      # A failed 4.8 MSP remains a failed transaction in the report.
+      try_481_after_verified_partial48: true

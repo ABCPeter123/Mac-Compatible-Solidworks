@@ -309,6 +309,29 @@ def validate(result: object) -> bool:
     return result["native48_candidate"] is ready
 
 
+def eligible_481_recovery(result: object) -> bool:
+    """Independent genuine 4.8.1 attempt, never proof of complete 4.8."""
+    if not validate(result):
+        return False
+    return (
+        result["status"] == "MEASURED"
+        and result["native40_persistent"]
+        and result["install_profile"] == "win10"
+        and result["install_winver"] == "APPLIED"
+        and result["extract"] == "SUCCESS" and result["media"] == "VERIFIED"
+        and result["install"] == "SUCCESS" and result["patch"] == "EXIT_NONZERO"
+        and result["patch_win32_mode"] in {"NATIVE", "NATIVE_REINSTALL"}
+        and result["patch_win32"]["status"] == "EXIT_CAPTURED"
+        and result["patch_win32"]["exit_hex"] == "00000643"
+        and result["ngen_queue_policy"] == "OFF"
+        and result["win10"] == "APPLIED" and result["restart"] == "COMPLETED"
+        and result["clr64_changed"] and result["release"] == "NETFX48_RANGE"
+        and result["loader"] == "LOADED" and result["native_only_managed"] == "PASS"
+        and result["native48_candidate"] is False
+        and result["framework481_confirmed"] is False
+    )
+
+
 def verify_extracted_media(root: Path) -> str:
     """No arbitrary MSI paths, symlinks, filenames or external MSPs."""
     if root.is_symlink():

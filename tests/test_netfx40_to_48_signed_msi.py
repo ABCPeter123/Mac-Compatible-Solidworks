@@ -171,6 +171,35 @@ class OriginalSignedMSITests(TestCase):
         self.assertNotIn(str(paths[1]), json.dumps(result))
         return result, calls
 
+    def test_481_recovery_eligibility_does_not_promote_failed_48_patch(self):
+        with TemporaryDirectory() as td:
+            result, _ = self.run_case(
+                self.fixture(Path(td)), native_patch_probe=True,
+                native_patch_code=1603, install_profile="win10")
+            self.assertTrue(p.eligible_481_recovery(result))
+            self.assertFalse(result["native48_candidate"])
+            self.assertFalse(result["framework481_confirmed"])
+            for key, value in (
+                ("restart", "TIMED_OUT"), ("clr64_changed", False),
+                ("release", "UNAVAILABLE"), ("loader", "NOT_VERIFIED"),
+                ("native_only_managed", "NOT_VERIFIED"),
+                ("install_profile", "win7"), ("native40_persistent", False),
+                ("native48_candidate", True),
+            ):
+                with self.subTest(key=key):
+                    self.assertFalse(p.eligible_481_recovery({**result, key: value}))
+        for code in (0, 1642, 1605):
+            with self.subTest(code=code), TemporaryDirectory() as td:
+                result, _ = self.run_case(
+                    self.fixture(Path(td)), native_patch_probe=True,
+                    native_patch_code=code, install_profile="win10")
+                self.assertFalse(p.eligible_481_recovery(result))
+        with TemporaryDirectory() as td:
+            result, _ = self.run_case(self.fixture(Path(td)),
+                                      patch="EXIT_NONZERO", install_profile="win10")
+            self.assertFalse(p.eligible_481_recovery(result))
+        self.assertFalse(p.eligible_481_recovery(p.blank()))
+
     def test_only_complete_authentic_msi_and_msp_can_verify_native48(self):
         with TemporaryDirectory() as td:
             result, calls = self.run_case(self.fixture(Path(td)))
