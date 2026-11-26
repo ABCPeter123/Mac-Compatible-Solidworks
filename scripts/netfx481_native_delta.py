@@ -489,6 +489,16 @@ def reconstruct(codec: Path, raw_dir: Path, extracted: list[Path],
                 report["cix_oracle_matches"] += 1
             else:
                 report["cix_oracle_mismatches"] += 1
+    # The manifest-path and file-content digest binds the complete logical
+    # tree without exposing filenames or original binaries in CI artifacts.
+    tree = hashlib.sha256(b"swcompat-cix-tree-v1\0")
+    for fid, target in sorted(outputs.items(), key=lambda item: entries[item[0]].name):
+        name = entries[fid].name.encode("utf-8")
+        tree.update(len(name).to_bytes(4, "little"))
+        tree.update(name)
+        tree.update(entries[fid].length.to_bytes(8, "little"))
+        tree.update(sha256_file(target))
+    report["cix_tree_sha256"] = tree.hexdigest()
     return report
 
 
@@ -563,6 +573,11 @@ def inspect(package: Path, manifest: Path, sevenzip: Path, codec: Path,
             graph_work = work / f"graph-{index}"
             graph_work.mkdir()
             graph = reconstruct(codec, raw_dir, extracted, graph_work, expanded, verified_codec, recipe_dir)
+            # KB5011048 is pinned to a single IPD cabinet. Refuse a
+            # second graph rather than silently mix unrelated tree digests.
+            if "cix_tree_sha256" in report:
+                raise ValueError("Unexpected second CIX graph")
+            report["cix_tree_sha256"] = graph.pop("cix_tree_sha256")
             for key, value in graph.items():
                 report[key] = report.get(key, 0) + value
             # Preserve the earlier independent empty-source control sample.
