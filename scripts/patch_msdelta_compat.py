@@ -115,6 +115,36 @@ pub fn apply_pa30_compat(source: &[u8], delta: &[u8], limits: &Limits) -> Result
 }
 
 
+// A source-origin trace is used only by the Windows-reference diagnostic.
+// The ordinary reconstruction path retains the original codec output.
+const SWCOMPAT_NO_ORIGIN: u32 = u32::MAX;
+thread_local! {
+    static SWCOMPAT_TRACE: std::cell::RefCell<Option<Vec<u32>>> = const { std::cell::RefCell::new(None) };
+}
+
+fn swcompat_trace_literal() {
+    SWCOMPAT_TRACE.with(|v| {
+        if let Some(trace) = v.borrow_mut().as_mut() { trace.push(SWCOMPAT_NO_ORIGIN); }
+    });
+}
+
+fn swcompat_trace_copy(source_len: usize, output_len: usize, offset: usize, length: usize) {
+    SWCOMPAT_TRACE.with(|v| {
+        let mut active = v.borrow_mut();
+        let Some(trace) = active.as_mut() else { return; };
+        if trace.len() != output_len {
+            *active = None;
+            return;
+        }
+        for i in 0..length {
+            let from = source_len + output_len + i - offset;
+            let origin = if from < source_len { from as u32 }
+                else { trace[from - source_len] };
+            trace.push(origin);
+        }
+    });
+}
+
 /// Private Windows-reference differential. Never returns candidate bytes.
 /// The independent reference must match the original intrinsic digest.
 /// A temporary parsed view suppresses validation solely to count differences
@@ -137,7 +167,15 @@ pub fn diagnose_pa30_reference(source: &[u8], delta: &[u8], reference: &[u8],
         preprocessing: parsed.preprocessing,
         patch: parsed.patch,
     };
-    let candidate = apply_once(source, &diagnostic, limits, true)?;
+    // At most 16 MiB of output provenance (64 MiB u32 storage).
+    // Large targets still receive the existing non-traced differential.
+    let trace_enabled = info.target_size <= 16 * 1024 * 1024 && info.flags & 0x0200_0000 == 0;
+    let previous = SWCOMPAT_TRACE.with(|v| v.replace(if trace_enabled {
+        Some(Vec::with_capacity(info.target_size))
+    } else { None }));
+    let decoded = apply_once(source, &diagnostic, limits, true);
+    let trace = SWCOMPAT_TRACE.with(|v| v.replace(previous));
+    let candidate = decoded?;
     if candidate.len() != reference.len() {
         return Err(Error::Integrity("diagnostic candidate length"));
     }
@@ -199,6 +237,39 @@ pub fn diagnose_pa30_reference(source: &[u8], delta: &[u8], reference: &[u8],
         if reference[start..i].contains(&0xe9) || candidate[start..i].contains(&0xe9) { near_e9 += 1; }
         if source.get(i) == Some(&actual) { source_same += 1; }
     }
+    // Count unique normalized dictionary locations responsible for wrong
+    // bytes, including propagation through output-to-output backreferences.
+    // Conflicts identify whether a source-only explanation is sufficient.
+    let mut origin_values: std::collections::BTreeMap<u32, u8> = std::collections::BTreeMap::new();
+    let mut origin_conflict = std::collections::BTreeSet::new();
+    let mut traced = 0u64;
+    let mut source_origin = 0u64;
+    let mut literal_origin = 0u64;
+    let mut origin_other_correct = std::collections::BTreeSet::new();
+    let mut source_counts = [0u64; 7];
+    if let Some(ref origins) = trace && origins.len() == reference.len() {
+        traced = 1;
+        for (i, (&actual, &expected)) in candidate.iter().zip(reference).enumerate() {
+            if actual == expected { continue; }
+            let origin = origins[i];
+            if origin == SWCOMPAT_NO_ORIGIN {
+                literal_origin += 1;
+            } else {
+                source_origin += 1;
+                if let Some(prior) = origin_values.insert(origin, expected) && prior != expected {
+                    origin_conflict.insert(origin);
+                }
+            }
+        }
+        for (i, (&actual, &expected)) in candidate.iter().zip(reference).enumerate() {
+            if actual == expected && origin_values.contains_key(&origins[i]) {
+                origin_other_correct.insert(origins[i]);
+            }
+        }
+        let offsets: std::collections::BTreeSet<usize> =
+            origin_values.keys().map(|&v| v as usize).collect();
+        source_counts = pe::swcompat_source_rip_classes(source, &offsets);
+    }
     let operand_counts = pe::swcompat_operand_differential(reference, &candidate);
     // Measure the closest tested hypothesis using only a scalar mismatch
     // count. No unchecked reconstruction or offsets are ever exported.
@@ -216,6 +287,13 @@ pub fn diagnose_pa30_reference(source: &[u8], delta: &[u8], reference: &[u8],
         }
     }
     Ok(serde_json::json!({
+        "trace_available": traced, "trace_source_bytes": source_origin,
+        "trace_literal_bytes": literal_origin, "trace_unique_origins": origin_values.len(),
+        "trace_conflicting_origins": origin_conflict.len(), "trace_origins_used_correctly": origin_other_correct.len(),
+        "trace_rip_trailing": source_counts[0], "trace_rip_lea": source_counts[1],
+        "trace_rip_indirect": source_counts[2], "trace_rip_vex": source_counts[3],
+        "trace_rip_eip": source_counts[4], "trace_rip_other": source_counts[5],
+        "trace_not_rip": source_counts[6],
         "best_mode": best_mode, "best_different": best,
         "operand_short_branch": operand_counts[0],
         "operand_near_branch": operand_counts[1],
@@ -254,6 +332,59 @@ pub(super) fn with_swcompat_operand_mode<T>(mode: u8, f: impl FnOnce() -> T) -> 
     let prior = SWCOMPAT_OPERAND_MODE.with(|v| v.replace(mode));
     let _restore = Restore(prior);
     f()
+}
+
+/// Classify the distinct source dictionary offsets traced by mismatched
+/// output bytes. All output fields are counts, not vendor data or offsets.
+#[cfg(feature = "cli")]
+pub(super) fn swcompat_source_rip_classes(source: &[u8],
+    offsets: &std::collections::BTreeSet<usize>) -> [u64; 7] {
+    let mut counts = [0u64; 7];
+    let mut unmatched = offsets.clone();
+    let Ok(layout) = PeLayout::parse(source) else {
+        counts[6] = unmatched.len() as u64; return counts;
+    };
+    let Some((rva, size)) = layout.directory(3) else {
+        counts[6] = unmatched.len() as u64; return counts;
+    };
+    let Ok(table) = layout.offset(rva, size) else {
+        counts[6] = unmatched.len() as u64; return counts;
+    };
+    let mut remaining = source.len().saturating_mul(4);
+    for index in 0..size / 12 {
+        if unmatched.is_empty() { break; }
+        let entry = table + index * 12;
+        let (Ok(begin), Ok(end)) = (read32(source, entry), read32(source, entry+4)) else { continue; };
+        if end <= begin { continue; }
+        let length = (end - begin) as usize;
+        if length > remaining { break; }
+        remaining -= length;
+        let Ok(file) = layout.offset(begin, length) else { continue; };
+        if unmatched.range(file..file+length).next().is_none() { continue; }
+        let mut decoder = Decoder::with_ip(64, &source[file..file+length], u64::from(begin), DecoderOptions::NONE);
+        while decoder.can_decode() {
+            let position = decoder.position();
+            let ins = decoder.decode();
+            let len = ins.len();
+            if len == 0 || position + len > length { break; }
+            if ins.is_invalid() || !ins.is_ip_rel_memory_operand() { continue; }
+            let off = decoder.get_constant_offsets(&ins);
+            if off.displacement_size() != 4 { continue; }
+            let cell = file + position + off.displacement_offset();
+            for i in cell..cell+4 {
+                if !unmatched.remove(&i) { continue; }
+                let category = if off.displacement_offset()+4 < len { 0 }
+                    else if ins.mnemonic() == iced_x86::Mnemonic::Lea { 1 }
+                    else if matches!(ins.flow_control(), iced_x86::FlowControl::IndirectBranch | iced_x86::FlowControl::IndirectCall) { 2 }
+                    else if ins.encoding() == EncodingKind::VEX { 3 }
+                    else if ins.memory_base() == iced_x86::Register::EIP { 4 }
+                    else { 5 };
+                counts[category] += 1;
+            }
+        }
+    }
+    counts[6] = unmatched.len() as u64;
+    counts
 }
 
 /// Aggregate mismatch counts by decoded operand type; no code, bytes or
@@ -413,6 +544,14 @@ def patch(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     if text.count(ANCHOR) != 1 or "pub fn apply_pa30_compat(" in text:
         raise ValueError("Unexpected or previously patched upstream source")
+    literal = "            output.push(symbol as u8);\n            continue;"
+    copy = "    for _ in 0..length {\n        let from = source.len() + output.len() - offset;"
+    # The synthetic anchor-only unit fixture intentionally lacks these sites.
+    if "fn copy_match(" in text:
+        if text.count(literal) != 1 or text.count(copy) != 1:
+            raise ValueError("Unexpected pinned source provenance sites")
+        text = text.replace(literal, "            swcompat_trace_literal();\n" + literal)
+        text = text.replace(copy, "    swcompat_trace_copy(source.len(), output.len(), offset, length);\n" + copy)
     path.write_text(text.replace(ANCHOR, INSERT + ANCHOR), encoding="utf-8")
 
 
