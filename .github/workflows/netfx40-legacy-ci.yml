@@ -1093,7 +1093,7 @@ jobs:
           SWCOMPAT_WIAGE_TRY_DIRECT: ${{ inputs.try_48_direct }}
           SWCOMPAT_WIAGE_TRY_INTERMEDIATE: ${{ inputs.try_48_intermediate }}
           SWCOMPAT_WIAGE_TRY_PAYLOAD: ${{ inputs.try_48_payload_host }}
-          SWCOMPAT_WIAGE_TRY_CATALOG: ${{ inputs.try_481_catalog_wusa }}
+          SWCOMPAT_WIAGE_TRY_CATALOG: ${{ inputs.try_481_catalog_wusa || false }}
         run: |
           set -euo pipefail
           if [[ "$SWCOMPAT_WINE_BASELINE" == "wiage-11.13" ]]; then
