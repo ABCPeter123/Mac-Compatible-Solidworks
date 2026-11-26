@@ -51,7 +51,7 @@ void swcompat_wusa_event(const char *format)
     else if (strstr(format, "Failed to extract")) category = 6;
     else if (strstr(format, "version difference")) category = 7;
     else if (strstr(format, "unexpected tag") || strstr(format, "dependency type")) category = 8;
-    else if (strstr(format, "Failed to load all")) category = 9;
+    else if (strstr(format, "Failed to load all") || !strncmp(format, "XML ", 4)) category = 9;
     if (swcompat_counts[category] < 1000000) swcompat_counts[category]++;
 }
 '''
@@ -461,6 +461,45 @@ def patch_package_local_trial(main: str) -> str:
     return main
 
 
+def patch_xml_loader(text: str) -> str:
+    """Make the pinned XML parser synchronous and count actual COM failures."""
+    return replace_once(text, r'''    if (SUCCEEDED(CoCreateInstance(&CLSID_DOMDocument, NULL, CLSCTX_INPROC_SERVER, &IID_IXMLDOMDocument, (void **)&document)))
+    {
+        VariantInit(&variant);
+        V_VT(&variant) = VT_BSTR;
+        V_BSTR(&variant) = bstr;
+
+        if (SUCCEEDED(document->lpVtbl->load(document, variant, &success)) && success)
+        {
+            if (FAILED(document->lpVtbl->get_documentElement(document, &root)))
+                root = NULL;
+        }
+        document->lpVtbl->Release(document);
+    }''', r'''    if (SUCCEEDED(CoCreateInstance(&CLSID_DOMDocument, NULL, CLSCTX_INPROC_SERVER, &IID_IXMLDOMDocument, (void **)&document)))
+    {
+        VariantInit(&variant);
+        V_VT(&variant) = VT_BSTR;
+        V_BSTR(&variant) = bstr;
+        success = VARIANT_FALSE;
+
+        if (FAILED(document->lpVtbl->put_async(document, VARIANT_FALSE)) ||
+            FAILED(document->lpVtbl->put_validateOnParse(document, VARIANT_FALSE)) ||
+            FAILED(document->lpVtbl->put_resolveExternals(document, VARIANT_FALSE)))
+            swcompat_wusa_event("XML parser configuration failed");
+        else if (FAILED(document->lpVtbl->load(document, variant, &success)))
+            swcompat_wusa_event("XML load HRESULT failed");
+        else if (success != VARIANT_TRUE)
+            swcompat_wusa_event("XML load returned false");
+        else if (FAILED(document->lpVtbl->get_documentElement(document, &root)) || !root)
+        {
+            root = NULL;
+            swcompat_wusa_event("XML document root missing");
+        }
+        document->lpVtbl->Release(document);
+    }
+    else swcompat_wusa_event("XML COM activation failed");''')
+
+
 def git_blob(data: bytes) -> str:
     return hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()
 
@@ -483,7 +522,7 @@ def prepare(source: Path, destination: Path) -> None:
         original["wusa.h"].decode("utf-8"))
     main, manifest, header = patch_resource_dependencies(patch_full_preflight(main), manifest, header)
     original["main.c"] = patch_package_local_trial(patch_neutral_preflight(main)).encode("utf-8")
-    original["manifest.c"] = manifest.encode("utf-8")
+    original["manifest.c"] = patch_xml_loader(manifest).encode("utf-8")
     original["wusa.h"] = header.encode("utf-8")
     destination.mkdir()
     (destination / "wine").mkdir()
