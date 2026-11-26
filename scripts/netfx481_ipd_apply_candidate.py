@@ -54,11 +54,26 @@ def parse_apply(raw: bytes, code: int) -> dict:
     if len(raw) > 4096 or code not in (0, 1):
         raise ValueError("Invalid experimental apply result")
     match = re.match(
-        rb"SWCOMPAT_IPD_APPLY_SCHEMA=1\r?\nSWCOMPAT_IPD_APPLY_STARTED=([01])\r?\n"
-        rb"SWCOMPAT_IPD_APPLY_COMPLETED=([01])\r?\n", raw)
+        rb"SWCOMPAT_IPD_APPLY_SCHEMA=2\r?\nSWCOMPAT_IPD_APPLY_STARTED=([01])\r?\n"
+        rb"SWCOMPAT_IPD_APPLY_COMPLETED=([01])\r?\n"
+        rb"SWCOMPAT_IPD_APPLY_PHASE=([0-4])\r?\n"
+        rb"SWCOMPAT_IPD_APPLY_WIN32=([0-9A-F]{8})\r?\n"
+        rb"SWCOMPAT_IPD_APPLY_FILES=([0-9]{1,7})\r?\n"
+        rb"SWCOMPAT_IPD_APPLY_KEYS=([0-9]{1,7})\r?\n"
+        rb"SWCOMPAT_IPD_APPLY_VALUES=([0-9]{1,7})\r?\n"
+        rb"SWCOMPAT_IPD_APPLY_ASSEMBLIES=([0-9]{1,7})\r?\n", raw)
     if not match:
         raise ValueError("Missing apply result")
-    started, completed = (v == b"1" for v in match.groups())
+    started, completed = (v == b"1" for v in match.groups()[:2])
+    phase = ("NONE", "CREATE_PARENT", "COPY_FILE", "CREATE_REGISTRY_KEY", "SET_REGISTRY_VALUE")[int(match[3])]
+    counts = dict(zip(("files", "keys", "values", "assemblies"), map(int, match.groups()[4:])))
+    error = match[4].decode("ascii")
+    if any(v > 1000000 for v in counts.values()):
+        raise ValueError("Write count out of range")
+    if (not started and (phase != "NONE" or error != "00000000" or any(counts.values()))
+            or completed and (phase != "NONE" or error != "00000000")
+            or phase == "NONE" and error != "00000000"):
+        raise ValueError("Inconsistent write observation")
     if completed and not started or (code == 0) != completed:
         raise ValueError("Inconsistent apply result")
     # The candidate prints the original strict dry-run result, not an
@@ -66,7 +81,8 @@ def parse_apply(raw: bytes, code: int) -> dict:
     preflight = parse_packet(raw[match.end():], 1)
     if completed and not preflight_ready(preflight):
         raise ValueError("Missing package-local apply invariants")
-    return {"started": started, "completed": completed, "preflight": preflight}
+    return {"started": started, "completed": completed, "preflight": preflight,
+            "writes": {"first_failure_phase": phase, "win32_error": error, **counts}}
 
 
 def verified_runtime_payloads(members: dict[str, Path], after: dict) -> dict:
@@ -136,6 +152,15 @@ def inspect(wine: Path, prefix: Path, fixture: Path, package: Path, digest: Path
     result = {"experimental": True, "strict_cbs_equivalence": False,
               "transaction": "NOT_RUN", "restart": "NOT_RUN",
               "framework481_confirmed": False, "solidworks_compatibility": "NOT_DEMONSTRATED"}
+    # Stop the exact marked private session after baseline verification.
+    # Old CLR/NGen processes must not retain file locks across servicing.
+    if not _terminate_private_setup_wineserver(wine, prefix):
+        result["transaction"] = "BLOCKED_SESSION_CLEANUP"
+        return result
+    result["session_quiesced"] = True
+    if snapshot(prefix) != before:
+        result["transaction"] = "BASELINE_CHANGED_DURING_CLEANUP"
+        return result
     env = os.environ.copy()
     env.update(WINEPREFIX=str(prefix), WINEARCH="win64", WINEDEBUG="-all")
     # WUSA's CLSID_DOMDocument parser passed in clean Wine. Winetricks
@@ -165,7 +190,10 @@ def inspect(wine: Path, prefix: Path, fixture: Path, package: Path, digest: Path
             return result
     result["transaction"] = ("COMPLETED" if packet["completed"] else
                              "PARTIAL_OR_FAILED" if packet["started"] else "PREFLIGHT_REJECTED")
+    result["writes"] = packet["writes"]
+    result["apply_events"] = packet["preflight"]["events"]
     if not packet["completed"]:
+        result["partial_payload"] = compare(before, snapshot(prefix))
         return result
     result["restart"] = wineboot_restart(wine, prefix, timeout=120)
     if result["restart"] != "COMPLETED":
