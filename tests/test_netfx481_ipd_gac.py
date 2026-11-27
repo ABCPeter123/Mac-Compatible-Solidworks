@@ -2,7 +2,7 @@
 from pathlib import Path
 import tempfile
 import unittest
-from scripts.netfx481_ipd_gac import registration_sources, cached_sources
+from scripts.netfx481_ipd_gac import registration_sources, cached_sources, GacRejected
 
 
 class GacTests(unittest.TestCase):
@@ -18,6 +18,17 @@ class GacTests(unittest.TestCase):
             source.write_bytes(b"verified original")
             members = {"one.manifest": manifest, "one/one.dll": source}
             self.assertEqual(registration_sources(members, expected_count=1), [source])
+            original = manifest.read_text()
+            for version in ("4.0", "4.0.30319", "4.0.0.0"):
+                manifest.write_text(original.replace("v4.0.30319", version))
+                self.assertEqual(registration_sources(members, expected_count=1), [source])
+            manifest.write_text(original.replace('clrarch="msil"', 'clrarch="unknown"'))
+            with self.assertRaisesRegex(GacRejected, "^GAC_ARCHITECTURE$"):
+                registration_sources(members, expected_count=1)
+            manifest.write_text(original.replace("v4.0.30319", "v2.0.50727"))
+            with self.assertRaisesRegex(GacRejected, "^GAC_CLR_VERSION$"):
+                registration_sources(members, expected_count=1)
+            manifest.write_text(original)
             with self.assertRaises(ValueError):
                 registration_sources(members, expected_count=2)
             with self.assertRaises(ValueError):
