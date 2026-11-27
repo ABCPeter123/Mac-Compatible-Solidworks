@@ -348,6 +348,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx481_ipd_apply_candidate.py' -v
           python -m unittest discover -s tests -p 'test_netfx481_ipd_gac.py' -v
           python -m unittest discover -s tests -p 'test_netfx481_solidworks_gate.py' -v
+          python -m unittest discover -s tests -p 'test_netfx481_cad_prerequisites.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_legacy.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_launcher_timeout.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_original_installer_group.py' -v
@@ -414,7 +415,7 @@ jobs:
   authentic-netfx40-windows:
     name: Authenticate original Microsoft .NET 4.0 and compile CLR probes
     runs-on: windows-2025
-    timeout-minutes: 20
+    timeout-minutes: ${{ inputs.try_webview2_after_ipd && 35 || inputs.try_solidworks_after_ipd && 35 || 20 }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -792,6 +793,46 @@ jobs:
           if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) { throw "Invalid Authenticode signature" }
           if ($null -eq $signature.SignerCertificate -or $signature.SignerCertificate.Subject -notmatch '(?i)SOLIDWORKS|DASSAULT') { throw "Unexpected executable publisher" }
           Write-Output "Original SOLIDWORKS publisher and SHA256: VERIFIED"
+      - name: Compile dual architecture CAD prerequisite fixture and run independent Windows controls
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+          $refs = Join-Path ${env:ProgramFiles(x86)} 'Reference Assemblies\Microsoft\Framework\.NETFramework\v4.8.1'
+          if (!(Test-Path (Join-Path $refs 'PresentationCore.dll'))) {
+            $refs = Join-Path ${env:ProgramFiles(x86)} 'Reference Assemblies\Microsoft\Framework\.NETFramework\v4.8'
+          }
+          $assemblies = @('System.dll','System.Core.dll','System.Drawing.dll','System.Windows.Forms.dll','System.Runtime.Serialization.dll','System.ServiceModel.dll','System.Xaml.dll','WindowsBase.dll','PresentationCore.dll','PresentationFramework.dll','System.Xml.dll')
+          $references = @()
+          foreach ($assembly in $assemblies) {
+            $ref = Join-Path $refs $assembly
+            if (!(Test-Path $ref)) { throw "Required .NET reference assembly unavailable" }
+            $references += "/reference:$ref"
+          }
+          foreach ($arch in @('x86','x64')) {
+            & $csc /nologo "/platform:$arch" /target:exe @references "/out:build/netfx481_cad_prerequisites_$arch.exe" probes/netfx481_cad_prerequisites.cs
+            if ($LASTEXITCODE -ne 0) { throw "CAD prerequisite fixture compile failed" }
+          }
+          @'
+          import json, subprocess
+          from pathlib import Path
+          from scripts.netfx481_cad_prerequisites import parse, MODES
+          result = {}
+          for bits, arch in ((32, "x86"), (64, "x64")):
+              fixture = Path("build/netfx481_cad_prerequisites_" + arch + ".exe").resolve()
+              result[str(bits)] = {}
+              for mode in MODES:
+                  try:
+                      p = subprocess.run([str(fixture), mode], capture_output=True, timeout=30, check=False)
+                      result[str(bits)][mode] = parse(p.stdout, p.returncode, mode, bits)
+                  except subprocess.TimeoutExpired:
+                      result[str(bits)][mode] = {"result":"TIMEOUT", "native":False, "hresult":"NOT_VERIFIED"}
+              assert result[str(bits)]["core"]["result"] == "PASS", "Native Windows CLR control failed"
+          Path("build/netfx481-cad-windows-reference.json").write_text(json.dumps(result, sort_keys=True), encoding="ascii")
+          print("Windows CAD reference " + json.dumps(result, sort_keys=True))
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw "CAD reference validation failed" }
       - name: Verify pinned official Microsoft WebView2 SDK and compile x64 controller
         if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
         shell: pwsh
@@ -848,6 +889,9 @@ jobs:
             build/evergreen-installer.sha256
             build/webview2_controller_probe.exe
             build/solidworks_installer_ui_probe.exe
+            build/netfx481_cad_prerequisites_x86.exe
+            build/netfx481_cad_prerequisites_x64.exe
+            build/netfx481-cad-windows-reference.json
           if-no-files-found: error
           retention-days: 1
       - name: Remove private SOLIDWORKS and Microsoft WebView2 installers
@@ -2123,6 +2167,13 @@ jobs:
         with:
           name: ipd-solidworks-self-authored-probes-and-webview-digest
           path: build
+      - name: Measure dual architecture CAD runtime subsystems before WebView2
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx481_cad_prerequisites --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --report build/netfx481-ipd-apply-candidate.json --fixture-dir build --output build/netfx481-cad-prerequisites.json
       - name: Fetch independently verified WebView2 media and pinned SDK loader privately
         if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
         shell: bash
@@ -2164,6 +2215,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd && inputs.try_481_ipd_apply_candidate
         shell: bash
         env:
+          WINEDLLOVERRIDES: "mscoree=n;clr=n"
           SWCOMPAT_INSTALLER_URL: ${{ secrets.SWCOMPAT_INSTALLER_URL }}
           SWCOMPAT_INSTALLER_SHA256: ${{ secrets.SWCOMPAT_INSTALLER_SHA256 }}
         run: |
@@ -2179,6 +2231,8 @@ jobs:
           name: ipd-solidworks-bootstrap-sanitized
           path: |
             build/solidworks-webview2-prerequisite.json
+            build/netfx481-cad-prerequisites.json
+            build/netfx481-cad-windows-reference.json
             build/solidworks-macos-gdi-reference.json
             build/solidworks-macos-fetch.json
             build/solidworks-macos-trial.json
