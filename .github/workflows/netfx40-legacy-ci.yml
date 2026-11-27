@@ -1497,10 +1497,20 @@ jobs:
           import json
           from pathlib import Path
           from scripts.netfx40_msxml3_restart import validate
+          from scripts.netfx40_fresh_prefix_retry import decision
           r = json.loads(Path("build/netfx40-msxml3-restart.json").read_text())
+          original = json.loads(Path("build/netfx40-msxml3-runtime.json").read_text())
           assert validate(r)
-          assert r["persistent_native_managed"] and r["native_only_managed"] == "PASS", (
-              "Second independent original CLR4 attempt did not establish native Microsoft execution")
+          outcome = decision(original, r)
+          if r["persistent_native_managed"] and r["native_only_managed"] == "PASS":
+              assert outcome == "ALREADY_VERIFIED"
+          else:
+              # Only the exact clean, observed 1603 failure can proceed to the
+              # existing read-only MSI attribution steps. The native40 gate
+              # below must still fail. Unknown lifecycle/partial state aborts.
+              assert outcome == "RETRY_ELIGIBLE", (
+                  "Second independent original CLR4 attempt ended in an unverified state")
+              print("Second authentic CLR4 attempt returned 1603; collecting private MSI attribution before failing native CLR gate.")
           PY
 
       - name: Extract unchanged signed .NET 4.0 MSI for private failure attribution
@@ -1549,6 +1559,7 @@ jobs:
         env:
           SWCOMPAT_REQUIRE_NATIVE40_FOR_NGEN: ${{ inputs.drain_native40_ngen }}
           SWCOMPAT_REQUIRE_NATIVE40_FOR_IPD: ${{ inputs.try_481_ipd_apply_candidate }}
+          SWCOMPAT_REQUIRE_NATIVE40_FOR_SIGNED_MSP: ${{ inputs.signed_msp_win32_exit }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -1572,6 +1583,9 @@ jobs:
           if os.environ.get("SWCOMPAT_REQUIRE_NATIVE40_FOR_IPD") == "true":
               assert r["persistent_native_managed"] and r["native_only_managed"] == "PASS", (
                   "Original Microsoft CLR4 prerequisite failed; IPD apply experiment not run")
+          if os.environ.get("SWCOMPAT_REQUIRE_NATIVE40_FOR_SIGNED_MSP") == "true":
+              assert r["persistent_native_managed"] and r["native_only_managed"] == "PASS", (
+                  "Original Microsoft CLR4 prerequisite failed; signed MSP experiment not run")
           PY
       - name: Diagnose new WoW64 x86 process startup versus original Microsoft managed activation
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_wow64_managed && inputs.try_wow64_faults

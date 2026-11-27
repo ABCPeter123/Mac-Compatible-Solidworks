@@ -99,6 +99,23 @@ class Native40FreshRetryWorkflowTests(TestCase):
             block,
         )
 
+    def test_exact_second_failure_allows_only_attribution_before_strict_gate(self):
+        body = WORKFLOW.read_text(encoding="utf-8")
+        start = body.index("- name: One genuine CLR4 retry")
+        extract = body.index("- name: Extract unchanged signed .NET 4.0 MSI", start)
+        table = body.index("- name: Privately correlate original Microsoft MSI", extract)
+        gate = body.index("- name: Gate original 4.8.1 upgrade on restarted native Microsoft 4.0", table)
+        apply = body.index("- name: Attempt gated original-payload IPD servicing", gate)
+        retry = body[start:extract]
+        self.assertIn("outcome = decision(original, r)", retry)
+        self.assertIn('assert outcome == "ALREADY_VERIFIED"', retry)
+        self.assertIn('assert outcome == "RETRY_ELIGIBLE"', retry)
+        self.assertIn("collecting private MSI attribution before failing native CLR gate", retry)
+        self.assertIn('SWCOMPAT_REQUIRE_NATIVE40_FOR_SIGNED_MSP:', body[gate:apply])
+        self.assertIn("signed MSP experiment not run", body[gate:apply])
+        self.assertIn("IPD apply experiment not run", body[gate:apply])
+        self.assertIn("SWCOMPAT_NATIVE40_READY == 'yes'", body[apply:apply+400])
+
     def test_original_success_gate_and_private_reports_are_preserved(self):
         body = WORKFLOW.read_text(encoding="utf-8")
         self.assertEqual(body.count(
