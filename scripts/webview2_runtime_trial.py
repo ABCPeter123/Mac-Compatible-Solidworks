@@ -112,6 +112,12 @@ def snapshot(report: dict) -> dict:
         "environment_creation": report["environment_creation"],
         "controller_creation": report["controller_creation"],
         "controller_created": report["controller_created"],
+        # Preserve the independent probe's sanitized diagnostic codes. Never
+        # forward raw logs, exception messages, paths or arbitrary fields.
+        **{key: value.upper() if isinstance(value, str)
+           and re.fullmatch(r"0[xX][0-9a-fA-F]{8}", value) else None
+           for key in ("environment_hresult", "controller_hresult")
+           for value in (report.get(key),)},
     }
 
 

@@ -813,9 +813,10 @@ jobs:
           $sdk = (Resolve-Path build/sdk/build/native/include).Path
           cmake -S probes/webview2 -B build/webview2-msvc -G "Visual Studio 18 2026" -A x64 "-DWEBVIEW2_SDK_INCLUDE=$sdk"
           if ($LASTEXITCODE -ne 0) { throw "Controller CMake failed" }
-          cmake --build build/webview2-msvc --config Release --target webview2_controller_probe --parallel 2
-          if ($LASTEXITCODE -ne 0) { throw "Controller MSVC build failed" }
+          cmake --build build/webview2-msvc --config Release --target webview2_controller_probe webview2_render_probe --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "Controller/render MSVC build failed" }
           Copy-Item build/webview2-msvc/Release/webview2_controller_probe.exe build/webview2_controller_probe.exe
+          Copy-Item build/webview2-msvc/Release/webview2_render_probe.exe build/webview2_render_probe.exe
       - name: Verify official Microsoft-signed Evergreen x64 standalone runtime
         if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
         shell: pwsh
@@ -852,6 +853,7 @@ jobs:
           path: |
             build/evergreen-installer.sha256
             build/webview2_controller_probe.exe
+            build/webview2_render_probe.exe
             build/solidworks_installer_ui_probe.exe
             build/netfx481_cad_prerequisites_x86.exe
             build/netfx481_cad_prerequisites_x64.exe
@@ -2215,6 +2217,14 @@ jobs:
           python3 -m scripts.solidworks_runtime_gate --input build/solidworks-webview2-prerequisite.json --require-ready
           python3 -m scripts.netfx481_solidworks_gate --report build/netfx481-ipd-apply-candidate.json \
             --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" --managed build/netfx481_runtime_probe.exe
+      - name: Measure browser DOM and composition in the verified CLR and WebView2 prefix
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx481_webview2_render --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" --probe build/webview2_render_probe.exe \
+            --runtime build/solidworks-webview2-prerequisite.json --output build/ipd-webview2-render.json
       - name: Launch verified original SOLIDWORKS bootstrapper with real CLR and WebView2
         if: github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd && inputs.try_481_ipd_apply_candidate
         shell: bash
@@ -2235,6 +2245,7 @@ jobs:
           name: ipd-solidworks-bootstrap-sanitized
           path: |
             build/solidworks-webview2-prerequisite.json
+            build/ipd-webview2-render.json
             build/netfx481-cad-prerequisites.json
             build/netfx481-cad-windows-reference.json
             build/solidworks-macos-gdi-reference.json

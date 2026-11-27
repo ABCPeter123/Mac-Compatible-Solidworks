@@ -19,6 +19,7 @@ jobs:
   # from the reusable workflow; the first attempt retains the proven profile.
   # On a failed first attempt, measure only public API returns in MSI DLL scopes.
   # After verified dual-architecture CLR/GAC, test marked GDI and WebView2.
+  # Measure local DOM and browser composition in the same verified prefix.
   original-native-clr4-ipd:
     uses: ./.github/workflows/netfx40-legacy-ci.yml
     with:
