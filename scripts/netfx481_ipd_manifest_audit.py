@@ -97,6 +97,10 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
     deployment_attributes = Counter()
     file_targets = defaultdict(set)
     runtime_payloads = Counter()
+    destination_classes = Counter()
+    managed_framework_names = Counter()
+    gac_registration_features = Counter()
+    runtime_image_versions = Counter()
     release_registry = Counter()
     runtime_directives = Counter()
     runtime_attributes = Counter()
@@ -153,6 +157,9 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
                     if not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_.-]{0,64}", feature):
                         feature = "other"
                     runtime_directives[feature] += 1
+                    if feature == "runtime":
+                        value = node.get("imageVersion", "")
+                        runtime_image_versions[value if re.fullmatch(r"v?[0-9]{1,5}(?:\.[0-9]{1,5}){1,3}", value) else "other"] += 1
                     for attr in node.attrib:
                         attr = local(attr)
                         if re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_.-]{0,64}", attr):
@@ -244,6 +251,29 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
                     view = "32" if ident[1] in ("x86", "wow64") else "64"
                     file_targets[(view, normalized)].add((parent, source.casefold()))
                     base = dest_name.replace("\\", "/").rsplit("/", 1)[-1].casefold()
+                    if re.search(r"(?:^|\\)(?:gac(?:_32|_64|_msil)?|nativeimages[^\\]*)\\", normalized):
+                        dest_class = "native_images" if "\\nativeimages" in normalized else "gac"
+                    elif "\\microsoft.net\\framework64\\" in normalized:
+                        dest_class = "framework64"
+                    elif "\\microsoft.net\\framework\\" in normalized:
+                        dest_class = "framework32"
+                    elif "\\microsoft.net\\assembly\\" in normalized or "\\assembly\\" in normalized:
+                        dest_class = "assembly_other"
+                    elif base.endswith(".config"):
+                        dest_class = "configuration"
+                    else:
+                        dest_class = "other"
+                    destination_classes[dest_class] += 1
+                    if base in {"mscorlib.dll", "system.dll", "system.core.dll", "system.xml.dll",
+                                "system.configuration.dll", "system.security.dll", "system.data.dll",
+                                "system.windows.forms.dll", "presentationframework.dll", "windowsbase.dll",
+                                "system.xaml.dll", "fusion.dll", "mscoree.dll", "mscoreei.dll", "clr.dll",
+                                "clrjit.dll", "machine.config", "machine.config.default"}:
+                        managed_framework_names[dest_class + "/" + base] += 1
+                    for node in element.iter():
+                        tagname = local(node.tag).casefold()
+                        if tagname in {"assemblyidentity", "gac", "managedassembly", "assemblyregistration"}:
+                            gac_registration_features[tagname] += 1
                     if base in ("clr.dll", "mscorlib.dll", "mscoree.dll", "ngen.exe", "servicemodelreg.exe"):
                         runtime_payloads[view + "/" + base] += 1
                 if not target:
@@ -407,6 +437,10 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
             "deployment_attribute_names": dict(sorted(deployment_attributes.items())),
             "file_destination_collisions": sum(len(v) > 1 for v in file_targets.values()),
             "runtime_payload_operations": dict(sorted(runtime_payloads.items())),
+            "destination_classes": dict(sorted(destination_classes.items())),
+            "managed_framework_placement": dict(sorted(managed_framework_names.items())),
+            "file_child_registration_features": dict(sorted(gac_registration_features.items())),
+            "runtime_image_versions": dict(sorted(runtime_image_versions.items())),
             "release_registry": dict(sorted(release_registry.items())),
             "runtime_directives": dict(sorted(runtime_directives.items())),
             "runtime_directive_attributes": dict(sorted(runtime_attributes.items())),
