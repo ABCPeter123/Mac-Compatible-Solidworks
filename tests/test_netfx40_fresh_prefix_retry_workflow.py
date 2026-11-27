@@ -12,7 +12,7 @@ CALLER = ROOT / ".github/workflows/netfx48-wiage-ngen-progress-msi-once-ci.yml"
 
 
 class Native40FreshRetryWorkflowTests(TestCase):
-    def test_only_original_signed_msp_one_shot_can_trigger_it(self):
+    def test_only_original_signed_msp_or_ipd_apply_can_trigger_it(self):
         body = WORKFLOW.read_text(encoding="utf-8")
         caller = CALLER.read_text(encoding="utf-8")
         start = body.index(
@@ -23,8 +23,14 @@ class Native40FreshRetryWorkflowTests(TestCase):
             "attribution", start)
         block = body[start:end]
         self.assertIn(
+            "if: env.SWCOMPAT_MSXML3_READY == 'yes' && "
+            "(inputs.signed_msp_win32_exit || inputs.try_481_ipd_apply_candidate)", block)
+        conditions = re.findall(r"(?m)^\s*if: (.+)$", block)
+        self.assertEqual(conditions, [
             "env.SWCOMPAT_MSXML3_READY == 'yes' && "
-            "inputs.signed_msp_win32_exit", block)
+            "(inputs.signed_msp_win32_exit || inputs.try_481_ipd_apply_candidate)"])
+        self.assertIn("SWCOMPAT_REQUIRE_NATIVE40_FOR_IPD: ${{ inputs.try_481_ipd_apply_candidate }}", body)
+        self.assertIn('"Original Microsoft CLR4 prerequisite failed; IPD apply experiment not run"', body)
         self.assertIn("netfx40_fresh_prefix_retry", block)
         self.assertIn("--agree-disposable-prefix", block)
         self.assertIn('test "$outcome" = "FRESH_PREFIX_REQUIRED"', block)
