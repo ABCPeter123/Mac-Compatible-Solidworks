@@ -13,6 +13,7 @@ from scripts.netfx481_ipd_apply_candidate import verified_runtime_payloads
 from scripts.netfx481_ipd_stage import inventory, digest_tree
 from scripts.netfx481_native_delta_gate import EXPECTED_COUNT, EXPECTED_TREE_SHA256
 from scripts.netfx481_payload_audit import snapshot
+from scripts.netfx481_ipd_gac import registration_complete, registration_sources, cached_sources
 
 
 def ready(report: object) -> bool:
@@ -36,17 +37,13 @@ def ready(report: object) -> bool:
     writes = report.get("writes")
     provenance = report.get("original_runtime_payloads")
     return (
-        isinstance(gac, dict)
-        and gac.get("transport") == "COMPLETED"
-        and all(gac.get(k) == 274 for k in ("directives", "unique_payloads", "cached_after",
-                                             "attempted", "successful_hresult"))
-        and gac.get("failed_hresult") == {}
+        registration_complete(gac)
         and isinstance(writes, dict)
         and writes.get("assemblies") == 1387
         and writes.get("first_failure_phase") == "NONE"
         and writes.get("win32_error") == "00000000"
-        and isinstance(writes.get("files"), int)
-        and isinstance(writes.get("deferred"), int)
+        and type(writes.get("files")) is int and 0 <= writes["files"] <= 1044
+        and type(writes.get("deferred")) is int and 0 <= writes["deferred"] <= 1044
         and writes["files"] + writes["deferred"] == 1044
         and writes.get("values") == 11125
         and isinstance(provenance, dict)
@@ -77,7 +74,14 @@ def main() -> int:
         if len(members) != EXPECTED_COUNT or digest_tree(members) != EXPECTED_TREE_SHA256:
             raise ValueError("Unauthenticated stage")
         provenance = verified_runtime_payloads(members, snapshot(a.prefix))
-        if not all(item["matches_original"] for item in provenance.values()) or not runtime_ready(
+        # Recheck original GAC bytes after restart and before each licensed launch.
+        # A historical successful Fusion HRESULT is not live cache evidence.
+        entries = registration_sources(members)
+        if (len(cached_sources(a.prefix, entries)) != 274
+                or not all(item["matches_original"] for item in provenance.values())):
+            print("SOLIDWORKS live original payload prerequisite: NOT_READY")
+            return 1
+        if not runtime_ready(
                 probe(a.wine.resolve(strict=True), a.prefix.resolve(strict=True),
                       a.managed.resolve(strict=True), override="native_only")):
             print("SOLIDWORKS live native framework prerequisite: NOT_READY")

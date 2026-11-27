@@ -13,7 +13,7 @@ def report():
         "deferred_verified": True, "registry": "AT_LEAST_481",
         "runtime_family": "MICROSOFT_CLR_CANDIDATE", "managed": "PASS", "loader": "LOADED",
         "gac_registration": dict(transport="COMPLETED", directives=274,
-                                 unique_payloads=274, cached_after=274,
+                                 unique_payloads=274, cached_before=0, cached_after=274,
                                  attempted=274, successful_hresult=274, failed_hresult={}),
         "writes": dict(assemblies=1387, files=1036, deferred=8, values=11125,
                        first_failure_phase="NONE", win32_error="00000000"),
@@ -45,6 +45,19 @@ class SolidworksGateTests(unittest.TestCase):
         ):
             value = report()
             value[section][key] = bad
+            self.assertFalse(ready(value))
+
+    def test_preexisting_original_cache_and_invalid_file_counts(self):
+        for count in (1, 137, 274):
+            value = report()
+            value["gac_registration"].update(cached_before=count, attempted=274-count,
+                                             successful_hresult=274-count)
+            self.assertTrue(ready(value))
+            value["gac_registration"]["attempted"] += 1
+            self.assertFalse(ready(value))
+        for files, deferred in ((1045, -1), (-1, 1045), (1043, True)):
+            value = report()
+            value["writes"].update(files=files, deferred=deferred)
             self.assertFalse(ready(value))
 
     def test_workflow_private_manual_only_and_same_prefix(self):

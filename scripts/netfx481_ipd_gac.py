@@ -106,6 +106,22 @@ def cached_sources(prefix: Path, entries: list) -> set:
     return found
 
 
+def registration_complete(report: object) -> bool:
+    """All original assemblies must be present, including already cached ones."""
+    if not isinstance(report, dict):
+        return False
+    fields = ("directives", "unique_payloads", "cached_before", "cached_after",
+              "attempted", "successful_hresult")
+    if any(type(report.get(k)) is not int or not 0 <= report[k] <= 274 for k in fields):
+        return False
+    return (
+        report.get("transport") == "COMPLETED"
+        and report.get("failed_hresult") == {}
+        and report["directives"] == report["unique_payloads"] == report["cached_after"] == 274
+        and report["attempted"] == report["successful_hresult"] == 274 - report["cached_before"]
+    )
+
+
 def register(wine: Path, prefix: Path, fixture: Path, members: dict[str, Path]) -> dict:
     validate_prefix(prefix)
     runner = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)

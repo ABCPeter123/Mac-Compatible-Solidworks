@@ -381,15 +381,18 @@ def inspect(wine: Path, prefix: Path, fixture: Path, package: Path, digest: Path
     result.update(payload=payload, original_runtime_payloads=provenance,
                   loader=loaded, registry=measured["registry"],
                   runtime_family=measured["clr_family"], managed=measured["managed"])
-    if measured["managed"] != "PASS" and result["deferred_verified"]:
-        from scripts.netfx481_ipd_gac import register
+    # A working minimal managed probe does not establish complete GAC servicing.
+    # Always measure and finish the original GAC directives on a verified transaction.
+    if result["deferred_verified"]:
+        from scripts.netfx481_ipd_gac import register, registration_complete
         gac_fixture = runner / "swcompat-netfx481-ipd-gac.exe"
         if gac_fixture.is_file() and not gac_fixture.is_symlink():
             try:
                 result["gac_registration"] = register(wine, prefix, gac_fixture, members)
             except (ValueError, OSError, UnicodeError):
                 result["gac_registration"] = {"transport": "REJECTED"}
-            if result["gac_registration"].get("attempted", 0):
+            if (result["gac_registration"].get("attempted", 0)
+                    or registration_complete(result["gac_registration"])):
                 result["pre_gac_managed"] = measured["managed"]
                 result["gac_restart"] = (
                     wineboot_restart(wine, prefix, timeout=120)

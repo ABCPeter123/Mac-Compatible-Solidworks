@@ -2,10 +2,27 @@
 from pathlib import Path
 import tempfile
 import unittest
-from scripts.netfx481_ipd_gac import registration_sources, cached_sources, GacRejected
+from scripts.netfx481_ipd_gac import registration_sources, cached_sources, GacRejected, registration_complete
 
 
 class GacTests(unittest.TestCase):
+    def test_completion_accepts_only_exact_accounting(self):
+        for before in (0, 1, 137, 274):
+            with self.subTest(before=before):
+                report = dict(transport="COMPLETED", directives=274, unique_payloads=274,
+                              cached_before=before, cached_after=274,
+                              attempted=274-before, successful_hresult=274-before,
+                              failed_hresult={})
+                self.assertTrue(registration_complete(report))
+                for key, bad in (("cached_before", -1), ("cached_after", 273),
+                                 ("attempted", 275), ("successful_hresult", True),
+                                 ("unique_payloads", 273), ("transport", "REJECTED"),
+                                 ("failed_hresult", {"80004005": 1})):
+                    self.assertFalse(registration_complete(dict(report, **{key: bad})))
+                missing = dict(report)
+                del missing["cached_before"]
+                self.assertFalse(registration_complete(missing))
+
     def test_exact_source_and_native_cache_bytes(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
