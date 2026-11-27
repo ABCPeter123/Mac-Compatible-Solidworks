@@ -1419,6 +1419,8 @@ jobs:
         shell: bash
         env:
           SWCOMPAT_WIN7_SETUP: ${{ inputs.win7_setup }}
+          SWCOMPAT_IPD_SYNC_RETRY: ${{ inputs.try_481_ipd_apply_candidate }}
+          SWCOMPAT_RETRY_WINE_BASELINE: ${{ inputs.wine_baseline }}
         run: |
           set -euo pipefail
           outcome=$(python3 -m scripts.netfx40_fresh_prefix_retry \
@@ -1435,6 +1437,19 @@ jobs:
           echo "Real CLR4 setup 1603; original disposable prefix archived privately."
           mv build/netfx40-msxml3-runtime.json build/netfx40-msxml3-runtime-attempt1.json
           mv build/netfx40-msxml3-restart.json build/netfx40-msxml3-restart-attempt1.json
+
+          # Wiage's optional Mach semaphore backend is enabled in the original
+          # attempt. After a verified 1603 and successful server shutdown, test
+          # ordinary wineserver synchronization in the new IPD prefix only.
+          # Set the environment before *any* new prefix process, and retain it
+          # for later servicing, rather than mixing server/client backends.
+          if [[ "$SWCOMPAT_IPD_SYNC_RETRY" == "true" && "$SWCOMPAT_RETRY_WINE_BASELINE" == "wiage-11.13" ]]; then
+            test "${WINEMSYNC:-}" = "1"
+            export WINEMSYNC=0
+            echo "WINEMSYNC=0" >> "$GITHUB_ENV"
+            echo "Original CLR4 IPD fresh retry synchronization: MSYNC_DISABLED"
+            echo "## CLR4 fresh retry: MSYNC_DISABLED (experimental)" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
           # Reuse the canonical prefix path for all downstream gate checks.
           # The original attempt was moved, not mutated or reused.

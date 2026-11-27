@@ -99,6 +99,21 @@ class Native40FreshRetryWorkflowTests(TestCase):
             block,
         )
 
+    def test_ipd_retry_changes_sync_only_after_exact_clean_failure(self):
+        body = WORKFLOW.read_text(encoding="utf-8")
+        start = body.index("- name: One genuine CLR4 retry")
+        end = body.index("- name: Extract unchanged signed .NET 4.0 MSI", start)
+        block = body[start:end]
+        verified = block.index('test "$outcome" = "FRESH_PREFIX_REQUIRED"')
+        mode = block.index("export WINEMSYNC=0")
+        init = block.index("--skip-bootstrap-mono-gecko")
+        self.assertLess(verified, mode)
+        self.assertLess(mode, init)
+        self.assertIn('if [[ "$SWCOMPAT_IPD_SYNC_RETRY" == "true" && "$SWCOMPAT_RETRY_WINE_BASELINE" == "wiage-11.13" ]]', block)
+        self.assertIn('echo "WINEMSYNC=0" >> "$GITHUB_ENV"', block)
+        self.assertIn('test "${WINEMSYNC:-}" = "1"', block)
+        self.assertIn('SWCOMPAT_IPD_SYNC_RETRY: ${{ inputs.try_481_ipd_apply_candidate }}', block)
+
     def test_exact_second_failure_allows_only_attribution_before_strict_gate(self):
         body = WORKFLOW.read_text(encoding="utf-8")
         start = body.index("- name: One genuine CLR4 retry")
