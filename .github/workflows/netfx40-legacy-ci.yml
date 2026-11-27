@@ -1297,11 +1297,11 @@ jobs:
             --original build/netfx40-msxml3-runtime.json \
             --output build/netfx40-msxml3-restart.json \
             --agree-disposable-prefix
-      # Only the authenticated signed-MSP one-shot may spend another fresh
-      # prefix after the original .NET 4.0 setup returned exact Win32 1603.
+      # Only authenticated signed-MSP or IPD apply experiments may spend another
+      # fresh prefix after original .NET 4.0 setup returned exact Win32 1603.
       # Neither a failed partial installation nor a missing CLR can pass.
       - name: One genuine CLR4 retry in a second fresh disposable Wine prefix after 1603
-        if: env.SWCOMPAT_MSXML3_READY == 'yes' && inputs.signed_msp_win32_exit
+        if: env.SWCOMPAT_MSXML3_READY == 'yes' && (inputs.signed_msp_win32_exit || inputs.try_481_ipd_apply_candidate)
         shell: bash
         env:
           SWCOMPAT_WIN7_SETUP: ${{ inputs.win7_setup }}
@@ -1434,6 +1434,7 @@ jobs:
         shell: bash
         env:
           SWCOMPAT_REQUIRE_NATIVE40_FOR_NGEN: ${{ inputs.drain_native40_ngen }}
+          SWCOMPAT_REQUIRE_NATIVE40_FOR_IPD: ${{ inputs.try_481_ipd_apply_candidate }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -1454,6 +1455,9 @@ jobs:
           if os.environ.get("SWCOMPAT_REQUIRE_NATIVE40_FOR_NGEN") == "true":
               assert r["persistent_native_managed"] and r["native_only_managed"] == "PASS", (
                   "Original Microsoft CLR4 prerequisite failed; NGen experiment not run")
+          if os.environ.get("SWCOMPAT_REQUIRE_NATIVE40_FOR_IPD") == "true":
+              assert r["persistent_native_managed"] and r["native_only_managed"] == "PASS", (
+                  "Original Microsoft CLR4 prerequisite failed; IPD apply experiment not run")
           PY
       - name: Diagnose new WoW64 x86 process startup versus original Microsoft managed activation
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_wow64_managed && inputs.try_wow64_faults
