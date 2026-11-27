@@ -59,7 +59,7 @@ class Capture:
         name = raw.decode("ascii")
         if name != ENTRY and name not in APIS:
             return
-        if self.truncated:
+        if self.truncated or (name != ENTRY and tid not in self.active):
             return
         self.events += 1
         if self.events > MAX_EVENTS:
@@ -73,6 +73,8 @@ class Capture:
                 self.active[tid] = Counter()
             return
         if tid not in self.active:
+            if name == ENTRY:
+                self.truncated = True
             return
         value = RETURN.search(line, event.end()-1)
         if not value:

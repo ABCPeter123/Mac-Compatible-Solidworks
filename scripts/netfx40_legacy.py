@@ -361,7 +361,7 @@ def _run_traced_impl(wine: Path, prefix: Path, fixture: Path,
     return result
 
 
-def _run_traced(wine, prefix, fixture, arguments, *, setup=False, timeout=75,
+def _run_traced(wine, prefix, fixture, arguments, *, setup=True, timeout=75,
                 store_private=False, relay_output=None):
     if relay_output is None:
         return _run_traced_impl(wine, prefix, fixture, arguments, setup=setup,
@@ -373,11 +373,11 @@ def _run_traced(wine, prefix, fixture, arguments, *, setup=False, timeout=75,
     result = _run_traced_impl(wine, prefix, fixture, arguments, setup=setup,
                               timeout=timeout, store_private=store_private, relay=capture)
     safe = result.get("setup_cleanup") in {"PIPE_CLOSED", "GROUP_REAPED", "PREFIX_REAPED"}
+    if safe:
+        dll_relay.restore(wine, prefix)
     dll_relay.write_report(relay_output, capture,
                            safe and result.get("status") == "EXIT_CAPTURED"
                            and result.get("setup_cleanup") == "PIPE_CLOSED")
-    if safe:
-        dll_relay.restore(wine, prefix)
     return result
 
 

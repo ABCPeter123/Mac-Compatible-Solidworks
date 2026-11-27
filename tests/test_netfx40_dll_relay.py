@@ -31,3 +31,11 @@ class RelayTests(unittest.TestCase):
         self.assertEqual(cap.report(True)["status"], "INCOMPLETE")
         self.assertEqual(cap.report(False)["failed_scope_api_returns"], {})
         self.assertEqual(Capture().report(True)["status"], "NO_DLL_SCOPE")
+
+    def test_unrelated_process_noise_does_not_exhaust_scope_budget(self):
+        cap = Capture()
+        for _ in range(70000):
+            cap.feed(b"0030:Ret  advapi32.RegOpenKeyExW() retval=00000002 ret=0")
+        self.assertEqual(cap.report(True)["status"], "NO_DLL_SCOPE")
+        cap.feed(b"0024:Ret  msi.__wine_msi_call_dll_function() retval=00000643 ret=0")
+        self.assertEqual(cap.report(True)["status"], "INCOMPLETE")
