@@ -1,6 +1,6 @@
 """Contract tests only; never execute a servicing transaction."""
 import unittest
-from scripts.netfx481_ipd_apply_candidate import EXPECTED, preflight_ready, parse_apply, verified_runtime_payloads
+from scripts.netfx481_ipd_apply_candidate import EXPECTED, preflight_ready, parse_apply, verified_runtime_payloads, deferred_journal, verify_deferred
 from scripts.netfx481_ipd_wusa_dryrun import CATEGORIES
 
 
@@ -20,14 +20,15 @@ class ApplyCandidateTests(unittest.TestCase):
         report["dryrun"] = "PASS"
         self.assertFalse(preflight_ready(report))
 
-    def packet(self, started=1, completed=1, phase=0, error="00000000", files=0):
+    def packet(self, started=1, completed=1, phase=0, error="00000000", files=0, deferred=0):
         events = self.report()["events"]
-        lines = ["SWCOMPAT_IPD_APPLY_SCHEMA=2",
+        lines = ["SWCOMPAT_IPD_APPLY_SCHEMA=3",
                  f"SWCOMPAT_IPD_APPLY_STARTED={started}",
                  f"SWCOMPAT_IPD_APPLY_COMPLETED={completed}",
                  f"SWCOMPAT_IPD_APPLY_PHASE={phase}",
                  f"SWCOMPAT_IPD_APPLY_WIN32={error}",
                  f"SWCOMPAT_IPD_APPLY_FILES={files}",
+                 f"SWCOMPAT_IPD_APPLY_DEFERRED={deferred}",
                  "SWCOMPAT_IPD_APPLY_KEYS=0", "SWCOMPAT_IPD_APPLY_VALUES=0",
                  "SWCOMPAT_IPD_APPLY_ASSEMBLIES=0",
                  "SWCOMPAT_IPD_DRYRUN_SCHEMA=1", "SWCOMPAT_IPD_DRYRUN_RESULT=FAIL",
@@ -63,6 +64,44 @@ class ApplyCandidateTests(unittest.TestCase):
             self.assertEqual(result["CLR32"]["candidates"], 0)
             after["CLR64"] = ("PE_AMD64", "0" * 64)
             self.assertFalse(verified_runtime_payloads(members, after)["CLR64"]["matches_original"])
+
+    def test_deferred_replacement_requires_original_bytes_and_consumed_temp(self):
+        import tempfile
+        from pathlib import Path
+        from scripts.netfx481_ipd_wusa_dryrun import windows_path
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            prefix = base / "prefix"
+            stage = base / "stage"
+            stage.mkdir()
+            source = stage / "original.dll"
+            source.write_bytes(b"verified original")
+            pending = prefix / "drive_c" / "swcompat-ipd-pending"
+            pending.mkdir(parents=True)
+            destination = prefix / "drive_c" / "windows" / "fixture.dll"
+            destination.parent.mkdir()
+            destination.write_bytes(b"old")
+            temp = pending / "ipd123.tmp"
+            temp.write_bytes(source.read_bytes())
+            journal = pending / "queue.bin"
+            fields = [windows_path(source), r"C:\windows\fixture.dll",
+                      r"C:\swcompat-ipd-pending\ipd123.tmp"]
+            journal.write_bytes(("\0".join(fields) + "\0").encode("utf-16-le"))
+            members = {"original.dll": source}
+            queue = deferred_journal(prefix, stage, members, 1)
+            self.assertFalse(verify_deferred(queue))
+            temp.write_bytes(b"wrong")
+            with self.assertRaises(ValueError):
+                deferred_journal(prefix, stage, members, 1)
+            temp.write_bytes(source.read_bytes())
+            temp.replace(destination)
+            self.assertTrue(verify_deferred(queue))
+            destination.write_bytes(b"wrong")
+            self.assertFalse(verify_deferred(queue))
+            fields[1] = r"C:\..\escape.dll"
+            journal.write_bytes(("\0".join(fields) + "\0").encode("utf-16-le"))
+            with self.assertRaises(ValueError):
+                deferred_journal(prefix, stage, members, 1)
 
     def test_partial_write_reports_preserve_first_failure(self):
         result = parse_apply(self.packet(1, 0, 2, "00000020", 14), 1)
