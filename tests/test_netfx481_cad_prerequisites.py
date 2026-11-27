@@ -1,7 +1,7 @@
 """Synthetic strict protocol and same-prefix wiring tests."""
 from pathlib import Path
 import unittest
-from scripts.netfx481_cad_prerequisites import parse
+from scripts.netfx481_cad_prerequisites import parse, wpf_diagnostic, MAX_WPF_STDERR
 
 
 def packet(mode="core", bits=64, native="YES", result="PASS", hr="00000000"):
@@ -39,3 +39,27 @@ class CadPrerequisiteTests(unittest.TestCase):
         self.assertIn("scripts.netfx481_cad_prerequisites", body[matrix:webview])
         self.assertIn('WINEDLLOVERRIDES: "mscoree=n;clr=n"', body[launch:launch+650])
         self.assertIn("github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd", body[launch:launch+650])
+
+    def test_wpf_stage_census_distinguishes_crash_from_managed_exception(self):
+        raw = b"SWCOMPAT_WPF_STAGE=DISPATCH\nSWCOMPAT_WPF_STAGE=ENTER\nSWCOMPAT_WPF_STAGE=VISUAL\nprivate path and arguments\n"
+        r = wpf_diagnostic(raw, -11)
+        self.assertEqual(r["last_stage"], "VISUAL")
+        self.assertEqual(r["exit"], "SIGNALLED")
+        self.assertFalse(r["managed_exception"])
+        self.assertNotIn("private", str(r))
+        r = wpf_diagnostic(raw + b"SWCOMPAT_WPF_STAGE=MANAGED_EXCEPTION\nSWCOMPAT_WPF_INNER_HRESULT=80004005\n", 1)
+        self.assertTrue(r["managed_exception"])
+        self.assertEqual(r["inner_hresult"], "80004005")
+        self.assertEqual(wpf_diagnostic(b"SWCOMPAT_WPF_STAGE=VISUAL\n", 0)["last_stage"], "INVALID_MARKERS")
+        self.assertEqual(wpf_diagnostic(b"x" * (MAX_WPF_STDERR + 1), 1)["last_stage"], "TRUNCATED")
+
+    def test_disposable_gdi_marker_precedes_gdi_reference_and_webview(self):
+        body = (Path(__file__).resolve().parents[1] / ".github/workflows/netfx40-legacy-ci.yml").read_text()
+        gate = body.index("      - name: Require verified native framework and complete original GAC")
+        gdi = body.index("      - name: Verify same-prefix native Win32 GDI baseline", gate)
+        web = body.index("      - name: Install verified WebView2", gdi)
+        block = body[gdi:web]
+        self.assertLess(block.index('touch "$PREFIX/.swcompat-solidworks-installer-disposable"'),
+                        block.index("python3 -m scripts.solidworks_ui_gdi_reference"))
+        self.assertIn('test -f "$PREFIX/.swcompat-netfx481-disposable"', block)
+        self.assertIn('test ! -L "$PREFIX/.swcompat-solidworks-installer-disposable"', block)

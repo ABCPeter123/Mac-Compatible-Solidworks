@@ -39,6 +39,47 @@ def parse(raw: bytes, rc: int, mode: str, bits: int) -> dict:
     return {"result": result, "native": n == "YES", "hresult": error}
 
 
+WPF_STAGES = ("DISPATCH", "ENTER", "VISUAL", "DRAWN", "BITMAP", "RENDERED", "COPIED")
+MAX_WPF_STDERR = 65536
+
+
+def wpf_diagnostic(raw: bytes, rc: int | None) -> dict:
+    # Exact self-authored markers only. Never return raw stderr or paths.
+    result = {"last_stage": "NOT_OBSERVED", "managed_exception": False,
+              "inner_hresult": "NOT_VERIFIED", "exit": "NOT_VERIFIED"}
+    if rc is not None:
+        result["exit"] = ("ZERO" if rc == 0 else "ONE" if rc == 1
+                          else "NONZERO" if rc > 0 else "SIGNALLED")
+    if len(raw) > MAX_WPF_STDERR:
+        result["last_stage"] = "TRUNCATED"
+        return result
+    seen = []
+    exception = False
+    inner = None
+    for line in raw.splitlines():
+        match = re.fullmatch(rb"SWCOMPAT_WPF_STAGE=([A-Z_]+)", line)
+        if match:
+            stage = match.group(1).decode("ascii")
+            if stage == "MANAGED_EXCEPTION" and seen and not exception:
+                exception = True
+            elif (not exception and len(seen) < len(WPF_STAGES)
+                  and stage == WPF_STAGES[len(seen)]):
+                seen.append(stage)
+            else:
+                result["last_stage"] = "INVALID_MARKERS"
+                return result
+        match = re.fullmatch(rb"SWCOMPAT_WPF_INNER_HRESULT=([0-9A-F]{8})", line)
+        if match and exception:
+            if inner is not None:
+                result["last_stage"] = "INVALID_MARKERS"
+                return result
+            inner = match.group(1).decode("ascii")
+    result.update(last_stage=seen[-1] if seen else "NOT_OBSERVED",
+                  managed_exception=exception,
+                  inner_hresult=inner or "NOT_VERIFIED")
+    return result
+
+
 def execute(wine: Path, prefix: Path, fixture: Path, mode: str, bits: int,
             *, native_only: bool) -> dict:
     env = os.environ.copy()
@@ -46,17 +87,24 @@ def execute(wine: Path, prefix: Path, fixture: Path, mode: str, bits: int,
     env.update(WINEPREFIX=str(prefix), WINEARCH="win64", WINEDEBUG="-all")
     if native_only:
         env["WINEDLLOVERRIDES"] = NATIVE_DLL_OVERRIDES["native_only"]
-    with tempfile.TemporaryFile() as out:
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        rc = None
         try:
             p = subprocess.run([str(wine), str(fixture), mode], cwd=fixture.parent,
                                env=env, stdin=subprocess.DEVNULL, stdout=out,
-                               stderr=subprocess.DEVNULL, timeout=35, check=False)
+                               stderr=err if mode == "wpf" else subprocess.DEVNULL,
+                               timeout=35, check=False)
+            rc = p.returncode
+            out.seek(0)
+            result = parse(out.read(4097), rc, mode, bits)
         except subprocess.TimeoutExpired:
-            return {"result": "TIMEOUT", "native": False, "hresult": "NOT_VERIFIED"}
+            result = {"result": "TIMEOUT", "native": False, "hresult": "NOT_VERIFIED"}
         except OSError:
-            return {"result": "PROCESS_ERROR", "native": False, "hresult": "NOT_VERIFIED"}
-        out.seek(0)
-        return parse(out.read(4097), p.returncode, mode, bits)
+            result = {"result": "PROCESS_ERROR", "native": False, "hresult": "NOT_VERIFIED"}
+        if mode == "wpf":
+            err.seek(0)
+            result["diagnostic"] = wpf_diagnostic(err.read(MAX_WPF_STDERR + 1), rc)
+        return result
 
 
 def main() -> int:

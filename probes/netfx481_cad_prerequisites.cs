@@ -5,6 +5,7 @@ using System.Drawing;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
 using System.Runtime.Serialization;
 using System.ServiceModel;
 using System.Windows.Media;
@@ -38,18 +39,31 @@ class CadPrerequisites
         }
     }
 
+    static void WpfStage(string stage)
+    {
+        Console.Error.WriteLine("SWCOMPAT_WPF_STAGE=" + stage);
+        Console.Error.Flush();
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
     static bool Wpf()
     {
+        WpfStage("ENTER");
         var visual = new DrawingVisual();
+        WpfStage("VISUAL");
         using (DrawingContext dc = visual.RenderOpen())
         {
             dc.DrawRectangle(System.Windows.Media.Brushes.Red, null, new System.Windows.Rect(0, 0, 32, 32));
             dc.DrawRectangle(System.Windows.Media.Brushes.Blue, null, new System.Windows.Rect(32, 0, 32, 32));
         }
+        WpfStage("DRAWN");
         var bitmap = new RenderTargetBitmap(64, 32, 96, 96, PixelFormats.Pbgra32);
+        WpfStage("BITMAP");
         bitmap.Render(visual);
+        WpfStage("RENDERED");
         byte[] pixels = new byte[64 * 32 * 4];
         bitmap.CopyPixels(pixels, 64 * 4, 0);
+        WpfStage("COPIED");
         int a = (16 * 64 + 16) * 4, b = (16 * 64 + 48) * 4;
         return pixels[a+2] > 240 && pixels[a] < 16 && pixels[b] > 240 && pixels[b+2] < 16;
     }
@@ -96,12 +110,21 @@ class CadPrerequisites
                 {
                     case "core": pass = Core(); break;
                     case "winforms": pass = WinForms(); break;
-                    case "wpf": pass = Wpf(); break;
+                    case "wpf": WpfStage("DISPATCH"); pass = Wpf(); break;
                     case "wcf": pass = Wcf(); break;
                     case "com": pass = Com(); break;
                 }
         }
-        catch (Exception ex) { error = unchecked((uint)Marshal.GetHRForException(ex)).ToString("X8"); }
+        catch (Exception ex) {
+            error = unchecked((uint)Marshal.GetHRForException(ex)).ToString("X8");
+            if (mode == "wpf")
+            {
+                WpfStage("MANAGED_EXCEPTION");
+                Exception inner = ex.InnerException;
+                if (inner != null)
+                    Console.Error.WriteLine("SWCOMPAT_WPF_INNER_HRESULT=" + unchecked((uint)Marshal.GetHRForException(inner)).ToString("X8"));
+            }
+        }
         Console.WriteLine("SWCOMPAT_CAD_SCHEMA=1");
         Console.WriteLine("SWCOMPAT_CAD_MODE=" + mode);
         Console.WriteLine("SWCOMPAT_CAD_BITS=" + (IntPtr.Size * 8));

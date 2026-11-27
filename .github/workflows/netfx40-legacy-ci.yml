@@ -2175,7 +2175,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m scripts.solidworks_ui_gdi_reference --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+          PREFIX="$RUNNER_TEMP/netfx40-msxml3-prefix"
+          # The exact prefix has already passed the live original CLR/GAC gate.
+          # The synthetic GDI control requires this separate disposable marker.
+          test -f "$PREFIX/.swcompat-netfx481-disposable"
+          test ! -L "$PREFIX/.swcompat-solidworks-installer-disposable"
+          touch "$PREFIX/.swcompat-solidworks-installer-disposable"
+          python3 -m scripts.solidworks_ui_gdi_reference --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" \
             --probe build/solidworks_installer_ui_probe.exe --output build/solidworks-macos-gdi-reference.json
       - name: Fetch independently verified WebView2 media and pinned SDK loader privately
         if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
@@ -2199,7 +2205,9 @@ jobs:
         run: |
           set -euo pipefail
           PREFIX="$RUNNER_TEMP/netfx40-msxml3-prefix"
-          touch "$PREFIX/.swcompat-webview2-disposable" "$PREFIX/.swcompat-solidworks-installer-disposable"
+          test -f "$PREFIX/.swcompat-solidworks-installer-disposable"
+          test ! -L "$PREFIX/.swcompat-webview2-disposable"
+          touch "$PREFIX/.swcompat-webview2-disposable"
           python3 -m scripts.webview2_runtime_trial --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" \
             --installer build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe --sha256-file build/evergreen-installer.sha256 \
             --probe build/webview2_controller_probe.exe --output build/solidworks-webview2-prerequisite.json \
