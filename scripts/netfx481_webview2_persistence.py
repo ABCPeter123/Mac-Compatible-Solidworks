@@ -10,26 +10,23 @@ import os
 from pathlib import Path
 from scripts.netfx481_trial import validate_prefix
 from scripts.solidworks_runtime_gate import evaluate
+from scripts.netfx481_webview2_restart_gate import operational, live_ready
 from scripts.webview2_runtime_trial import probe, snapshot, wine_environment
 from scripts.webview2_render_gate import load_report
 
 
-def classify(initial: dict, live: dict) -> dict:
-    before = evaluate(initial)["ready"]
-    after = (live.get("probe_result") == "COMPLETE"
-             and live.get("runtime_discovery") == "VERSION_FOUND"
-             and live.get("environment_creation") == "READY"
-             and live.get("controller_creation") == "READY"
-             and live.get("controller_created") is True)
-    return {"schema": 1, "initial_install_verified": before,
+def classify(initial: dict, restart: dict, live: dict) -> dict:
+    before = operational(initial, restart)
+    return {"schema": 1, "initial_install_verified": evaluate(initial)["ready"],
+            "initial_operational_verified": before,
             "live": snapshot(live),
-            "persistent_controller": before and after,
+            "persistent_controller": before and live_ready(live),
             "solidworks_compatibility": "NOT_DEMONSTRATED"}
 
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
-    for key in ("wine", "prefix", "probe", "initial", "output"):
+    for key in ("wine", "prefix", "probe", "initial", "restart", "output"):
         p.add_argument("--" + key, required=True, type=Path)
     a = p.parse_args()
     validate_prefix(a.prefix)
@@ -43,12 +40,13 @@ def main() -> int:
             or a.output.resolve().is_relative_to(a.prefix.resolve())):
         raise ValueError("Unexpected isolated browser persistence inputs")
     initial = load_report(a.initial)
-    if not evaluate(initial)["ready"]:
-        raise ValueError("Original setup transaction was not verified")
+    restart = load_report(a.restart)
+    if not operational(initial, restart):
+        raise ValueError("Original browser operational restart was not verified")
     env = wine_environment(a.prefix)
     env.pop("WINEDLLOVERRIDES", None)
     live = probe(a.wine.resolve(strict=True), a.probe.resolve(strict=True), env)
-    result = classify(initial, live)
+    result = classify(initial, restart, live)
     a.output.write_text(json.dumps(result, sort_keys=True) + "\n", encoding="ascii")
     print("WebView2 post-CLR persistence " + json.dumps(result, sort_keys=True))
     return 0 if result["persistent_controller"] else 1

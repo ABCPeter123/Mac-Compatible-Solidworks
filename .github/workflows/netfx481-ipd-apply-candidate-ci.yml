@@ -42,3 +42,5 @@ jobs:
 # Preserve full Windows installer exit and use separate native CAD result packets.
 
 # Experimental prerequisite order: verified WebView2 first, then native CLR; re-probe both after servicing.
+
+# Recover only an observed functional browser after verified shutdown and restart; keep strict licensed-launch gate.

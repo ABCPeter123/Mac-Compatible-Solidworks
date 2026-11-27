@@ -13,4 +13,5 @@ python3 -m scripts.webview2_runtime_trial --wine "$SWCOMPAT_WINE" --prefix "$PRE
   --installer build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe --sha256-file build/evergreen-installer.sha256 \
   --probe build/webview2_controller_probe.exe --output "$1" \
   --timeout-seconds 240 --agree-disposable-prefix --experiment-full-win32-exit build/webview2_win32_launch.exe
-python3 -m scripts.solidworks_runtime_gate --input "$1" --require-ready
+python3 -m scripts.netfx481_webview2_restart_gate --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" \
+  --probe build/webview2_controller_probe.exe --initial "$1" --output build/solidworks-webview2-restart.json

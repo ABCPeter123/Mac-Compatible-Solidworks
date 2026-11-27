@@ -1505,6 +1505,7 @@ jobs:
           if [[ "$SWCOMPAT_WEBVIEW2_FIRST" == "true" ]]; then
             # Previous report describes the archived prefix, not this one.
             mv build/solidworks-webview2-prerequisite.json build/solidworks-webview2-attempt1.json
+            mv build/solidworks-webview2-restart.json build/solidworks-webview2-restart-attempt1.json
             bash scripts/netfx481_webview2_first.sh build/solidworks-webview2-prerequisite.json
           fi
           python3 -m scripts.netfx40_msxml3_prerequisite \
@@ -2229,10 +2230,9 @@ jobs:
           set -euo pipefail
           PREFIX="$RUNNER_TEMP/netfx40-msxml3-prefix"
           test -f "$PREFIX/.swcompat-solidworks-installer-disposable"
-          python3 -m scripts.solidworks_runtime_gate --input build/solidworks-webview2-prerequisite.json --require-ready
           python3 -m scripts.netfx481_webview2_persistence --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" \
             --probe build/webview2_controller_probe.exe --initial build/solidworks-webview2-prerequisite.json \
-            --output build/solidworks-webview2-persistence.json
+            --restart build/solidworks-webview2-restart.json --output build/solidworks-webview2-persistence.json
           python3 -m scripts.netfx481_solidworks_gate --report build/netfx481-ipd-apply-candidate.json \
             --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" --managed build/netfx481_runtime_probe.exe
       - name: Measure browser DOM and composition in the verified CLR and WebView2 prefix
@@ -2242,7 +2242,8 @@ jobs:
           set -euo pipefail
           python3 -m scripts.netfx481_webview2_render --wine "$SWCOMPAT_WINE" \
             --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" --probe build/webview2_render_probe.exe \
-            --runtime build/solidworks-webview2-prerequisite.json --output build/ipd-webview2-render.json
+            --runtime build/solidworks-webview2-prerequisite.json --restart build/solidworks-webview2-restart.json \
+            --output build/ipd-webview2-render.json
       - name: Launch verified original SOLIDWORKS bootstrapper with real CLR and WebView2
         if: github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd && inputs.try_481_ipd_apply_candidate
         shell: bash
@@ -2253,6 +2254,8 @@ jobs:
         run: |
           set -euo pipefail
           PREFIX="$RUNNER_TEMP/netfx40-msxml3-prefix"
+          # Keep strict installer transaction evidence mandatory for private licensed launch.
+          python3 -m scripts.solidworks_runtime_gate --input build/solidworks-webview2-prerequisite.json --require-ready
           python3 -m scripts.solidworks_private_media_fetch --destination build/SolidworksSetup.exe --output build/solidworks-macos-fetch.json
           python3 -m scripts.solidworks_bootstrap_trial --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" \
             --agree-disposable-prefix --installer build/SolidworksSetup.exe --sha256 "$SWCOMPAT_INSTALLER_SHA256" \
@@ -2264,6 +2267,8 @@ jobs:
           path: |
             build/solidworks-webview2-prerequisite.json
             build/solidworks-webview2-attempt1.json
+            build/solidworks-webview2-restart.json
+            build/solidworks-webview2-restart-attempt1.json
             build/solidworks-webview2-persistence.json
             build/ipd-webview2-render.json
             build/netfx481-cad-prerequisites.json

@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 
 from scripts.netfx481_trial import validate_prefix
-from scripts.solidworks_runtime_gate import evaluate
+from scripts.netfx481_webview2_restart_gate import operational
 from scripts import webview2_render_report as render
 from scripts import webview2_canvas_report as canvas
 from scripts import webview2_layout_report as layout
@@ -22,12 +22,13 @@ from scripts import webview2_gdi_report as gdi
 from scripts.webview2_render_gate import classify, load_report
 
 
-def measure(log: str, exit_code: int, screenshot: bytes | None, runtime: dict) -> dict:
+def measure(log: str, exit_code: int, screenshot: bytes | None, runtime: dict, *, restart: dict | None = None) -> dict:
     return classify(runtime, render.summarize(log, exit_code, screenshot),
-                    gdi.summarize(log), canvas.summarize(log), layout.summarize(log))
+                    gdi.summarize(log), canvas.summarize(log), layout.summarize(log),
+                    operational_restart=restart)
 
 
-def run(wine: Path, prefix: Path, probe: Path, runtime: dict) -> dict:
+def run(wine: Path, prefix: Path, probe: Path, runtime: dict, restart: dict) -> dict:
     validate_prefix(prefix)
     root = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
     if (os.name == "nt" or prefix.is_symlink()
@@ -37,7 +38,7 @@ def run(wine: Path, prefix: Path, probe: Path, runtime: dict) -> dict:
             or probe.name != "webview2_render_probe.exe"
             or probe.resolve().is_relative_to(prefix.resolve())
             or not (prefix / ".swcompat-webview2-disposable").is_file()
-            or not evaluate(runtime)["ready"]):
+            or not operational(runtime, restart)):
         raise ValueError("Verified same-prefix browser control inputs required")
     loader = probe.parent / "WebView2Loader.dll"
     if loader.is_symlink() or not loader.is_file():
@@ -69,23 +70,23 @@ def run(wine: Path, prefix: Path, probe: Path, runtime: dict) -> dict:
         if not png.is_symlink() and png.is_file():
             with png.open("rb") as stream:
                 screenshot = stream.read(render.MAX_PNG_BYTES + 1)
-        result = measure(raw.decode("utf-8-sig", errors="replace"), code, screenshot, runtime)
+        result = measure(raw.decode("utf-8-sig", errors="replace"), code, screenshot, runtime, restart=restart)
         # Do not let a timed-out process accidentally meet the known capture
         # blocker exception using partial markers. No onward licensed launch.
         if code == 124:
-            result = measure("", code, None, runtime)
+            result = measure("", code, None, runtime, restart=restart)
         return result
 
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
-    for key in ("wine", "prefix", "probe", "runtime", "output"):
+    for key in ("wine", "prefix", "probe", "runtime", "restart", "output"):
         p.add_argument("--" + key, required=True, type=Path)
     a = p.parse_args()
     if (a.output.exists() or a.output.is_symlink()
             or a.output.resolve().is_relative_to(a.prefix.resolve())):
         raise ValueError("Fresh external report required")
-    result = run(a.wine, a.prefix, a.probe, load_report(a.runtime))
+    result = run(a.wine, a.prefix, a.probe, load_report(a.runtime), load_report(a.restart))
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_text(json.dumps(result, sort_keys=True) + "\n", encoding="ascii")
     print("Same-prefix WebView2 rendering " + json.dumps(result, sort_keys=True))
