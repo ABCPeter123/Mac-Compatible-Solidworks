@@ -803,7 +803,7 @@ jobs:
           if (!(Test-Path (Join-Path $refs 'PresentationCore.dll'))) {
             $refs = Join-Path ${env:ProgramFiles(x86)} 'Reference Assemblies\Microsoft\Framework\.NETFramework\v4.8'
           }
-          $assemblies = @('System.dll','System.Core.dll','System.Drawing.dll','System.Windows.Forms.dll','System.Runtime.Serialization.dll','System.ServiceModel.dll','System.Xaml.dll','WindowsBase.dll','PresentationCore.dll','PresentationFramework.dll','System.Xml.dll')
+          $assemblies = @('mscorlib.dll','System.dll','System.Core.dll','System.Drawing.dll','System.Windows.Forms.dll','System.Runtime.Serialization.dll','System.ServiceModel.dll','System.Xaml.dll','WindowsBase.dll','PresentationCore.dll','PresentationFramework.dll','System.Xml.dll')
           $references = @()
           foreach ($assembly in $assemblies) {
             $ref = Join-Path $refs $assembly
@@ -811,7 +811,7 @@ jobs:
             $references += "/reference:$ref"
           }
           foreach ($arch in @('x86','x64')) {
-            & $csc /nologo "/platform:$arch" /target:exe @references "/out:build/netfx481_cad_prerequisites_$arch.exe" probes/netfx481_cad_prerequisites.cs
+            & $csc /nologo /noconfig /nostdlib+ "/platform:$arch" /target:exe @references "/out:build/netfx481_cad_prerequisites_$arch.exe" probes/netfx481_cad_prerequisites.cs
             if ($LASTEXITCODE -ne 0) { throw "CAD prerequisite fixture compile failed" }
           }
           @'
@@ -2174,6 +2174,13 @@ jobs:
           set -euo pipefail
           python3 -m scripts.netfx481_cad_prerequisites --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
             --report build/netfx481-ipd-apply-candidate.json --fixture-dir build --output build/netfx481-cad-prerequisites.json
+      - name: Verify same-prefix native Win32 GDI baseline without private installer
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.solidworks_ui_gdi_reference --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --probe build/solidworks_installer_ui_probe.exe --output build/solidworks-macos-gdi-reference.json
       - name: Fetch independently verified WebView2 media and pinned SDK loader privately
         if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
         shell: bash
@@ -2204,13 +2211,6 @@ jobs:
           python3 -m scripts.solidworks_runtime_gate --input build/solidworks-webview2-prerequisite.json --require-ready
           python3 -m scripts.netfx481_solidworks_gate --report build/netfx481-ipd-apply-candidate.json \
             --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" --managed build/netfx481_runtime_probe.exe
-      - name: Verify same-prefix native Win32 GDI baseline without private installer
-        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 -m scripts.solidworks_ui_gdi_reference --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
-            --probe build/solidworks_installer_ui_probe.exe --output build/solidworks-macos-gdi-reference.json
       - name: Launch verified original SOLIDWORKS bootstrapper with real CLR and WebView2
         if: github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd && inputs.try_481_ipd_apply_candidate
         shell: bash
