@@ -8,7 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import re
 import subprocess
 import tempfile
@@ -54,11 +54,12 @@ def parse_apply(raw: bytes, code: int) -> dict:
     if len(raw) > 4096 or code not in (0, 1):
         raise ValueError("Invalid experimental apply result")
     match = re.match(
-        rb"SWCOMPAT_IPD_APPLY_SCHEMA=2\r?\nSWCOMPAT_IPD_APPLY_STARTED=([01])\r?\n"
+        rb"SWCOMPAT_IPD_APPLY_SCHEMA=3\r?\nSWCOMPAT_IPD_APPLY_STARTED=([01])\r?\n"
         rb"SWCOMPAT_IPD_APPLY_COMPLETED=([01])\r?\n"
         rb"SWCOMPAT_IPD_APPLY_PHASE=([0-4])\r?\n"
         rb"SWCOMPAT_IPD_APPLY_WIN32=([0-9A-F]{8})\r?\n"
         rb"SWCOMPAT_IPD_APPLY_FILES=([0-9]{1,7})\r?\n"
+        rb"SWCOMPAT_IPD_APPLY_DEFERRED=([0-9]{1,7})\r?\n"
         rb"SWCOMPAT_IPD_APPLY_KEYS=([0-9]{1,7})\r?\n"
         rb"SWCOMPAT_IPD_APPLY_VALUES=([0-9]{1,7})\r?\n"
         rb"SWCOMPAT_IPD_APPLY_ASSEMBLIES=([0-9]{1,7})\r?\n", raw)
@@ -66,9 +67,9 @@ def parse_apply(raw: bytes, code: int) -> dict:
         raise ValueError("Missing apply result")
     started, completed = (v == b"1" for v in match.groups()[:2])
     phase = ("NONE", "CREATE_PARENT", "COPY_FILE", "CREATE_REGISTRY_KEY", "SET_REGISTRY_VALUE")[int(match[3])]
-    counts = dict(zip(("files", "keys", "values", "assemblies"), map(int, match.groups()[4:])))
+    counts = dict(zip(("files", "deferred", "keys", "values", "assemblies"), map(int, match.groups()[4:])))
     error = match[4].decode("ascii")
-    if any(v > 1000000 for v in counts.values()):
+    if any(v > 1000000 for v in counts.values()) or counts["deferred"] > 1044:
         raise ValueError("Write count out of range")
     if (not started and (phase != "NONE" or error != "00000000" or any(counts.values()))
             or completed and (phase != "NONE" or error != "00000000")
@@ -111,6 +112,80 @@ def verified_runtime_payloads(members: dict[str, Path], after: dict) -> dict:
         result[key] = {"candidates": len(hashes),
                        "matches_original": state == machine and digest in hashes}
     return result
+
+
+def private_windows_path(raw: str, prefix: Path) -> Path:
+    """Resolve only canonical local C: targets with no linked components."""
+    path = PureWindowsPath(raw)
+    if path.drive.casefold() != "c:" or not path.is_absolute() or len(path.parts) < 2:
+        raise ValueError("Nonlocal deferred target")
+    parts = path.parts[1:]
+    if any(p in (".", "..") or p.endswith((".", " ")) or any(c in p for c in ':*?"<>|') for p in parts):
+        raise ValueError("Unsafe deferred target")
+    target = prefix / "drive_c"
+    for part in parts:
+        target = target / part
+        if target.is_symlink():
+            raise ValueError("Linked deferred target")
+    if not target.resolve().is_relative_to((prefix / "drive_c").resolve()):
+        raise ValueError("Deferred target escaped prefix")
+    return target
+
+
+def deferred_journal(prefix: Path, stage: Path, members: dict[str, Path], count: int) -> list:
+    """Authenticate all queued source bytes and private reboot destinations.
+
+    Read this only after a completed transaction and before reboot. Journal
+    paths and hashes never leave the runner.
+    """
+    root = prefix / "drive_c" / "swcompat-ipd-pending"
+    journal = root / "queue.bin"
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("Invalid private pending directory")
+    if not count:
+        if any(root.iterdir()):
+            raise ValueError("Unexpected pending files")
+        return []
+    if not 1 <= count <= 1044 or journal.is_symlink() or not journal.is_file():
+        raise ValueError("Missing private deferred journal")
+    if journal.stat().st_size > 4 * 1024 * 1024:
+        raise ValueError("Oversized deferred journal")
+    data = journal.read_bytes().decode("utf-16-le").split("\0")
+    if len(data) != count * 3 + 1 or data[-1]:
+        raise ValueError("Invalid deferred journal length")
+    result = []
+    used = set()
+    temps = set()
+    stage_root = windows_path(stage).rstrip("\\").casefold() + "\\"
+    for i in range(count):
+        source, dest, temporary = data[i * 3:i * 3 + 3]
+        if not source.casefold().startswith(stage_root):
+            raise ValueError("Deferred source outside authenticated stage")
+        key = source[len(stage_root):].replace("\\", "/").casefold()
+        if key not in members:
+            raise ValueError("Unknown deferred source")
+        target = private_windows_path(dest, prefix)
+        temp = private_windows_path(temporary, prefix)
+        if (target.is_relative_to(root) or target in used or temp in temps
+                or temp.parent != root or not re.fullmatch(r"ipd[0-9a-f]+\.tmp", temp.name, re.I)
+                or not temp.is_file() or temp.is_symlink()):
+            raise ValueError("Unsafe or duplicate deferred replacement")
+        expected = digest_file(members[key])
+        if digest_file(temp) != expected:
+            raise ValueError("Deferred bytes differ from original payload")
+        used.add(target)
+        temps.add(temp)
+        result.append((target, temp, expected))
+    if set(root.iterdir()) != temps | {journal}:
+        raise ValueError("Untracked private deferred files")
+    return result
+
+
+def verify_deferred(queue: list) -> bool:
+    return all(not temp.exists() and not temp.is_symlink()
+               and target.is_file() and not target.is_symlink()
+               and digest_file(target) == expected
+               for target, temp, expected in queue)
 
 
 def inspect(wine: Path, prefix: Path, fixture: Path, package: Path, digest: Path,
@@ -161,6 +236,10 @@ def inspect(wine: Path, prefix: Path, fixture: Path, package: Path, digest: Path
     if snapshot(prefix) != before:
         result["transaction"] = "BASELINE_CHANGED_DURING_CLEANUP"
         return result
+    pending = prefix / "drive_c" / "swcompat-ipd-pending"
+    if pending.exists() or pending.is_symlink():
+        raise ValueError("Pending directory must be fresh")
+    pending.mkdir(mode=0o700)
     env = os.environ.copy()
     env.update(WINEPREFIX=str(prefix), WINEARCH="win64", WINEDEBUG="-all")
     # WUSA's CLSID_DOMDocument parser passed in clean Wine. Winetricks
@@ -195,9 +274,17 @@ def inspect(wine: Path, prefix: Path, fixture: Path, package: Path, digest: Path
     if not packet["completed"]:
         result["partial_payload"] = compare(before, snapshot(prefix))
         return result
+    try:
+        queue = deferred_journal(prefix, stage, members, packet["writes"]["deferred"])
+    except (ValueError, OSError, UnicodeError):
+        result["transaction"] = "DEFERRED_JOURNAL_REJECTED"
+        return result
+    # A queued rename is not an installed file. Require reboot to apply it.
+    result["deferred_verified"] = False
     result["restart"] = wineboot_restart(wine, prefix, timeout=120)
     if result["restart"] != "COMPLETED":
         return result
+    result["deferred_verified"] = verify_deferred(queue)
     after = snapshot(prefix)
     payload = compare(before, after)
     provenance = verified_runtime_payloads(members, after)
@@ -207,7 +294,7 @@ def inspect(wine: Path, prefix: Path, fixture: Path, package: Path, digest: Path
                   loader=loaded, registry=measured["registry"],
                   runtime_family=measured["clr_family"], managed=measured["managed"])
     result["framework481_confirmed"] = (
-        payload["status"] == "MEASURED"
+        result["deferred_verified"] and payload["status"] == "MEASURED"
         and payload["changes"]["CLR64"] == "CHANGED"
         and provenance["CLR64"]["matches_original"] and provenance["MSCORLIB64"]["matches_original"]
         and payload["after"]["CLR64"] == payload["after"]["MSCORLIB64"] == "PE_AMD64"
