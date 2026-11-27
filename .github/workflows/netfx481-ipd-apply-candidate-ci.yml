@@ -28,6 +28,7 @@ jobs:
       try_48_payload_host: false
       try_481_catalog_wusa: true
       try_481_ipd_apply_candidate: true
+      try_webview2_after_ipd: true
       try_solidworks_after_ipd: ${{ github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd }}
     secrets:
       SWCOMPAT_INSTALLER_URL: ${{ secrets.SWCOMPAT_INSTALLER_URL }}
