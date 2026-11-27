@@ -331,6 +331,7 @@ jobs:
       - name: Run absolute media and fixture path regression tests
         run: |
           python -m unittest discover -s tests -p 'test_netfx481_ipd_apply_candidate.py' -v
+          python -m unittest discover -s tests -p 'test_netfx481_ipd_gac.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_legacy.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_launcher_timeout.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_original_installer_group.py' -v
@@ -390,6 +391,8 @@ jobs:
               -o "$RUNNER_TEMP/swcompat-wusa-ipd-$mode.exe" \
               -lcabinet -lshlwapi -lole32 -loleaut32 -ladvapi32 -lshell32 -luuid
           done
+          x86_64-w64-mingw32-gcc-posix -std=gnu11 -O2 -municode -mconsole -static \
+            probes/netfx481_ipd_gac.c -o "$RUNNER_TEMP/swcompat-netfx481-ipd-gac.exe"
           echo "Pinned Wine dry-run and experimental apply candidates compiled"
   
   authentic-netfx40-windows:
@@ -1965,6 +1968,8 @@ jobs:
               -o "$RUNNER_TEMP/swcompat-wusa-ipd-$mode.exe" \
               -lcabinet -lshlwapi -lole32 -loleaut32 -ladvapi32 -lshell32 -luuid
           done
+          x86_64-w64-mingw32-gcc -std=gnu11 -O2 -municode -mconsole -static \
+            probes/netfx481_ipd_gac.c -o "$RUNNER_TEMP/swcompat-netfx481-ipd-gac.exe"
       - name: Run independent read-only preflight on actual persistent native CLR4
         if: inputs.try_481_ipd_apply_candidate && env.SWCOMPAT_NATIVE40_READY == 'yes'
         shell: bash
