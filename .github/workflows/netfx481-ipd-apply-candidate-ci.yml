@@ -15,6 +15,8 @@ concurrency:
   group: ipd-apply-candidate-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  # Exercise the exact-clean-1603 fresh-prefix synchronization differential
+  # from the reusable workflow; the first attempt retains the proven profile.
   original-native-clr4-ipd:
     uses: ./.github/workflows/netfx40-legacy-ci.yml
     with:
