@@ -43,8 +43,8 @@ class CadPrerequisites
         var visual = new DrawingVisual();
         using (DrawingContext dc = visual.RenderOpen())
         {
-            dc.DrawRectangle(Brushes.Red, null, new System.Windows.Rect(0, 0, 32, 32));
-            dc.DrawRectangle(Brushes.Blue, null, new System.Windows.Rect(32, 0, 32, 32));
+            dc.DrawRectangle(System.Windows.Media.Brushes.Red, null, new System.Windows.Rect(0, 0, 32, 32));
+            dc.DrawRectangle(System.Windows.Media.Brushes.Blue, null, new System.Windows.Rect(32, 0, 32, 32));
         }
         var bitmap = new RenderTargetBitmap(64, 32, 96, 96, PixelFormats.Pbgra32);
         bitmap.Render(visual);
