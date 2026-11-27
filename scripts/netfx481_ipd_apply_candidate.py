@@ -381,6 +381,30 @@ def inspect(wine: Path, prefix: Path, fixture: Path, package: Path, digest: Path
     result.update(payload=payload, original_runtime_payloads=provenance,
                   loader=loaded, registry=measured["registry"],
                   runtime_family=measured["clr_family"], managed=measured["managed"])
+    if measured["managed"] != "PASS" and result["deferred_verified"]:
+        from scripts.netfx481_ipd_gac import register
+        gac_fixture = runner / "swcompat-netfx481-ipd-gac.exe"
+        if gac_fixture.is_file() and not gac_fixture.is_symlink():
+            try:
+                result["gac_registration"] = register(wine, prefix, gac_fixture, members)
+            except (ValueError, OSError, UnicodeError):
+                result["gac_registration"] = {"transport": "REJECTED"}
+            if result["gac_registration"].get("attempted", 0):
+                result["pre_gac_managed"] = measured["managed"]
+                result["gac_restart"] = (
+                    wineboot_restart(wine, prefix, timeout=120)
+                    if _terminate_private_setup_wineserver(wine, prefix)
+                    else "BLOCKED_SESSION_CLEANUP")
+                if result["gac_restart"] == "COMPLETED":
+                    after = snapshot(prefix)
+                    payload = compare(before, after)
+                    provenance = verified_runtime_payloads(members, after)
+                    measured = probe(wine, prefix, managed, override="native_only")
+                    loaded = load_clr(wine, prefix, loader)
+                    result["deferred_verified"] = verify_deferred(queue)
+                    result.update(payload=payload, original_runtime_payloads=provenance,
+                                  loader=loaded, registry=measured["registry"],
+                                  runtime_family=measured["clr_family"], managed=measured["managed"])
     if measured["managed"] != "PASS":
         result["managed_failure_controls"] = managed_failure_controls(wine, prefix, managed)
     result["framework481_confirmed"] = (
