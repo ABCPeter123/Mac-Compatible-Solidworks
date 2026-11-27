@@ -1361,6 +1361,33 @@ jobs:
             --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
             --output build/netfx40-prefix-readiness.json \
             --agree-disposable-prefix
+      - uses: actions/download-artifact@v4
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
+        with:
+          name: ipd-solidworks-self-authored-probes-and-webview-digest
+          path: build
+      - name: Fetch independently verified WebView2 media and pinned SDK loader privately
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --max-time 360 --output build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe 'https://go.microsoft.com/fwlink/?linkid=2124701'
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          p = Path("build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe")
+          assert hashlib.file_digest(p.open("rb"), "sha256").hexdigest() == Path("build/evergreen-installer.sha256").read_text().strip()
+          PY
+          curl --fail --location --retry 3 --max-time 120 --output build/ipd-webview-sdk.zip 'https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.4314.35/microsoft.web.webview2.1.0.4314.35.nupkg'
+          printf '%s  %s\n' 90778deb1b77e36292828b4b5833c9255c27533f40e0ddd55891ae718944edc4 build/ipd-webview-sdk.zip | shasum -a 256 -c -
+          unzip -p build/ipd-webview-sdk.zip runtimes/win-x64/native/WebView2Loader.dll > build/WebView2Loader.dll
+          printf '%s  %s\n' d3fce90bdeecb08596e377dea6a316354dd8949e32ff09b89d51be00c14e21b6 build/WebView2Loader.dll | shasum -a 256 -c -
+      - name: Install official WebView2 in fresh prefix before native CLR servicing
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/netfx481_webview2_first.sh build/solidworks-webview2-prerequisite.json
       - name: Install native msxml3 through original Winetricks verb
         shell: bash
         run: |
@@ -1432,6 +1459,7 @@ jobs:
           SWCOMPAT_WIN7_SETUP: ${{ inputs.win7_setup }}
           SWCOMPAT_IPD_SYNC_RETRY: ${{ inputs.try_481_ipd_apply_candidate }}
           SWCOMPAT_RETRY_WINE_BASELINE: ${{ inputs.wine_baseline }}
+          SWCOMPAT_WEBVIEW2_FIRST: ${{ inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd)) }}
         run: |
           set -euo pipefail
           outcome=$(python3 -m scripts.netfx40_fresh_prefix_retry \
@@ -1474,6 +1502,11 @@ jobs:
             --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
             --output build/netfx40-prefix-readiness-retry.json \
             --agree-disposable-prefix
+          if [[ "$SWCOMPAT_WEBVIEW2_FIRST" == "true" ]]; then
+            # Previous report describes the archived prefix, not this one.
+            mv build/solidworks-webview2-prerequisite.json build/solidworks-webview2-attempt1.json
+            bash scripts/netfx481_webview2_first.sh build/solidworks-webview2-prerequisite.json
+          fi
           python3 -m scripts.netfx40_msxml3_prerequisite \
             --wine "$SWCOMPAT_WINE" \
             --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
@@ -2169,11 +2202,6 @@ jobs:
             --logs-dir "$RUNNER_TEMP/netfx40-msxml3-logs" set-winver win11
           python3 -m scripts.netfx481_solidworks_gate --report build/netfx481-ipd-apply-candidate.json \
             --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" --managed build/netfx481_runtime_probe.exe
-      - uses: actions/download-artifact@v4
-        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
-        with:
-          name: ipd-solidworks-self-authored-probes-and-webview-digest
-          path: build
       - name: Measure dual architecture CAD runtime subsystems before WebView2
         if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
         shell: bash
@@ -2194,36 +2222,17 @@ jobs:
           touch "$PREFIX/.swcompat-solidworks-installer-disposable"
           python3 -m scripts.solidworks_ui_gdi_reference --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" \
             --probe build/solidworks_installer_ui_probe.exe --output build/solidworks-macos-gdi-reference.json
-      - name: Fetch independently verified WebView2 media and pinned SDK loader privately
-        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl --fail --location --retry 3 --max-time 360 --output build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe 'https://go.microsoft.com/fwlink/?linkid=2124701'
-          python3 - <<'PY'
-          from pathlib import Path
-          import hashlib
-          p = Path("build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe")
-          assert hashlib.file_digest(p.open("rb"), "sha256").hexdigest() == Path("build/evergreen-installer.sha256").read_text().strip()
-          PY
-          curl --fail --location --retry 3 --max-time 120 --output build/ipd-webview-sdk.zip 'https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.4314.35/microsoft.web.webview2.1.0.4314.35.nupkg'
-          printf '%s  %s\n' 90778deb1b77e36292828b4b5833c9255c27533f40e0ddd55891ae718944edc4 build/ipd-webview-sdk.zip | shasum -a 256 -c -
-          unzip -p build/ipd-webview-sdk.zip runtimes/win-x64/native/WebView2Loader.dll > build/WebView2Loader.dll
-          printf '%s  %s\n' d3fce90bdeecb08596e377dea6a316354dd8949e32ff09b89d51be00c14e21b6 build/WebView2Loader.dll | shasum -a 256 -c -
-      - name: Install verified WebView2 and recheck native managed execution in same prefix
+      - name: Recheck installed WebView2 and native managed execution in same prefix
         if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
         shell: bash
         run: |
           set -euo pipefail
           PREFIX="$RUNNER_TEMP/netfx40-msxml3-prefix"
           test -f "$PREFIX/.swcompat-solidworks-installer-disposable"
-          test ! -L "$PREFIX/.swcompat-webview2-disposable"
-          touch "$PREFIX/.swcompat-webview2-disposable"
-          python3 -m scripts.webview2_runtime_trial --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" \
-            --installer build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe --sha256-file build/evergreen-installer.sha256 \
-            --probe build/webview2_controller_probe.exe --output build/solidworks-webview2-prerequisite.json \
-            --timeout-seconds 240 --agree-disposable-prefix --experiment-full-win32-exit build/webview2_win32_launch.exe
           python3 -m scripts.solidworks_runtime_gate --input build/solidworks-webview2-prerequisite.json --require-ready
+          python3 -m scripts.netfx481_webview2_persistence --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" \
+            --probe build/webview2_controller_probe.exe --initial build/solidworks-webview2-prerequisite.json \
+            --output build/solidworks-webview2-persistence.json
           python3 -m scripts.netfx481_solidworks_gate --report build/netfx481-ipd-apply-candidate.json \
             --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" --managed build/netfx481_runtime_probe.exe
       - name: Measure browser DOM and composition in the verified CLR and WebView2 prefix
@@ -2254,6 +2263,8 @@ jobs:
           name: ipd-solidworks-bootstrap-sanitized
           path: |
             build/solidworks-webview2-prerequisite.json
+            build/solidworks-webview2-attempt1.json
+            build/solidworks-webview2-persistence.json
             build/ipd-webview2-render.json
             build/netfx481-cad-prerequisites.json
             build/netfx481-cad-windows-reference.json

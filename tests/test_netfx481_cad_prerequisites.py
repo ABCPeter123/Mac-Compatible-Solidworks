@@ -32,7 +32,7 @@ class CadPrerequisiteTests(unittest.TestCase):
     def test_workflow_runs_before_webview_and_restricts_private_launch(self):
         body = (Path(__file__).resolve().parents[1] / ".github/workflows/netfx40-legacy-ci.yml").read_text()
         matrix = body.index("      - name: Measure dual architecture CAD runtime subsystems before WebView2")
-        webview = body.index("      - name: Fetch independently verified WebView2 media and pinned SDK loader privately")
+        webview = body.index("      - name: Recheck installed WebView2 and native managed execution in same prefix")
         launch = body.index("      - name: Launch verified original SOLIDWORKS bootstrapper with real CLR and WebView2")
         self.assertLess(matrix, webview)
         self.assertLess(webview, launch)
@@ -57,7 +57,7 @@ class CadPrerequisiteTests(unittest.TestCase):
         body = (Path(__file__).resolve().parents[1] / ".github/workflows/netfx40-legacy-ci.yml").read_text()
         gate = body.index("      - name: Require verified native framework and complete original GAC")
         gdi = body.index("      - name: Verify same-prefix native Win32 GDI baseline", gate)
-        web = body.index("      - name: Install verified WebView2", gdi)
+        web = body.index("      - name: Recheck installed WebView2", gdi)
         block = body[gdi:web]
         self.assertLess(block.index('touch "$PREFIX/.swcompat-solidworks-installer-disposable"'),
                         block.index("python3 -m scripts.solidworks_ui_gdi_reference"))

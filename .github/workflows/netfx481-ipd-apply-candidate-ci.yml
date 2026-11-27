@@ -40,3 +40,5 @@ jobs:
       SWCOMPAT_INSTALLER_SHA256: ${{ secrets.SWCOMPAT_INSTALLER_SHA256 }}
 
 # Preserve full Windows installer exit and use separate native CAD result packets.
+
+# Experimental prerequisite order: verified WebView2 first, then native CLR; re-probe both after servicing.
