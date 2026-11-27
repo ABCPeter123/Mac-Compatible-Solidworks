@@ -16,7 +16,7 @@ import tempfile
 from scripts.netfx481_catalog_wusa import verify_package
 from scripts.netfx481_ipd_stage import inventory, digest_tree, digest_file
 from scripts.netfx481_native_delta_gate import EXPECTED_COUNT, EXPECTED_TREE_SHA256
-from scripts.netfx481_trial import validate_prefix, probe, wineboot_restart
+from scripts.netfx481_trial import validate_prefix, probe, wineboot_restart, parse_probe, MAX_PROBE_OUTPUT, NETFX_FULL_KEY
 from scripts.netfx40_msxml3_restart import validate as valid_native40
 from scripts.netfx481_payload_audit import snapshot, compare, pe_type, ITEMS, MIN_BYTES, MAX_BYTES
 from scripts.netfx481_clr_load import run as load_clr
@@ -214,6 +214,58 @@ def verify_deferred(queue: list) -> bool:
     return deferred_status(queue)["counts"]["verified"] == len(queue)
 
 
+def managed_failure_controls(wine: Path, prefix: Path, managed: Path) -> dict:
+    """Measure independent release registration and native host activation.
+
+    Native-image suppression is a process-only diagnostic; never use the
+    differential to promote framework481_confirmed.
+    """
+    env = os.environ.copy()
+    env.update(WINEPREFIX=str(prefix), WINEARCH="win64", WINEDEBUG="-all")
+    env.pop("WINEDLLOVERRIDES", None)
+    env.pop("COMPlus_ZapDisable", None)
+    result = {}
+    for view in ("64", "32"):
+        try:
+            with tempfile.TemporaryFile() as out:
+                proc = subprocess.run([str(wine), "reg.exe", "query", NETFX_FULL_KEY,
+                                       "/v", "Release", "/reg:" + view],
+                                      env=env, cwd=prefix, stdin=subprocess.DEVNULL,
+                                      stdout=out, stderr=subprocess.DEVNULL,
+                                      timeout=30, check=False)
+                out.seek(0)
+                raw = out.read(4097)
+            matches = re.findall(rb"(?im)^\s*Release\s+REG_DWORD\s+0x([0-9a-f]{1,8})\s*$", raw)
+            result["registry" + view] = (
+                "AT_LEAST_481" if int(matches[0], 16) >= 533320 else "BELOW_481"
+            ) if proc.returncode == 0 and len(raw) <= 4096 and len(matches) == 1 else "NOT_VERIFIED"
+        except (OSError, subprocess.TimeoutExpired):
+            result["registry" + view] = "NOT_VERIFIED"
+    fixture = managed.with_name("netfx48_host_activation.exe")
+    dll = managed.with_name("netfx48_managed_host_check.dll")
+    if (fixture.is_file() and dll.is_file() and not fixture.is_symlink()
+            and not dll.is_symlink() and not fixture.resolve().is_relative_to(prefix)
+            and not dll.resolve().is_relative_to(prefix)):
+        from scripts.netfx40_host_api_diagnostic import execute
+        result["native_host"] = execute(wine, prefix, fixture, dll, "n")
+        result["native_host_il_only"] = execute(wine, prefix, fixture, dll, "n", disable_native_images=True)
+    else:
+        result["native_host"] = result["native_host_il_only"] = "NOT_RUN"
+    # Check actual CLR4 managed executable entry as well as native hosting.
+    env.update(WINEDLLOVERRIDES="mscoree=n;clr=n", COMPlus_ZapDisable="1")
+    try:
+        with tempfile.TemporaryFile() as out:
+            proc = subprocess.run([str(wine), str(managed)], env=env, cwd=managed.parent,
+                                  stdin=subprocess.DEVNULL, stdout=out,
+                                  stderr=subprocess.STDOUT, timeout=75, check=False)
+            out.seek(0)
+            raw = out.read(MAX_PROBE_OUTPUT + 1)
+        result["managed_il_only"] = parse_probe(raw, proc.returncode)
+    except (OSError, subprocess.TimeoutExpired):
+        result["managed_il_only"] = parse_probe(b"", 124)
+    return result
+
+
 def inspect(wine: Path, prefix: Path, fixture: Path, package: Path, digest: Path,
             stage: Path, loader: Path, managed: Path, baseline: dict, preflight: dict) -> dict:
     runner = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
@@ -329,6 +381,8 @@ def inspect(wine: Path, prefix: Path, fixture: Path, package: Path, digest: Path
     result.update(payload=payload, original_runtime_payloads=provenance,
                   loader=loaded, registry=measured["registry"],
                   runtime_family=measured["clr_family"], managed=measured["managed"])
+    if measured["managed"] != "PASS":
+        result["managed_failure_controls"] = managed_failure_controls(wine, prefix, managed)
     result["framework481_confirmed"] = (
         result["deferred_verified"] and payload["status"] == "MEASURED"
         and payload["changes"]["CLR64"] == "CHANGED"
