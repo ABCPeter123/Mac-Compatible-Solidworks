@@ -19,7 +19,7 @@ foreach ($arch in @('x86','x64')) {
   if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $destination -PathType Leaf)) { throw "CAD prerequisite fixture compile failed" }
 }
 @'
-import json, subprocess
+import json, subprocess, tempfile
 from pathlib import Path
 from scripts.netfx481_cad_prerequisites import parse, MODES
 result = {}
@@ -28,8 +28,15 @@ for bits, arch in ((32, "x86"), (64, "x64")):
     result[str(bits)] = {}
     for mode in MODES:
         try:
-            p = subprocess.run([str(fixture), mode], capture_output=True, timeout=30, check=False)
-            result[str(bits)][mode] = parse(p.stdout, p.returncode, mode, bits)
+            # Exercise the exact fresh packet transport used by Apple Silicon.
+            with tempfile.TemporaryDirectory(prefix="swcompat-cad-reference-") as directory:
+                packet = Path(directory) / "result.txt"
+                p = subprocess.run([str(fixture), mode, str(packet)], capture_output=True, timeout=30, check=False)
+                raw = b""
+                if packet.is_file() and not packet.is_symlink():
+                    with packet.open("rb") as stream:
+                        raw = stream.read(4097)
+                result[str(bits)][mode] = parse(raw, p.returncode, mode, bits)
         except subprocess.TimeoutExpired:
             result[str(bits)][mode] = {"result":"TIMEOUT", "native":False, "hresult":"NOT_VERIFIED"}
     assert result[str(bits)]["core"]["result"] == "PASS", "Native Windows CLR control failed"
