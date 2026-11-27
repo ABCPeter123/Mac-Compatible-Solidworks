@@ -810,9 +810,12 @@ jobs:
             if (!(Test-Path $ref)) { throw "Required .NET reference assembly unavailable" }
             $references += "/reference:$ref"
           }
+          $source = (Resolve-Path 'probes\netfx481_cad_prerequisites.cs').Path
+          $buildDir = (Resolve-Path 'build').Path
           foreach ($arch in @('x86','x64')) {
-            & $csc /nologo /noconfig /nostdlib+ "/platform:$arch" /target:exe @references "/out:build/netfx481_cad_prerequisites_$arch.exe" probes/netfx481_cad_prerequisites.cs
-            if ($LASTEXITCODE -ne 0) { throw "CAD prerequisite fixture compile failed" }
+            $destination = Join-Path $buildDir "netfx481_cad_prerequisites_$arch.exe"
+            & $csc /nologo /noconfig /nostdlib+ "/platform:$arch" /target:exe @references "/out:$destination" $source
+            if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $destination -PathType Leaf)) { throw "CAD prerequisite fixture compile failed" }
           }
           @'
           import json, subprocess
