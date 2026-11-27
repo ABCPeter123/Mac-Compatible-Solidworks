@@ -101,6 +101,7 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
     managed_framework_names = Counter()
     gac_registration_features = Counter()
     gac_attributes = Counter()
+    gac_directive_values = Counter()
     gac_child_tags = Counter()
     gac_architectures = Counter()
     gac_destinations = Counter()
@@ -282,6 +283,16 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
                             gac_registration_features[tagname] += 1
                         if tagname == "gac":
                             gac_architectures[ident[1]] += 1
+                            arch = node.get("clrarch", "").casefold()
+                            arch = arch if arch in {"x86", "amd64", "msil", "wow64", "neutral", "x64", "ia64", "arm", "arm64"} else "other"
+                            copy = node.get("fileCopy", "absent").casefold()
+                            copy = copy if copy in {"true", "false", "yes", "no", "0", "1", "absent"} else "other"
+                            version = node.get("managedversion", "")
+                            version = version if re.fullmatch(r"v?[0-9]{1,5}(?:\.[0-9]{1,5}){1,3}", version) else "other"
+                            gac_directive_values["clrarch/" + arch] += 1
+                            gac_directive_values["managedversion/" + version] += 1
+                            gac_directive_values["fileCopy/" + copy] += 1
+                            gac_directive_values["route/" + arch + "/" + dest_class + "/" + copy] += 1
                             gac_destinations[dest_class] += 1
                             for attr in node.attrib:
                                 attr = local(attr)
@@ -464,6 +475,7 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
             "managed_framework_placement": dict(sorted(managed_framework_names.items())),
             "file_child_registration_features": dict(sorted(gac_registration_features.items())),
             "gac_attributes": dict(sorted(gac_attributes.items())),
+            "gac_directive_values": dict(sorted(gac_directive_values.items())),
             "gac_child_tags": dict(sorted(gac_child_tags.items())),
             "gac_architectures": dict(sorted(gac_architectures.items())),
             "gac_destinations": dict(sorted(gac_destinations.items())),
