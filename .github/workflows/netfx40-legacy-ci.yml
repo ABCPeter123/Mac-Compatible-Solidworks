@@ -1499,6 +1499,9 @@ jobs:
           if [[ "${SWCOMPAT_WIN7_SETUP:-false}" == "true" ]]; then
             set -- "$@" --experiment-win7-setup
           fi
+          if [[ "$SWCOMPAT_IPD_SYNC_RETRY" == "true" && "$SWCOMPAT_RETRY_WINE_BASELINE" == "wiage-11.13" ]]; then
+            set -- "$@" --experiment-dll-relay-output build/netfx40-msxml3-dll-relay.json
+          fi
           "$@"
           python3 -m scripts.netfx40_msxml3_restart \
             --wine "$SWCOMPAT_WINE" \
@@ -2635,6 +2638,7 @@ jobs:
             build/netfx40-msxml3-prerequisite-retry.json
             build/netfx40-msxml3-original-extract.json
             build/netfx40-msxml3-original-table.json
+            build/netfx40-msxml3-dll-relay.json
             build/netfx40-original-core-msi-recovery.json
             build/netfx40-core-path-ngen-drain.json
             build/netfx40-mscoree-provenance.json

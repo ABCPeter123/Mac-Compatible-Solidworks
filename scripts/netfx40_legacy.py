@@ -38,6 +38,7 @@ from scripts.netfx40_wine_msi_errors import parse as parse_wine_msi, empty as em
 from scripts.netfx40_msi_logging_policy import apply as enable_msi_logging, restore as restore_msi_logging, blank as blank_logging, validate as validate_logging
 from scripts.wine_mono_removal import inventory, remove_mono
 from scripts.netfx40_private_action import store as store_private_action
+from scripts import netfx40_dll_relay as dll_relay
 from swcompat.wine_paths import windows_media_path
 
 INSTALLER_NAME = "dotnetfx40_full_x86_x64.exe"
@@ -219,9 +220,9 @@ def _terminate_private_setup_wineserver(wine: Path, prefix: Path) -> bool:
         return False
 
 
-def _run_traced(wine: Path, prefix: Path, fixture: Path,
+def _run_traced_impl(wine: Path, prefix: Path, fixture: Path,
                 arguments: list[str], *, setup: bool = True, timeout: int = 75,
-                store_private: bool = False) -> dict:
+                store_private: bool = False, relay=None) -> dict:
     """Stream private Wine MSI debug output; never spool raw trace to disk.
 
     Only selected MSI err/fixme and exact custom-action type lines enter a
@@ -234,7 +235,7 @@ def _run_traced(wine: Path, prefix: Path, fixture: Path,
     if fixture.is_symlink() or not fixture.is_file() or fixture.name.casefold() != LAUNCHER_NAME:
         raise ValueError("Expected original self-authored Win32 process monitor")
     env = _env(prefix, installation=True)
-    env["WINEDEBUG"] = "-all,err+msi,fixme+msi,trace+msi"
+    env["WINEDEBUG"] = "-all,err+msi,fixme+msi,trace+msi" + (",trace+relay" if relay is not None else "")
     retained = bytearray()
     state = {"overflow": False, "lines": 0, "reason": "NONE"}
     code, failed = 124, "PROCESS_FAILED"
@@ -266,6 +267,8 @@ def _run_traced(wine: Path, prefix: Path, fixture: Path,
                                 while line and not line.endswith(b"\n"):
                                     line = pipe.readline(MAX_LINE_BYTES + 1)
                                 continue
+                            if relay is not None:
+                                relay.feed(line)
                             if not relevant_custom_trace(line):
                                 continue
                             compact = compact_trace(line)
@@ -358,6 +361,26 @@ def _run_traced(wine: Path, prefix: Path, fixture: Path,
     return result
 
 
+def _run_traced(wine, prefix, fixture, arguments, *, setup=False, timeout=75,
+                store_private=False, relay_output=None):
+    if relay_output is None:
+        return _run_traced_impl(wine, prefix, fixture, arguments, setup=setup,
+                                timeout=timeout, store_private=store_private)
+    if relay_output.resolve().is_relative_to(prefix.resolve()) or relay_output.exists() or relay_output.is_symlink():
+        raise ValueError("Relay output must be a fresh external report")
+    capture = dll_relay.Capture()
+    dll_relay.apply(wine, prefix)
+    result = _run_traced_impl(wine, prefix, fixture, arguments, setup=setup,
+                              timeout=timeout, store_private=store_private, relay=capture)
+    safe = result.get("setup_cleanup") in {"PIPE_CLOSED", "GROUP_REAPED", "PREFIX_REAPED"}
+    dll_relay.write_report(relay_output, capture,
+                           safe and result.get("status") == "EXIT_CAPTURED"
+                           and result.get("setup_cleanup") == "PIPE_CLOSED")
+    if safe:
+        dll_relay.restore(wine, prefix)
+    return result
+
+
 def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
             loader: Path, managed: Path, timeout: int = 210, *,
             enable_verbose_msi: bool = False, refresh_scm_after_mono: bool = False,
@@ -365,7 +388,7 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
             enable_msi_inventory: bool = False,
             enable_private_action: bool = False,
             enable_extended_setup_wait: bool = False,
-            enable_win7_setup: bool = False) -> dict:
+            enable_win7_setup: bool = False, relay_output: Path | None = None) -> dict:
     if os.name == "nt":
         raise ValueError("Wine experiment cannot modify native Windows")
     if enable_extended_setup_wait and timeout < 330:
@@ -461,7 +484,9 @@ def inspect(wine: Path, prefix: Path, installer: Path, launcher: Path,
     windows_path = windows_media_path(wine, prefix, installer)
     setup_args = [windows_path] + (["--extended-wait-330"]
                                    if enable_extended_setup_wait else [])
-    setup_runner = (partial(_run_traced, store_private=enable_private_action)
+    if relay_output is not None and not enable_custom_action_type:
+        raise ValueError("Relay census requires private MSI trace mode")
+    setup_runner = (partial(_run_traced, store_private=enable_private_action, relay_output=relay_output)
                     if enable_custom_action_type else _run)
     if enable_verbose_msi:
         action = enable_msi_logging(wine, prefix)
@@ -606,6 +631,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--experiment-private-original-action", action="store_true")
     p.add_argument("--experiment-extended-setup-wait", action="store_true")
     p.add_argument("--experiment-win7-setup", action="store_true")
+    p.add_argument("--experiment-dll-relay-output", type=Path)
     args = p.parse_args(argv)
     if not 60 <= args.timeout <= 360:
         p.error("Invalid bounded runtime")
@@ -623,7 +649,8 @@ def main(argv: list[str] | None = None) -> int:
                          enable_msi_inventory=args.experiment_inventory_retained_msi,
                          enable_private_action=args.experiment_private_original_action,
                          enable_extended_setup_wait=args.experiment_extended_setup_wait,
-                         enable_win7_setup=args.experiment_win7_setup)
+                         enable_win7_setup=args.experiment_win7_setup,
+                         relay_output=args.experiment_dll_relay_output)
         if not validate(report):
             raise ValueError("Privacy-safe report invalid")
         args.output.parent.mkdir(parents=True, exist_ok=True)
