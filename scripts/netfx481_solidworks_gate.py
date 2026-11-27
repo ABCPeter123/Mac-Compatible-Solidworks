@@ -78,7 +78,8 @@ def main() -> int:
             raise ValueError("Unauthenticated stage")
         provenance = verified_runtime_payloads(members, snapshot(a.prefix))
         if not all(item["matches_original"] for item in provenance.values()) or not runtime_ready(
-                probe(a.wine, a.prefix, a.managed, override="native_only")):
+                probe(a.wine.resolve(strict=True), a.prefix.resolve(strict=True),
+                      a.managed.resolve(strict=True), override="native_only")):
             print("SOLIDWORKS live native framework prerequisite: NOT_READY")
             return 1
     print("SOLIDWORKS native framework prerequisite: READY")
