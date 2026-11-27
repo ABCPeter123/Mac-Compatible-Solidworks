@@ -16,7 +16,10 @@ int wmain(int argc, WCHAR **argv)
     IAssemblyCache *cache = NULL;
     HRESULT hr = E_FAIL;
     unsigned phase = 0;
-    if (argc != 2 || _wcsnicmp(argv[1], L"Z:\\", 3)) return 2;
+    int i;
+    if (argc < 2 || argc > 33) return 2;
+    for (i = 1; i < argc; i++)
+        if (_wcsnicmp(argv[i], L"Z:\\", 3)) return 2;
     if (!(fusion = LoadLibraryExW(L"C:\\windows\\Microsoft.NET\\Framework64\\v4.0.30319\\fusion.dll",
                                  NULL, LOAD_WITH_ALTERED_SEARCH_PATH)))
     {
@@ -34,12 +37,18 @@ int wmain(int argc, WCHAR **argv)
     hr = create_cache(&cache, 0);
     if (FAILED(hr) || !cache) goto done;
     phase = 4;
-    hr = cache->lpVtbl->InstallAssembly(cache, IASSEMBLYCACHE_INSTALL_FLAG_FORCE_REFRESH,
-                                       argv[1], NULL);
+    printf("SWCOMPAT_IPD_GAC_SCHEMA=1\n");
+    for (i = 1; i < argc; i++)
+    {
+        hr = cache->lpVtbl->InstallAssembly(cache, IASSEMBLYCACHE_INSTALL_FLAG_FORCE_REFRESH,
+                                           argv[i], NULL);
+        printf("SWCOMPAT_IPD_GAC_ITEM=%08lX\n", (unsigned long)(DWORD)hr);
+    }
 done:
     if (cache) cache->lpVtbl->Release(cache);
     if (fusion) FreeLibrary(fusion);
-    printf("SWCOMPAT_IPD_GAC_SCHEMA=1\nSWCOMPAT_IPD_GAC_PHASE=%u\nSWCOMPAT_IPD_GAC_HRESULT=%08lX\n",
-           phase, (unsigned long)(DWORD)hr);
+    if (phase != 4)
+        printf("SWCOMPAT_IPD_GAC_SCHEMA=1\nSWCOMPAT_IPD_GAC_FAILURE=%u:%08lX\n",
+               phase, (unsigned long)(DWORD)hr);
     return 0;
 }
