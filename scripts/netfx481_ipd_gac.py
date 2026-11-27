@@ -24,40 +24,59 @@ def local(tag: str) -> str:
     return tag.rsplit("}", 1)[-1].split(":")[-1]
 
 
+class GacRejected(ValueError):
+    """Finite reason code only; no original manifest values or private paths."""
+
+
 def registration_sources(members: dict[str, Path], *, expected_count: int = 274) -> list:
     entries = []
     for name, manifest in sorted(members.items()):
         if "/" in name or not name.endswith((".manifest", ".mum")):
             continue
         if manifest.stat().st_size > 16 * 1024 * 1024:
-            raise ValueError("Oversized assembly manifest")
+            raise GacRejected("MANIFEST_OVERSIZE")
         raw = manifest.read_bytes()
         if any(marker in raw.replace(b"\0", b"").upper() for marker in (b"<!DOCTYPE", b"<!ENTITY")):
-            raise ValueError("Unsafe XML declaration")
-        root = ET.fromstring(raw)
+            raise GacRejected("MANIFEST_UNSAFE")
+        try:
+            root = ET.fromstring(raw)
+        except ET.ParseError:
+            raise GacRejected("MANIFEST_XML") from None
         for file in root:
             if local(file.tag) != "file":
                 continue
             for directive in file.iter():
                 if local(directive.tag).casefold() != "gac":
                     continue
-                if (len(directive) or set(directive.attrib) not in (
+                if len(directive):
+                    raise GacRejected("GAC_CHILDREN")
+                attrs = {local(k): v for k, v in directive.attrib.items()}
+                if len(attrs) != len(directive.attrib) or set(attrs) not in (
                         {"clrarch", "clrversion", "managedversion"},
-                        {"clrarch", "clrversion", "managedversion", "fileCopy"})
-                        or directive.get("clrversion") != "v4.0.30319"):
-                    raise ValueError("Unexpected original GAC metadata")
+                        {"clrarch", "clrversion", "managedversion", "fileCopy"}):
+                    raise GacRejected("GAC_ATTRIBUTES")
+                # CLR 4 version labels may have the conventional v prefix.
+                # Only the authenticated CLR4 package and known routes qualify.
+                if attrs["clrversion"].casefold() not in {"v4.0.30319", "4.0.30319", "v4.0", "4.0", "4.0.0.0", "v4.0.0.0"}:
+                    raise GacRejected("GAC_CLR_VERSION")
+                if attrs["clrarch"].casefold() not in {"amd64", "msil", "x86"}:
+                    raise GacRejected("GAC_ARCHITECTURE")
+                if attrs["managedversion"] not in {"2.0.0.0", "4.0.0.0", "10.0.0.0"}:
+                    raise GacRejected("GAC_MANAGED_VERSION")
+                if attrs.get("fileCopy", "false").casefold() != "false":
+                    raise GacRejected("GAC_COPY_FLAG")
                 name_source = file.get("sourceName", "")
                 key = name.rsplit(".", 1)[0] + "/" + name_source.replace("\\", "/").casefold()
                 if key not in members:
-                    raise ValueError("GAC source is not original staged member")
+                    raise GacRejected("SOURCE_NOT_PACKAGED")
                 src = members[key]
                 if (src.is_symlink() or not src.is_file()
                         or src.suffix.casefold() not in {".dll", ".exe"}
                         or src.stat().st_size > 64 * 1024 * 1024):
-                    raise ValueError("Invalid GAC source")
+                    raise GacRejected("SOURCE_TYPE_OR_SIZE")
                 entries.append(src)
     if len(entries) != expected_count:
-        raise ValueError("Unexpected original GAC directive count")
+        raise GacRejected("DIRECTIVE_COUNT")
     return entries
 
 
@@ -92,8 +111,11 @@ def register(wine: Path, prefix: Path, fixture: Path, members: dict[str, Path]) 
     runner = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
     if (prefix.resolve() != runner / "netfx40-msxml3-prefix"
             or fixture.is_symlink() or fixture.resolve() != runner / "swcompat-netfx481-ipd-gac.exe"):
-        raise ValueError("Unexpected private GAC experiment paths")
-    entries = registration_sources(members)
+        raise GacRejected("PRIVATE_PATHS")
+    try:
+        entries = registration_sources(members)
+    except GacRejected as exc:
+        return {"transport": "REJECTED", "reason": str(exc)}
     unique = {}
     for src in entries:
         unique.setdefault((src.name.casefold(), digest_file(src)), src)
