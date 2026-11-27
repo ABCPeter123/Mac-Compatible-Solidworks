@@ -63,3 +63,10 @@ class CadPrerequisiteTests(unittest.TestCase):
                         block.index("python3 -m scripts.solidworks_ui_gdi_reference"))
         self.assertIn('test -f "$PREFIX/.swcompat-netfx481-disposable"', block)
         self.assertIn('test ! -L "$PREFIX/.swcompat-solidworks-installer-disposable"', block)
+
+    def test_cad_packet_is_fresh_and_separate_from_console(self):
+        source = (Path(__file__).resolve().parents[1] / "probes/netfx481_cad_prerequisites.cs").read_text()
+        self.assertIn("FileMode.CreateNew", source)
+        self.assertIn("new System.Text.UTF8Encoding(false)", source)
+        self.assertIn("else Console.Write(packet)", source)
+        self.assertEqual(parse(packet(mode="wpf"), 0, "wpf", 64)["result"], "PASS")

@@ -38,3 +38,5 @@ jobs:
     secrets:
       SWCOMPAT_INSTALLER_URL: ${{ secrets.SWCOMPAT_INSTALLER_URL }}
       SWCOMPAT_INSTALLER_SHA256: ${{ secrets.SWCOMPAT_INSTALLER_SHA256 }}
+
+# Preserve full Windows installer exit and use separate native CAD result packets.

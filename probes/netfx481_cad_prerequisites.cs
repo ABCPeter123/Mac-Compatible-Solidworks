@@ -97,7 +97,7 @@ class CadPrerequisites
     [STAThread]
     static int Main(string[] args)
     {
-        if (args.Length != 1) return 2;
+        if (args.Length != 1 && args.Length != 2) return 2;
         string mode = args[0];
         if (mode != "core" && mode != "winforms" && mode != "wpf" && mode != "wcf" && mode != "com") return 2;
         bool native = Type.GetType("Mono.Runtime") == null && Environment.Version.Major == 4;
@@ -125,12 +125,19 @@ class CadPrerequisites
                     Console.Error.WriteLine("SWCOMPAT_WPF_INNER_HRESULT=" + unchecked((uint)Marshal.GetHRForException(inner)).ToString("X8"));
             }
         }
-        Console.WriteLine("SWCOMPAT_CAD_SCHEMA=1");
-        Console.WriteLine("SWCOMPAT_CAD_MODE=" + mode);
-        Console.WriteLine("SWCOMPAT_CAD_BITS=" + (IntPtr.Size * 8));
-        Console.WriteLine("SWCOMPAT_CAD_NATIVE=" + (native ? "YES" : "NO"));
-        Console.WriteLine("SWCOMPAT_CAD_RESULT=" + (pass ? "PASS" : "FAIL"));
-        Console.WriteLine("SWCOMPAT_CAD_HRESULT=" + error);
+        string packet = "SWCOMPAT_CAD_SCHEMA=1\n"
+            + "SWCOMPAT_CAD_MODE=" + mode + "\n"
+            + "SWCOMPAT_CAD_BITS=" + (IntPtr.Size * 8) + "\n"
+            + "SWCOMPAT_CAD_NATIVE=" + (native ? "YES" : "NO") + "\n"
+            + "SWCOMPAT_CAD_RESULT=" + (pass ? "PASS" : "FAIL") + "\n"
+            + "SWCOMPAT_CAD_HRESULT=" + error + "\n";
+        if (args.Length == 2)
+        {
+            using (var file = new FileStream(args[1], FileMode.CreateNew, FileAccess.Write))
+            using (var writer = new StreamWriter(file, new System.Text.UTF8Encoding(false)))
+                writer.Write(packet);
+        }
+        else Console.Write(packet);
         return pass ? 0 : 1;
     }
 }

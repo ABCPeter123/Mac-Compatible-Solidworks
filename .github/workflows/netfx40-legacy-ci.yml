@@ -475,6 +475,14 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $selftest -notcontains 'SWCOMPAT_WIN32_SETUP_EXIT_HEX=00000BC2') {
             throw "Exact 4.8 Windows process exit selftest failed"
           }
+          if ("${{ inputs.try_481_ipd_apply_candidate }}" -eq "true") {
+            $cmdText = "@echo off`r`ncall `"$vcvars`"`r`ncl /nologo /W4 /O2 /DSWCOMPAT_WEBVIEW2 /Fe:build\webview2_win32_launch.exe probes\netfx481_win32_launch.c`r`nexit /b %errorlevel%`r`n"
+            Set-Content -LiteralPath build/compile-webview2-launcher.cmd -Value $cmdText -Encoding ascii
+            & cmd.exe /d /c build\compile-webview2-launcher.cmd
+            if ($LASTEXITCODE -ne 0) { throw "WebView2 Win32 launcher compile failed" }
+            $wvtest = & build\webview2_win32_launch.exe --selftest-3010
+            if ($LASTEXITCODE -ne 0 -or $wvtest -notcontains 'SWCOMPAT_WIN32_SETUP_EXIT_HEX=00000BC2') { throw "WebView2 Win32 launcher selftest failed" }
+          }
           $cmdText = "@echo off`r`ncall `"$vcvars`"`r`ncl /nologo /W4 /O2 /DUNICODE /D_UNICODE /Fe:build\netfx481_win32_launch.exe probes\netfx481_win32_launch.c`r`nexit /b %errorlevel%`r`n"
           Set-Content -LiteralPath build/compile-upgrade-481-launcher.cmd -Value $cmdText -Encoding ascii
           & cmd.exe /d /c build\compile-upgrade-481-launcher.cmd
@@ -854,6 +862,7 @@ jobs:
             build/evergreen-installer.sha256
             build/webview2_controller_probe.exe
             build/webview2_render_probe.exe
+            build/webview2_win32_launch.exe
             build/solidworks_installer_ui_probe.exe
             build/netfx481_cad_prerequisites_x86.exe
             build/netfx481_cad_prerequisites_x64.exe
@@ -2213,7 +2222,7 @@ jobs:
           python3 -m scripts.webview2_runtime_trial --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" \
             --installer build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe --sha256-file build/evergreen-installer.sha256 \
             --probe build/webview2_controller_probe.exe --output build/solidworks-webview2-prerequisite.json \
-            --timeout-seconds 240 --agree-disposable-prefix
+            --timeout-seconds 240 --agree-disposable-prefix --experiment-full-win32-exit build/webview2_win32_launch.exe
           python3 -m scripts.solidworks_runtime_gate --input build/solidworks-webview2-prerequisite.json --require-ready
           python3 -m scripts.netfx481_solidworks_gate --report build/netfx481-ipd-apply-candidate.json \
             --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" --managed build/netfx481_runtime_probe.exe

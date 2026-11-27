@@ -87,16 +87,26 @@ def execute(wine: Path, prefix: Path, fixture: Path, mode: str, bits: int,
     env.update(WINEPREFIX=str(prefix), WINEARCH="win64", WINEDEBUG="-all")
     if native_only:
         env["WINEDLLOVERRIDES"] = NATIVE_DLL_OVERRIDES["native_only"]
-    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+    # Keep the result packet separate from native GUI diagnostics on stdout.
+    temp = prefix / "drive_c" / "windows" / "temp"
+    if temp.is_symlink() or not temp.is_dir():
+        raise ValueError("Initialized private Windows temp required")
+    with tempfile.TemporaryDirectory(prefix="swcompat-cad-", dir=temp) as scratch, \
+            tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        packet = Path(scratch) / "result.txt"
+        win_packet = "C:\\windows\\temp\\" + Path(scratch).name + "\\result.txt"
         rc = None
         try:
-            p = subprocess.run([str(wine), str(fixture), mode], cwd=fixture.parent,
+            p = subprocess.run([str(wine), str(fixture), mode, win_packet], cwd=fixture.parent,
                                env=env, stdin=subprocess.DEVNULL, stdout=out,
                                stderr=err if mode == "wpf" else subprocess.DEVNULL,
                                timeout=35, check=False)
             rc = p.returncode
-            out.seek(0)
-            result = parse(out.read(4097), rc, mode, bits)
+            if packet.is_symlink() or not packet.is_file():
+                result = parse(b"", rc, mode, bits)
+            else:
+                with packet.open("rb") as stream:
+                    result = parse(stream.read(4097), rc, mode, bits)
         except subprocess.TimeoutExpired:
             result = {"result": "TIMEOUT", "native": False, "hresult": "NOT_VERIFIED"}
         except OSError:
