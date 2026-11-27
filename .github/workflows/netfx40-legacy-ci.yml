@@ -98,6 +98,11 @@ on:
         type: boolean
         required: false
         default: false
+      try_webview2_after_ipd:
+        description: 'Verify genuine CLR and WebView2 coexist in same disposable prefix, no private media'
+        type: boolean
+        required: false
+        default: false
       try_solidworks_after_ipd:
         description: 'Manual only: licensed bootstrapper after verified native .NET 4.8.1 and ready WebView2 in same prefix'
         type: boolean
@@ -342,6 +347,7 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_netfx481_ipd_apply_candidate.py' -v
           python -m unittest discover -s tests -p 'test_netfx481_ipd_gac.py' -v
+          python -m unittest discover -s tests -p 'test_netfx481_solidworks_gate.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_legacy.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_launcher_timeout.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_original_installer_group.py' -v
@@ -787,7 +793,7 @@ jobs:
           if ($null -eq $signature.SignerCertificate -or $signature.SignerCertificate.Subject -notmatch '(?i)SOLIDWORKS|DASSAULT') { throw "Unexpected executable publisher" }
           Write-Output "Original SOLIDWORKS publisher and SHA256: VERIFIED"
       - name: Verify pinned official Microsoft WebView2 SDK and compile x64 controller
-        if: github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd && inputs.try_481_ipd_apply_candidate
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -806,7 +812,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Controller MSVC build failed" }
           Copy-Item build/webview2-msvc/Release/webview2_controller_probe.exe build/webview2_controller_probe.exe
       - name: Verify official Microsoft-signed Evergreen x64 standalone runtime
-        if: github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd && inputs.try_481_ipd_apply_candidate
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -821,7 +827,7 @@ jobs:
           Set-Content -Path build/evergreen-installer.sha256 -Value $sha -NoNewline -Encoding ascii
           Write-Output "Microsoft runtime publisher and SHA-256 verified"
       - name: Build and smoke-test original Win32 x64 installer UI census
-        if: github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd && inputs.try_481_ipd_apply_candidate
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -835,7 +841,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Synthetic Win32 HWND responsiveness or GDI surface test failed" }
           Copy-Item build/installer-ui/Release/solidworks_installer_ui_probe.exe build/solidworks_installer_ui_probe.exe
       - uses: actions/upload-artifact@v4
-        if: github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd && inputs.try_481_ipd_apply_candidate
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
         with:
           name: ipd-solidworks-self-authored-probes-and-webview-digest
           path: |
@@ -845,7 +851,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Remove private SOLIDWORKS and Microsoft WebView2 installers
-        if: always() && inputs.try_solidworks_after_ipd
+        if: always() && (inputs.try_webview2_after_ipd || inputs.try_solidworks_after_ipd)
         shell: pwsh
         run: Remove-Item -LiteralPath build/SolidworksSetup.exe,build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe -ErrorAction SilentlyContinue
       # NEVER include original Microsoft .NET installers in GitHub Actions
@@ -2103,7 +2109,7 @@ jobs:
             --preflight-report build/netfx481-ipd-wusa-dryrun.json \
             --output build/netfx481-ipd-apply-candidate.json --agree-disposable-experimental-servicing
       - name: Require verified native framework and complete original GAC before licensed trial
-        if: github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd && inputs.try_481_ipd_apply_candidate
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
         shell: bash
         run: |
           set -euo pipefail
@@ -2113,12 +2119,12 @@ jobs:
           python3 -m scripts.netfx481_solidworks_gate --report build/netfx481-ipd-apply-candidate.json \
             --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" --managed build/netfx481_runtime_probe.exe
       - uses: actions/download-artifact@v4
-        if: github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd && inputs.try_481_ipd_apply_candidate
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
         with:
           name: ipd-solidworks-self-authored-probes-and-webview-digest
           path: build
       - name: Fetch independently verified WebView2 media and pinned SDK loader privately
-        if: github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd && inputs.try_481_ipd_apply_candidate
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
         shell: bash
         run: |
           set -euo pipefail
@@ -2134,7 +2140,7 @@ jobs:
           unzip -p build/ipd-webview-sdk.zip runtimes/win-x64/native/WebView2Loader.dll > build/WebView2Loader.dll
           printf '%s  %s\n' d3fce90bdeecb08596e377dea6a316354dd8949e32ff09b89d51be00c14e21b6 build/WebView2Loader.dll | shasum -a 256 -c -
       - name: Install verified WebView2 and recheck native managed execution in same prefix
-        if: github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd && inputs.try_481_ipd_apply_candidate
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
         shell: bash
         run: |
           set -euo pipefail
@@ -2147,6 +2153,13 @@ jobs:
           python3 -m scripts.solidworks_runtime_gate --input build/solidworks-webview2-prerequisite.json --require-ready
           python3 -m scripts.netfx481_solidworks_gate --report build/netfx481-ipd-apply-candidate.json \
             --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" --managed build/netfx481_runtime_probe.exe
+      - name: Verify same-prefix native Win32 GDI baseline without private installer
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.solidworks_ui_gdi_reference --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --probe build/solidworks_installer_ui_probe.exe --output build/solidworks-macos-gdi-reference.json
       - name: Launch verified original SOLIDWORKS bootstrapper with real CLR and WebView2
         if: github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd && inputs.try_481_ipd_apply_candidate
         shell: bash
@@ -2156,14 +2169,12 @@ jobs:
         run: |
           set -euo pipefail
           PREFIX="$RUNNER_TEMP/netfx40-msxml3-prefix"
-          python3 -m scripts.solidworks_ui_gdi_reference --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" \
-            --probe build/solidworks_installer_ui_probe.exe --output build/solidworks-macos-gdi-reference.json
           python3 -m scripts.solidworks_private_media_fetch --destination build/SolidworksSetup.exe --output build/solidworks-macos-fetch.json
           python3 -m scripts.solidworks_bootstrap_trial --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" \
             --agree-disposable-prefix --installer build/SolidworksSetup.exe --sha256 "$SWCOMPAT_INSTALLER_SHA256" \
             --window-probe build/solidworks_installer_ui_probe.exe --timeout-seconds 120 --output build/solidworks-macos-trial.json
       - uses: actions/upload-artifact@v4
-        if: always() && github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd
+        if: always() && inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
         with:
           name: ipd-solidworks-bootstrap-sanitized
           path: |
@@ -2174,7 +2185,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
       - name: Remove private original SOLIDWORKS and WebView2 media
-        if: always() && inputs.try_solidworks_after_ipd
+        if: always() && (inputs.try_webview2_after_ipd || inputs.try_solidworks_after_ipd)
         shell: bash
         run: |
           rm -f -- build/SolidworksSetup.exe build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe build/ipd-webview-sdk.zip build/WebView2Loader.dll
