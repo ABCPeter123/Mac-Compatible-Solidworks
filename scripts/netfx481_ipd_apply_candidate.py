@@ -181,11 +181,37 @@ def deferred_journal(prefix: Path, stage: Path, members: dict[str, Path], count:
     return result
 
 
+def deferred_status(queue: list) -> dict:
+    """Distinguish an unconsumed queue from a consumed but incorrect target."""
+    counts = dict.fromkeys(("verified", "pending", "pending_target_matches",
+                            "consumed_target_mismatch", "missing_target", "unsafe"), 0)
+    # Known framework names only, no arbitrary paths or private file names.
+    classes = dict.fromkeys(("clr", "mscorlib", "mscoree", "fusion", "msxml",
+                             "ngen", "other"), 0)
+    for target, temp, expected in queue:
+        if target.is_symlink() or temp.is_symlink():
+            counts["unsafe"] += 1
+            continue
+        match = target.is_file() and digest_file(target) == expected
+        if temp.exists():
+            counts["pending_target_matches" if match else "pending"] += 1
+        elif match:
+            counts["verified"] += 1
+            continue
+        elif not target.is_file():
+            counts["missing_target"] += 1
+        else:
+            counts["consumed_target_mismatch"] += 1
+        name = target.name.casefold()
+        stem = target.stem.casefold()
+        kind = stem if stem in {"clr", "mscorlib", "mscoree", "fusion", "ngen"} else (
+            "msxml" if name.startswith("msxml") and name.endswith(".dll") else "other")
+        classes[kind] += 1
+    return {"counts": counts, "failed_classes": classes}
+
+
 def verify_deferred(queue: list) -> bool:
-    return all(not temp.exists() and not temp.is_symlink()
-               and target.is_file() and not target.is_symlink()
-               and digest_file(target) == expected
-               for target, temp, expected in queue)
+    return deferred_status(queue)["counts"]["verified"] == len(queue)
 
 
 def inspect(wine: Path, prefix: Path, fixture: Path, package: Path, digest: Path,
@@ -281,9 +307,19 @@ def inspect(wine: Path, prefix: Path, fixture: Path, package: Path, digest: Path
         return result
     # A queued rename is not an installed file. Require reboot to apply it.
     result["deferred_verified"] = False
+    # Wine's restart-only path does not kill processes. Stop the whole
+    # marked private session before boot so COM servers and framework
+    # services cannot hold the eight deferred targets open.
+    result["pre_restart_quiesced"] = _terminate_private_setup_wineserver(wine, prefix)
+    if not result["pre_restart_quiesced"]:
+        result["restart"] = "BLOCKED_SESSION_CLEANUP"
+        return result
+    # The new session may process pending renames as part of startup;
+    # preserve exact measurements regardless of wineboot's return code.
     result["restart"] = wineboot_restart(wine, prefix, timeout=120)
     if result["restart"] != "COMPLETED":
         return result
+    result["deferred_status"] = deferred_status(queue)
     result["deferred_verified"] = verify_deferred(queue)
     after = snapshot(prefix)
     payload = compare(before, after)
