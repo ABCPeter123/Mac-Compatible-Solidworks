@@ -100,6 +100,12 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
     destination_classes = Counter()
     managed_framework_names = Counter()
     gac_registration_features = Counter()
+    gac_attributes = Counter()
+    gac_child_tags = Counter()
+    gac_architectures = Counter()
+    gac_destinations = Counter()
+    gac_known_assembly_names = Counter()
+    gac_source_integrity = Counter()
     runtime_image_versions = Counter()
     release_registry = Counter()
     runtime_directives = Counter()
@@ -274,6 +280,23 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
                         tagname = local(node.tag).casefold()
                         if tagname in {"assemblyidentity", "gac", "managedassembly", "assemblyregistration"}:
                             gac_registration_features[tagname] += 1
+                        if tagname == "gac":
+                            gac_architectures[ident[1]] += 1
+                            gac_destinations[dest_class] += 1
+                            for attr in node.attrib:
+                                attr = local(attr)
+                                gac_attributes[attr if re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_.-]{0,64}", attr) else "other"] += 1
+                            for child in node:
+                                tag = local(child.tag)
+                                gac_child_tags[tag if re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_.-]{0,64}", tag) else "other"] += 1
+                            if base in {"system.dll", "system.core.dll", "system.xml.dll", "system.configuration.dll",
+                                        "system.data.dll", "mscorlib.dll", "presentationframework.dll",
+                                        "windowsbase.dll", "system.xaml.dll", "system.windows.forms.dll"}:
+                                gac_known_assembly_names[base] += 1
+                            original_key = (parent + "/" + source.replace("\\", "/")).casefold()
+                            alias_key = (parent + "/" + dest_name.replace("\\", "/")).casefold()
+                            gac_source_integrity["exact" if original_key in members else
+                                                 "same_assembly_alias" if alias_key in members else "missing"] += 1
                     if base in ("clr.dll", "mscorlib.dll", "mscoree.dll", "ngen.exe", "servicemodelreg.exe"):
                         runtime_payloads[view + "/" + base] += 1
                 if not target:
@@ -440,6 +463,12 @@ def audit_members(members: dict[str, Path], update_roots: list[tuple[str, ...]] 
             "destination_classes": dict(sorted(destination_classes.items())),
             "managed_framework_placement": dict(sorted(managed_framework_names.items())),
             "file_child_registration_features": dict(sorted(gac_registration_features.items())),
+            "gac_attributes": dict(sorted(gac_attributes.items())),
+            "gac_child_tags": dict(sorted(gac_child_tags.items())),
+            "gac_architectures": dict(sorted(gac_architectures.items())),
+            "gac_destinations": dict(sorted(gac_destinations.items())),
+            "gac_known_assembly_names": dict(sorted(gac_known_assembly_names.items())),
+            "gac_source_integrity": dict(sorted(gac_source_integrity.items())),
             "runtime_image_versions": dict(sorted(runtime_image_versions.items())),
             "release_registry": dict(sorted(release_registry.items())),
             "runtime_directives": dict(sorted(runtime_directives.items())),
