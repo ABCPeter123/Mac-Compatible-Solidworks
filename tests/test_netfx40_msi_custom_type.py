@@ -182,11 +182,34 @@ class OriginalMsiCustomTypeTests(unittest.TestCase):
         self.assertEqual(t._private_failed_action(installed + only_rollback),
                          b"ServiceActualInstall")
 
+    def test_compact_trace_deduplicates_and_preserves_nonservice_action_types(self):
+        line = (b'0100:trace:msi:ACTION_CustomAction Handling custom action '
+                b'L"VendorAction" (4c01 L"private source" L"private target")\n')
+        compact = t.compact_trace(line)
+        self.assertNotIn(b"private", compact)
+        failure = b'0100:err:msi:execute_script action L"VendorAction" returned 1603\n'
+        self.assertEqual(t.parse(compact + failure)["status"], "TRACE_MATCHED")
+        proc = mock.Mock()
+        proc.stderr = io.BytesIO(line * (t.MAX_RETAINED_LINES + 10) + failure)
+        proc.wait.return_value = 0
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            fixture = root / "netfx40_win32_launch.exe"
+            fixture.write_bytes(b"synthetic")
+            with (mock.patch.object(legacy, "validate_prefix"),
+                  mock.patch.object(legacy.subprocess, "Popen", return_value=proc),
+                  mock.patch.object(legacy, "parse_win32", return_value={"status": "EXIT_CAPTURED"})):
+                report = legacy._run_traced(root / "wine", root, fixture, [], timeout=30)
+        self.assertEqual(report["custom_action_type"]["status"], "TRACE_MATCHED")
+        self.assertEqual(report["custom_action_type"]["base_type"], 1)
+        self.assertEqual(report["wine_msi_errors"]["msi_error_lines"], 1)
+        self.assertNotIn("VendorAction", str(report))
+
     def test_only_allowlisted_bounded_relevant_lines(self):
         self.assertTrue(t.relevant(b'0100:err:msi:execute_script error\n'))
         self.assertTrue(t.relevant(b'0100:fixme:msi:ACTION_CustomAction warning\n'))
         self.assertTrue(t.relevant(b'0100:trace:msi:ACTION_CustomAction Handling custom action L"ServiceSecret" (1 L"private" L"private")\n'))
-        self.assertFalse(t.relevant(b'0100:trace:msi:ACTION_CustomAction Handling custom action L"other" (1 L"private" L"private")\n'))
+        self.assertTrue(t.relevant(b'0100:trace:msi:ACTION_CustomAction Handling custom action L"other" (1 L"private" L"private")\n'))
         self.assertFalse(t.relevant(b'0100:trace:msi:ACTION_InstallFiles L"secret"\n'))
         self.assertFalse(t.relevant(b'0100:trace:service:OpenServiceW L"secret"\n'))
         self.assertFalse(t.relevant(b'0100:trace:msi:ACTION_CustomAction Handling custom action '

@@ -51,11 +51,18 @@ def relevant(line: bytes) -> bool:
         return False
     if b"err:msi:" in line or b"fixme:msi:" in line:
         return True
-    # Original signed Microsoft setup produced OTHER_ACTION with the
-    # SERVICE_TEXT_ONLY identifier hint. Filter the extremely verbose MSI
-    # trace to only exact matching candidate *action names*, not target data.
+    return TRACE.search(line) is not None
+
+
+def compact_trace(line: bytes) -> bytes | None:
+    """Retain only action identifier/type, never the target or properties."""
+    if len(line) > MAX_LINE_BYTES:
+        return None
     event = TRACE.search(line)
-    return bool(event and b"service" in event.group(1).lower())
+    if event is None:
+        return None
+    return (b'trace:msi:ACTION_CustomAction Handling custom action L"'
+            + event.group(1) + b'" (' + event.group(2).lower() + b' )\n')
 
 
 def empty(status: str = "NOT_REQUESTED", *, reason: str = "NONE") -> dict:

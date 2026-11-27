@@ -32,7 +32,7 @@ from scripts.netfx40_msi_evidence import scan as scan_inner_msi, empty as empty_
 from scripts.netfx40_msi_inventory import (scan as scan_msi_inventory,
     empty as empty_msi_inventory, validate as validate_msi_inventory)
 from scripts.netfx40_msi_custom_type import (_private_failed_action, parse as parse_custom_type, empty as empty_custom_type,
-    relevant as relevant_custom_trace, validate as validate_custom_type,
+    relevant as relevant_custom_trace, compact_trace, validate as validate_custom_type,
     MAX_RETAINED_BYTES, MAX_RETAINED_LINES, MAX_LINE_BYTES)
 from scripts.netfx40_wine_msi_errors import parse as parse_wine_msi, empty as empty_wine_msi, validate as validate_wine_msi, MAX_BYTES as WINE_MSI_MAX
 from scripts.netfx40_msi_logging_policy import apply as enable_msi_logging, restore as restore_msi_logging, blank as blank_logging, validate as validate_logging
@@ -250,6 +250,9 @@ def _run_traced(wine: Path, prefix: Path, fixture: Path,
             process = None
         if process is not None:
             def drain() -> None:
+                # Unique compact metadata only. Repeated scheduling and execution
+                # of the same custom action must not consume the capture budget.
+                seen_trace: set[bytes] = set()
                 assert process.stderr is not None
                 try:
                     with process.stderr as pipe:
@@ -257,8 +260,21 @@ def _run_traced(wine: Path, prefix: Path, fixture: Path,
                             line = pipe.readline(MAX_LINE_BYTES + 1)
                             if not line:
                                 return
+                            if len(line) > MAX_LINE_BYTES:
+                                # A bounded readline can return a fragment; never
+                                # parse its remainder as a standalone trace event.
+                                while line and not line.endswith(b"\n"):
+                                    line = pipe.readline(MAX_LINE_BYTES + 1)
+                                continue
                             if not relevant_custom_trace(line):
                                 continue
+                            compact = compact_trace(line)
+                            if compact is not None and b"err:msi:" not in line and b"fixme:msi:" not in line:
+                                if compact in seen_trace:
+                                    continue
+                                line = compact
+                            else:
+                                compact = None
                             if state["lines"] >= MAX_RETAINED_LINES:
                                 state["overflow"] = True
                                 if state["reason"] == "NONE":
@@ -270,6 +286,8 @@ def _run_traced(wine: Path, prefix: Path, fixture: Path,
                                     state["reason"] = "BYTE_LIMIT"
                                 continue
                             retained.extend(line)
+                            if compact is not None:
+                                seen_trace.add(compact)
                             state["lines"] += 1
                 except OSError:
                     state["overflow"] = True
