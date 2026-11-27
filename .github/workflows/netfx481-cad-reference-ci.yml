@@ -1,0 +1,39 @@
+name: Fast native Windows CAD prerequisite controls
+on:
+  pull_request:
+    paths:
+      - 'probes/netfx481_cad_prerequisites.cs'
+      - 'scripts/build-netfx481-cad-probes.ps1'
+      - 'scripts/netfx481_cad_prerequisites.py'
+      - 'tests/test_netfx481_cad_prerequisites.py'
+      - '.github/workflows/netfx481-cad-reference-ci.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: cad-reference-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native-windows:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Create fixture output directory
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path build | Out-Null
+      - name: Run strict fixture protocol tests
+        run: python -m unittest discover -s tests -p test_netfx481_cad_prerequisites.py -v
+      - name: Compile and test x86 and x64 CAD prerequisite fixture independently
+        shell: pwsh
+        run: ./scripts/build-netfx481-cad-probes.ps1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-windows-cad-reference-sanitized
+          path: build/netfx481-cad-windows-reference.json
+          if-no-files-found: warn
+          retention-days: 3
