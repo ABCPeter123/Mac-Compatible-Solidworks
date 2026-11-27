@@ -5,6 +5,8 @@ on:
       - 'scripts/netfx481_native_delta.py'
       - 'scripts/netfx481_native_delta_gate.py'
       - 'scripts/netfx481_ipd_stage.py'
+      - 'scripts/netfx481_ipd_gac.py'
+      - 'tests/test_netfx481_ipd_gac.py'
       - 'scripts/patch_wusa_ipd_dryrun.py'
       - 'scripts/netfx481_ipd_wusa_dryrun.py'
       - 'tests/test_netfx481_ipd_wusa_dryrun.py'
@@ -135,6 +137,21 @@ jobs:
           PY
       - name: Require complete tree and independently verified Windows digest
         run: python -m scripts.netfx481_native_delta_gate build/netfx481-native-delta.json
+      - name: Validate all original GAC directives before native CLR servicing
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from scripts.netfx481_ipd_stage import inventory, digest_tree
+          from scripts.netfx481_native_delta_gate import EXPECTED_COUNT, EXPECTED_TREE_SHA256
+          from scripts.netfx481_ipd_gac import registration_sources
+          members = inventory(Path(os.environ["RUNNER_TEMP"]) / "netfx481-ipd-stage")
+          assert len(members) == EXPECTED_COUNT and digest_tree(members) == EXPECTED_TREE_SHA256
+          sources = registration_sources(members)
+          assert len(sources) == 274
+          print("Original GAC manifest admission: 274/274 verified")
+          PY
       - name: Build read-only WUSA source probe
         shell: bash
         run: |
