@@ -1,6 +1,11 @@
 name: Experimental verified IPD WUSA servicing on native CLR4
 on:
   workflow_dispatch:
+    inputs:
+      try_solidworks_after_ipd:
+        description: 'Launch private licensed SOLIDWORKS bootstrapper only after native framework and WebView2 verification'
+        type: boolean
+        default: false
   pull_request:
     paths:
       - '.github/workflows/netfx481-ipd-apply-candidate-ci.yml'
@@ -23,3 +28,7 @@ jobs:
       try_48_payload_host: false
       try_481_catalog_wusa: true
       try_481_ipd_apply_candidate: true
+      try_solidworks_after_ipd: ${{ github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd }}
+    secrets:
+      SWCOMPAT_INSTALLER_URL: ${{ secrets.SWCOMPAT_INSTALLER_URL }}
+      SWCOMPAT_INSTALLER_SHA256: ${{ secrets.SWCOMPAT_INSTALLER_SHA256 }}
