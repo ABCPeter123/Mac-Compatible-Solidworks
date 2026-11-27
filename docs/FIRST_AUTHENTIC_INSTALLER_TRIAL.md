@@ -1,5 +1,38 @@
 # First authentic SOLIDWORKS installer test on Apple Silicon Wine
 
+## November 27: native Microsoft .NET 4.8.1 milestone
+
+Three independent Apple Silicon Wine IPD servicing trials have demonstrated
+genuine native managed execution after restart:
+[45948583502](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/45948583502),
+[45948606890](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/45948606890),
+and [45954548511](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/45954548511).
+Each registered all 274 original GAC payloads through native Fusion,
+verified all four core CLR/mscorlib binaries, and verified all eight deferred
+replacements. Before the GAC operation, managed startup did not pass.
+
+This demonstrates a functioning native CLR4.8.1 candidate, not full Windows CBS
+equivalence or SOLIDWORKS installation. The experimental compatibility path
+still uses a bounded package-local resource/prerequisite graph.
+
+The experimental IPD workflow now tests the Windows 11 profile, dual-architecture
+native CLR, WinForms drawing, WPF bitmap rendering, WCF serialization and binding
+construction, COM activation, WebView2 controller creation and Win32 GDI
+inside the **same** disposable prefix. These newly added integration controls
+require actual CI results; they are not claimed to have passed already.
+
+To run the licensed first-launch arm, open [the IPD workflow](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/workflows/netfx481-ipd-apply-candidate-ci.yml),
+select the PR #281 branch `experiment/ipd-apply-candidate`, and manually select
+`try_solidworks_after_ipd` after supplying the private, unexpired installer URL
+and expected SHA256 secrets described below. Ordinary PR validation never
+fetches private SOLIDWORKS media. The manual launch checks the original
+signature on Windows, downloads the same bytes privately on Mac, verifies
+native managed execution after the WebView2 install and executes the unchanged
+bootstrapper with process-local native CLR overrides. Only sanitized evidence
+is uploaded. No serial entry, terms acceptance, activation or CAD operations
+are automated by this first-launch trial.
+
+
 **Current state:** the authentic signed SOLIDWORKS bootstrapper has been verified and executed on hosted Apple Silicon Wine, but its process timed out after 120 seconds. A responsive Win32 installer window was detected, while GDI pixel readback failed. Installation Manager visibility, full installation, activation and CAD operation remain unverified.
 
 ## Getting legitimate installation media
