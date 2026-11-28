@@ -1,7 +1,7 @@
 from pathlib import Path
 import unittest
 
-from scripts.netfx481_webview2_render import measure
+from scripts.netfx481_webview2_render import measure, PROFILES
 
 
 class SamePrefixRenderTests(unittest.TestCase):
@@ -36,3 +36,17 @@ class SamePrefixRenderTests(unittest.TestCase):
         self.assertIn("mv build/solidworks-webview2-prerequisite.json build/solidworks-webview2-attempt1.json", body[retry:apply])
         self.assertIn("bash scripts/netfx481_webview2_first.sh", body[retry:apply])
         self.assertIn("scripts.netfx481_webview2_persistence", body[recheck:])
+
+    def test_compositor_profiles_are_synthetic_and_allowlisted(self):
+        self.assertEqual(PROFILES["default"], ())
+        for profile in PROFILES.values():
+            for flag in profile:
+                self.assertNotIn("sandbox", flag)
+                self.assertNotIn("security", flag)
+                self.assertNotIn("certificate", flag)
+        body = (Path(__file__).resolve().parents[1] / ".github/workflows/netfx40-legacy-ci.yml").read_text()
+        start = body.index("- name: Compare foreground scheduling")
+        launch = body.index("- name: Launch verified original SOLIDWORKS", start)
+        self.assertIn("github.event_name == 'pull_request'", body[start:launch])
+        self.assertIn("--compare-compositor-profiles", body[start:launch])
+        self.assertIn("ipd-webview2-compositor-differential.json", body[launch:])
