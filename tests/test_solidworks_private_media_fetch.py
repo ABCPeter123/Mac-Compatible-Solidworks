@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
 
-from scripts.solidworks_private_media_fetch import check_url, fetch, http_status
+from scripts.solidworks_private_media_fetch import check_url, fetch, http_status, url_diagnostic
 
 SECRET = "https://abc123.r2.cloudflarestorage.com/private/Setup.exe?X-Amz-Signature=TOP_SECRET"
 NOW = datetime(2026, 11, 13, 20, 0, 0, tzinfo=timezone.utc)
@@ -134,6 +134,30 @@ class FetchTests(unittest.TestCase):
             self.assertEqual(json.loads((folder / "result.json").read_text())["result"],
                              "MISSING_CONFIGURATION")
             self.assertFalse((folder / "Setup.exe").exists())
+
+    def test_url_diagnostic_is_fixed_and_never_contacts_network(self):
+        cases = [
+            (" " + SECRET, "SURROUNDING_WHITESPACE"),
+            (SECRET + "\n", "SURROUNDING_WHITESPACE"),
+            ('"' + SECRET + '"', "SURROUNDING_QUOTES"),
+            ("http://example.com/TOP_SECRET", "HTTPS_REQUIRED"),
+            (SECRET + "#TOP_SECRET", "URL_FRAGMENT"),
+            ("https://example.com:1234/TOP_SECRET", "NONSTANDARD_PORT"),
+            (SECRET + "&X-Amz-Date=bad", "SIGNATURE_FIELDS"),
+            (SECRET + "&X-Amz-Date=bad&X-Amz-Expires=60", "SIGNATURE_DATE_OR_TTL"),
+            (SECRET + "&X-Amz-Date=20261113T180000Z&X-Amz-Expires=604801", "SIGNATURE_TTL_RANGE"),
+        ]
+        for url, reason in cases:
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as folder:
+                client = Client(Response())
+                result = fetch(url, Path(folder) / "Setup.exe", opener=client)
+                self.assertEqual(url_diagnostic(url)[1], reason)
+                self.assertEqual(result["url_diagnostic"], reason)
+                self.assertEqual(result["result"], "UNSAFE_URL")
+                self.assertEqual(client.calls, 0)
+                self.assertNotIn("TOP_SECRET", json.dumps(result))
+                self.assertNotIn("abc123", json.dumps(result))
+                self.assertFalse((Path(folder) / "Setup.exe").exists())
 
 
 if __name__ == "__main__":
