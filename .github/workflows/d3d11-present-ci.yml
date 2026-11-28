@@ -1,0 +1,114 @@
+name: Synthetic D3D11 DXGI presentation differential
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'probes/d3d11_present_probe.cpp'
+      - '.github/workflows/d3d11-present-ci.yml'
+      - 'scripts/magevk_backend_trial.py'
+      - 'scripts/d3d11_backend_matrix.py'
+      - 'tests/test_magevk_backend_trial.py'
+permissions:
+  contents: read
+concurrency:
+  group: d3d11-present-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows-control:
+    runs-on: windows-2025
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build original x64 D3D11 control
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force build | Out-Null
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw "MSVC missing" }
+          $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+          $cmdText = "@echo off`r`ncall `"$vcvars`"`r`ncl /nologo /W4 /O2 /EHsc /std:c++17 /Fe:build\d3d11_present_probe.exe probes\d3d11_present_probe.cpp d3d11.lib dxgi.lib dwmapi.lib user32.lib gdi32.lib`r`nexit /b %errorlevel%`r`n"
+          Set-Content -LiteralPath build/compile-d3d.cmd -Value $cmdText -Encoding ascii
+          & cmd.exe /d /c build\compile-d3d.cmd
+          if ($LASTEXITCODE -ne 0) { throw "D3D11 compile failed" }
+      - name: Native Windows WARP texture readback reference
+        shell: pwsh
+        run: |
+          $lines = & build\d3d11_present_probe.exe
+          $lines | Write-Output
+          if ($LASTEXITCODE -ne 0 -or $lines -notcontains 'SWCOMPAT_D3D_PROBE=COMPLETE' -or $lines -notcontains 'SWCOMPAT_D3D_WARP_TEXTURE=MATCH') { throw "Native reference not established" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: self-authored-d3d11-present-control
+          path: build/d3d11_present_probe.exe
+          if-no-files-found: error
+          retention-days: 1
+  wiage-control:
+    needs: windows-control
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: self-authored-d3d11-present-control
+          path: build
+      - name: Authenticate same pinned Wiage as IPD
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          ARCHIVE="$RUNNER_TEMP/wiage-11.13-runtime.tar.gz"
+          curl --fail --location --retry 3 --max-time 600 --output "$ARCHIVE" \
+            "https://github.com/dttdrv/mage/releases/download/preview-2026-08-02/wiage-runtime.tar.gz"
+          printf '%s  %s\n' d0cea7ff492dd3801dfa26a2a7d5ed1331e60f65929318d17301a3ce9cbba56c "$ARCHIVE" | shasum -a 256 -c -
+          python3 -m scripts.wine_engine_archive --archive "$ARCHIVE"
+          mkdir -p "$RUNNER_TEMP/msxml3-wine-build"
+          COPYFILE_DISABLE=1 tar --exclude='._*' --exclude='*/._*' -xzf "$ARCHIVE" -C "$RUNNER_TEMP/msxml3-wine-build"
+          WINE_BIN="$RUNNER_TEMP/msxml3-wine-build/wiage/bin/wine"
+          test -x "$WINE_BIN"
+          test -x "$RUNNER_TEMP/msxml3-wine-build/wiage/bin/wineserver"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+          echo "WINEMSYNC=1" >> "$GITHUB_ENV"
+          echo "MAGE_BACKGROUND_EXE=rundll32.exe:services.exe:explorer.exe:conhost.exe" >> "$GITHUB_ENV"
+      - name: Initialize fresh disposable prefix with same engine and Win11 profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Same reserved runner-local name as the existing strict launcher.
+          # No Microsoft installer media is required.
+          PREFIX="$RUNNER_TEMP/netfx40-msxml3-prefix"
+          test ! -e "$PREFIX"
+          python3 -m swcompat --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" --logs-dir "$RUNNER_TEMP/wiage-webview-logs" init --timeout 120 --skip-bootstrap-mono-gecko
+          touch "$PREFIX/.swcompat-netfx481-disposable"
+          python3 -m scripts.netfx40_prefix_readiness --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" --output build/wiage-webview-prefix.json --agree-disposable-prefix
+          python3 -m swcompat --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" --logs-dir "$RUNNER_TEMP/wiage-webview-logs" set-winver win11
+      - name: Measure default and explicit OpenGL before changing graphics backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.d3d11_backend_matrix --profiles default gl
+      - name: Authenticate matching upstream MageVK library and configure Wine Vulkan loader
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --max-time 300 --output "$RUNNER_TEMP/magevk-lib.tar.gz" \
+            "https://github.com/dttdrv/mage/releases/download/preview-2026-08-02/magevk-lib.tar.gz"
+          python3 -m scripts.magevk_backend_trial
+          lipo -verify_arch x86_64 "$RUNNER_TEMP/magevk-pinned/libMoltenVK.dylib"
+      - name: Test WineD3D Vulkan using the authenticated matching MageVK library
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.d3d11_backend_matrix --profiles vulkan
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: d3d11-present-sanitized
+          path: build/d3d11-present-*-sanitized.txt
+          if-no-files-found: warn
+          retention-days: 3
