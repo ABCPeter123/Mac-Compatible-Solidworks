@@ -15,22 +15,13 @@ This demonstrates a functioning native CLR4.8.1 candidate, not full Windows CBS
 equivalence or SOLIDWORKS installation. The experimental compatibility path
 still uses a bounded package-local resource/prerequisite graph.
 
-The experimental IPD workflow now tests the Windows 11 profile, dual-architecture
-native CLR, WinForms drawing, WPF bitmap rendering, WCF serialization and binding
-construction, COM activation, WebView2 controller creation and Win32 GDI
-inside the **same** disposable prefix. These newly added integration controls
-require actual CI results; they are not claimed to have passed already.
+## November 27: combined runtime milestone
 
-To run the licensed first-launch arm, open [the IPD workflow](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/workflows/netfx481-ipd-apply-candidate-ci.yml),
-select the PR #281 branch `experiment/ipd-apply-candidate`, and manually select
-`try_solidworks_after_ipd` after supplying the private, unexpired installer URL
-and expected SHA256 secrets described below. Ordinary PR validation never
-fetches private SOLIDWORKS media. The manual launch checks the original
-signature on Windows, downloads the same bytes privately on Mac, verifies
-native managed execution after the WebView2 install and executes the unchanged
-bootstrapper with process-local native CLR overrides. Only sanitized evidence
-is uploaded. No serial entry, terms acceptance, activation or CAD operations
-are automated by this first-launch trial.
+[Run 46082976493](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/46082976493) passed the complete integrated test on Wiage 11.13 / Apple Silicon macOS 26. Official WebView2 installed with full Win32 exit zero before CLR servicing. The browser remained READY after Wine shutdown, restart, original CLR4 setup and 4.8.1 IPD servicing. All ten native CAD prerequisite controls and native Win32 GDI passed. DOM, Canvas and CSS layout passed; browser screenshot/window pixels remain unverified. The native framework candidate is not strict CBS equivalence.
+
+The integrated workflow is now on `main`. Open [Experimental verified IPD WUSA servicing on native CLR4](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/workflows/netfx481-ipd-apply-candidate-ci.yml), click **Run workflow**, select `main`, enable `try_solidworks_after_ipd`, and run it. Configure the private, unexpired installer URL and exact SHA-256 secrets below before starting. A failed media fetch, mismatched digest, invalid original publisher signature, unverified framework, or nonzero/timeout WebView2 installer blocks the licensed launch. A diagnostic timeout recovery never satisfies that strict installer gate. Ordinary PR validation cannot fetch licensed media.
+
+The manual run executes the unchanged bootstrapper with process-local native CLR overrides, only after the live same-prefix runtime controls. It produces fixed sanitized window/process evidence; it does not enter a serial, accept terms, activate, or install the full CAD product automatically.
 
 
 **Current state:** the authentic signed SOLIDWORKS bootstrapper has been verified and executed on hosted Apple Silicon Wine, but its process timed out after 120 seconds. A responsive Win32 installer window was detected, while GDI pixel readback failed. Installation Manager visibility, full installation, activation and CAD operation remain unverified.
@@ -52,7 +43,7 @@ The repository is **public**. Never commit SOLIDWORKS installation media, instal
 4. Open repository **Settings > Secrets and variables > Actions > New repository secret**. Create:
    - `SWCOMPAT_INSTALLER_URL`: the temporary HTTPS download link.
    - `SWCOMPAT_INSTALLER_SHA256`: the exact locally calculated 64-character SHA-256.
-5. In repository **Actions > Licensed SOLIDWORKS bootstrapper first-launch trial**, choose **Run workflow** on `main`. This workflow executes the licensed installer only after a human explicitly dispatches it and provides the private media.
+5. Open **Actions > Experimental verified IPD WUSA servicing on native CLR4**, choose **Run workflow** on `main`, and enable `try_solidworks_after_ipd`. This is the integrated runtime route. The earlier standalone first-launch workflow remains a historical comparison.
 
 You can delete both secrets and private storage object after testing. The workflow never exposes the signed URL, uploads binary bytes or captures screenshot/log data. Only sanitized JSON diagnostics are uploaded.
 
