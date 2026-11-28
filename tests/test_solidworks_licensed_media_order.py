@@ -19,3 +19,11 @@ class LicensedMediaOrderTests(unittest.TestCase):
         self.assertIn("build/solidworks-windows-media.json", body[signature:controls])
         artifact = body[body.index("name: ipd-solidworks-windows-media-sanitized"):controls]
         self.assertNotIn("SolidworksSetup.exe", artifact)
+
+    def test_private_steps_are_unique_and_shell_is_not_truncated(self):
+        body = (Path(__file__).resolve().parents[1] / ".github/workflows/netfx40-legacy-ci.yml").read_text()
+        self.assertEqual(body.count("- name: Fetch private installer and classify"), 1)
+        self.assertEqual(body.count("- name: Verify exact SHA256, original PE and Dassault Authenticode signature"), 1)
+        self.assertEqual(body.count("python -m scripts.solidworks_private_media_fetch --destination build/SolidworksSetup.exe"), 1)
+        self.assertIn("if ($env:SWCOMPAT_INSTALLER_SHA256 -notmatch '^[a-fA-F0-9]{64}$')", body)
+        self.assertNotIn("\n) { throw", body)

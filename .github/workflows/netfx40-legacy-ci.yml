@@ -428,24 +428,8 @@ jobs:
           SWCOMPAT_INSTALLER_URL: ${{ secrets.SWCOMPAT_INSTALLER_URL }}
           SWCOMPAT_INSTALLER_SHA256: ${{ secrets.SWCOMPAT_INSTALLER_SHA256 }}
         run: |
-          if ($env:SWCOMPAT_INSTALLER_SHA256 -notmatch '^[a-fA-F0-9]{64} --destination build/SolidworksSetup.exe --output build/solidworks-windows-fetch.json
-          if ($LASTEXITCODE -ne 0) { throw "Private installer download failed; inspect sanitized fetch status" }
-      - name: Verify exact SHA256, original PE and Dassault Authenticode signature
-        if: github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd && inputs.try_481_ipd_apply_candidate
-        shell: pwsh
-        env:
-          SWCOMPAT_INSTALLER_URL: ${{ secrets.SWCOMPAT_INSTALLER_URL }}
-          SWCOMPAT_INSTALLER_SHA256: ${{ secrets.SWCOMPAT_INSTALLER_SHA256 }}
-        run: |
           $ErrorActionPreference = "Stop"
-          if (-not $env:SWCOMPAT_INSTALLER_SHA256) { throw "Set SWCOMPAT_INSTALLER_SHA256 repository secret" }
-          python -m scripts.solidworks_bootstrap_trial --installer build/SolidworksSetup.exe --sha256 $env:SWCOMPAT_INSTALLER_SHA256 --output build/solidworks-windows-media.json
-          if ($LASTEXITCODE -ne 0) { throw "SHA256 or Windows PE invalid" }
-          $signature = Get-AuthenticodeSignature -LiteralPath build/SolidworksSetup.exe
-          if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) { throw "Invalid Authenticode signature" }
-          if ($null -eq $signature.SignerCertificate -or $signature.SignerCertificate.Subject -notmatch '(?i)SOLIDWORKS|DASSAULT') { throw "Unexpected executable publisher" }
-          Write-Output "Original SOLIDWORKS publisher and SHA256: VERIFIED"
-) { throw "Set a valid SWCOMPAT_INSTALLER_SHA256 repository secret" }
+          if ($env:SWCOMPAT_INSTALLER_SHA256 -notmatch '^[a-fA-F0-9]{64}$') { throw "Set a valid SWCOMPAT_INSTALLER_SHA256 repository secret" }
           New-Item -ItemType Directory -Force -Path build | Out-Null
           python -m scripts.solidworks_private_media_fetch --destination build/SolidworksSetup.exe --output build/solidworks-windows-fetch.json
           if ($LASTEXITCODE -ne 0) { throw "Private installer download failed; inspect sanitized fetch status" }
