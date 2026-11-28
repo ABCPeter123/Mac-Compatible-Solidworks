@@ -94,11 +94,12 @@ jobs:
           env = dict(os.environ, WINEPREFIX=str(Path(os.environ["RUNNER_TEMP"]) / "netfx40-msxml3-prefix"), WINEARCH="win64", WINEDEBUG="-all")
           p = subprocess.run([os.environ["SWCOMPAT_WINE"], str(Path("build/d3d11_present_probe.exe").resolve())], env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=90, check=False)
           lines = p.stdout.decode("ascii", "replace").splitlines()
-          safe = [x for x in lines if re.fullmatch(r"SWCOMPAT_D3D_(?:HARDWARE|WARP|DWM)_(?:CREATE|TARGET|STAGING|MAP|PRESENT|DEVICE_REMOVED|QUERY)=[0-9A-F]{8}|SWCOMPAT_D3D_(?:HARDWARE|WARP)_(?:TEXTURE|WINDOW)=(?:MATCH|NOT_VERIFIED|NO_MATCH|API_FAILED)|SWCOMPAT_D3D_DWM_ENABLED=(?:YES|NO|UNKNOWN)|SWCOMPAT_D3D_PROBE=COMPLETE", x)]
+          safe = [x for x in lines if re.fullmatch(r"SWCOMPAT_D3D_(?:HARDWARE|WARP|DWM|DCOMP)_(?:CREATE|TARGET|STAGING|MAP|PRESENT|DEVICE_REMOVED|QUERY|LOAD|HARDWARE|WARP|DXGI_DEVICE|VISUAL|FACTORY|SWAPCHAIN|CONTENT|ROOT|RENDER_TARGET|COMMIT)=[0-9A-F]{8}|SWCOMPAT_D3D_(?:HARDWARE|WARP|DCOMP)_(?:TEXTURE|WINDOW)=(?:MATCH|NOT_VERIFIED|NO_MATCH|API_FAILED)|SWCOMPAT_D3D_DWM_ENABLED=(?:YES|NO|UNKNOWN)|SWCOMPAT_D3D_PROBE=COMPLETE", x)]
           print("\n".join(safe))
           Path("build/d3d11-present-sanitized.txt").write_text("\n".join(safe)+"\n", encoding="ascii")
           assert p.returncode == 0 and safe.count("SWCOMPAT_D3D_PROBE=COMPLETE") == 1
           assert all(any(x.startswith("SWCOMPAT_D3D_"+driver+"_CREATE=") for x in safe) for driver in ("HARDWARE","WARP"))
+          assert any(x.startswith("SWCOMPAT_D3D_DCOMP_LOAD=") for x in safe)
           print("Diagnostic complete; successful presentation does not prove visible pixels or SOLIDWORKS compatibility.")
           PY
       - uses: actions/upload-artifact@v4

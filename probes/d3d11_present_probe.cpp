@@ -2,7 +2,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <d3d11.h>
-#include <dxgi.h>
+#include <dxgi1_2.h>
+#include <dcomp.h>
 #include <dwmapi.h>
 #include <wrl/client.h>
 #include <cstdio>
@@ -54,6 +55,68 @@ static void run(const char *name,D3D_DRIVER_TYPE driver,HWND w){
         (channel_matches(GetRValue(p),29)&&channel_matches(GetGValue(p),205)&&channel_matches(GetBValue(p),91))?"MATCH":"NO_MATCH");
     report(name,"DEVICE_REMOVED",dev->GetDeviceRemovedReason());ctx->ClearState();ctx->Flush();
 }
+// Separately test the DirectComposition visual tree, not the classic HWND swapchain.
+static void run_composition(HWND w){
+    HMODULE lib=LoadLibraryW(L"dcomp.dll");
+    if(!lib){report("DCOMP","LOAD",HRESULT_FROM_WIN32(GetLastError()));return;}
+    using CreateDevice=HRESULT(WINAPI*)(IDXGIDevice*,REFIID,void**);
+    auto create=reinterpret_cast<CreateDevice>(GetProcAddress(lib,"DCompositionCreateDevice"));
+    report("DCOMP","LOAD",create?S_OK:HRESULT_FROM_WIN32(GetLastError()));
+    if(!create)return;
+    // Keep the module loaded until process exit, after all COM references release.
+    ComPtr<ID3D11Device> dev;ComPtr<ID3D11DeviceContext> ctx;
+    HRESULT h=D3D11CreateDevice(nullptr,D3D_DRIVER_TYPE_HARDWARE,nullptr,D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+        nullptr,0,D3D11_SDK_VERSION,&dev,nullptr,&ctx);
+    report("DCOMP","HARDWARE",h);
+    if(FAILED(h)){
+        h=D3D11CreateDevice(nullptr,D3D_DRIVER_TYPE_WARP,nullptr,D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            nullptr,0,D3D11_SDK_VERSION,&dev,nullptr,&ctx);
+        report("DCOMP","WARP",h);
+    }
+    if(FAILED(h)||!dev||!ctx)return;
+    ComPtr<IDXGIDevice> dxgi;h=dev.As(&dxgi);
+    report("DCOMP","DXGI_DEVICE",h);if(FAILED(h))return;
+    ComPtr<IDCompositionDevice> composition;
+    h=create(dxgi.Get(),IID_PPV_ARGS(&composition));
+    report("DCOMP","CREATE",h);if(FAILED(h)||!composition)return;
+    ComPtr<IDCompositionTarget> target;
+    h=composition->CreateTargetForHwnd(w,TRUE,&target);
+    report("DCOMP","TARGET",h);if(FAILED(h)||!target)return;
+    ComPtr<IDCompositionVisual> visual;h=composition->CreateVisual(&visual);
+    report("DCOMP","VISUAL",h);if(FAILED(h)||!visual)return;
+    ComPtr<IDXGIAdapter> adapter;ComPtr<IDXGIFactory2> factory;
+    h=dxgi->GetAdapter(&adapter);
+    if(SUCCEEDED(h))h=adapter->GetParent(IID_PPV_ARGS(&factory));
+    report("DCOMP","FACTORY",h);if(FAILED(h)||!factory)return;
+    DXGI_SWAP_CHAIN_DESC1 desc={};desc.Width=320;desc.Height=240;
+    desc.Format=DXGI_FORMAT_B8G8R8A8_UNORM;desc.SampleDesc.Count=1;
+    desc.BufferUsage=DXGI_USAGE_RENDER_TARGET_OUTPUT;desc.BufferCount=2;
+    desc.Scaling=DXGI_SCALING_STRETCH;desc.SwapEffect=DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+    desc.AlphaMode=DXGI_ALPHA_MODE_PREMULTIPLIED;
+    ComPtr<IDXGISwapChain1> swap;
+    h=factory->CreateSwapChainForComposition(dev.Get(),&desc,nullptr,&swap);
+    report("DCOMP","SWAPCHAIN",h);if(FAILED(h)||!swap)return;
+    h=visual->SetContent(swap.Get());
+    report("DCOMP","CONTENT",h);if(FAILED(h))return;
+    h=target->SetRoot(visual.Get());
+    report("DCOMP","ROOT",h);if(FAILED(h))return;
+    ComPtr<ID3D11Texture2D> back;ComPtr<ID3D11RenderTargetView> view;
+    h=swap->GetBuffer(0,IID_PPV_ARGS(&back));
+    if(SUCCEEDED(h))h=dev->CreateRenderTargetView(back.Get(),nullptr,&view);
+    report("DCOMP","RENDER_TARGET",h);if(FAILED(h)||!view)return;
+    const float green[]={29.f/255,205.f/255,91.f/255,1.f};
+    ctx->ClearRenderTargetView(view.Get(),green);
+    h=swap->Present(1,0);report("DCOMP","PRESENT",h);
+    if(FAILED(h))return;
+    h=composition->Commit();report("DCOMP","COMMIT",h);
+    if(FAILED(h))return;
+    for(int i=0;i<40;++i){pump();Sleep(25);}
+    HDC dc=GetDC(w);COLORREF p=dc?GetPixel(dc,160,120):CLR_INVALID;if(dc)ReleaseDC(w,dc);
+    printf("SWCOMPAT_D3D_DCOMP_WINDOW=%s\n",p==CLR_INVALID?"API_FAILED":
+        (channel_matches(GetRValue(p),29)&&channel_matches(GetGValue(p),205)&&channel_matches(GetBValue(p),91))?"MATCH":"NO_MATCH");
+    fflush(stdout);
+}
+
 int main(){
     WNDCLASSW wc={};wc.lpfnWndProc=wndproc;wc.hInstance=GetModuleHandleW(nullptr);wc.lpszClassName=L"SWCompatSyntheticD3D11";
     if(!RegisterClassW(&wc))return 2;
@@ -62,5 +125,10 @@ int main(){
     BOOL enabled=FALSE;HRESULT h=DwmIsCompositionEnabled(&enabled);report("DWM","QUERY",h);
     printf("SWCOMPAT_D3D_DWM_ENABLED=%s\n",FAILED(h)?"UNKNOWN":enabled?"YES":"NO");
     run("HARDWARE",D3D_DRIVER_TYPE_HARDWARE,w);run("WARP",D3D_DRIVER_TYPE_WARP,w);
-    DestroyWindow(w);puts("SWCOMPAT_D3D_PROBE=COMPLETE");return 0;
+    DestroyWindow(w);
+    HWND cw=CreateWindowExW(0,wc.lpszClassName,L"Synthetic DirectComposition control",WS_OVERLAPPEDWINDOW,100,100,360,300,nullptr,nullptr,wc.hInstance,nullptr);
+    if(!cw)return 2;
+    ShowWindow(cw,SW_SHOWNORMAL);UpdateWindow(cw);pump();
+    run_composition(cw);DestroyWindow(cw);
+    puts("SWCOMPAT_D3D_PROBE=COMPLETE");return 0;
 }
