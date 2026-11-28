@@ -60,7 +60,7 @@ def windows_path(path: Path) -> str:
 
 
 def inspect(wine: Path, prefix: Path, fixture: Path, package: Path,
-            digest: Path, stage: Path) -> dict:
+            digest: Path, stage: Path, *, builtin_xml: bool = True) -> dict:
     runner = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
     if (os.name == "nt" or prefix.is_symlink() or stage.is_symlink()
             or prefix.resolve().parent != runner or prefix.name != "netfx40-msxml3-prefix"
@@ -81,7 +81,10 @@ def inspect(wine: Path, prefix: Path, fixture: Path, package: Path,
     # installs a native MSXML3 override into the persistent CLR4 prefix.
     # Isolate WUSA's COM parser without changing the prefix's overrides
     # or the independently measured native CLR baseline.
-    env["WINEDLLOVERRIDES"] = "msxml,msxml2,msxml3,msxml4,msxml6=b"
+    if builtin_xml:
+        env["WINEDLLOVERRIDES"] = "msxml,msxml2,msxml3,msxml4,msxml6=b"
+    else:
+        env.pop("WINEDLLOVERRIDES", None)
     # Exercise the compiled numeric parser on the real Wine runtime before
     # trusting the dependency report. Neither self-test nor probe may install.
     with tempfile.TemporaryFile() as test_out:
@@ -117,10 +120,12 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__)
     for name in ("wine", "prefix", "fixture", "package", "sha256-file", "stage", "output"):
         p.add_argument("--" + name, type=Path, required=True)
+    p.add_argument("--control-default-xml", action="store_true", help="Read-only A/B control with existing prefix XML overrides")
     a = p.parse_args()
     if a.output.exists() or a.output.is_symlink():
         raise ValueError("Report must be fresh")
-    r = inspect(a.wine, a.prefix, a.fixture, a.package, a.sha256_file, a.stage)
+    r = inspect(a.wine, a.prefix, a.fixture, a.package, a.sha256_file, a.stage,
+                builtin_xml=not a.control_default_xml)
     a.output.write_text(json.dumps(r, sort_keys=True), encoding="ascii")
     print("WUSA verified IPD preflight", json.dumps(r, sort_keys=True))
     # A diagnostic failure still produces useful evidence. Do not conflate
