@@ -18,7 +18,7 @@ static void pump() {
         TranslateMessage(&m); DispatchMessageW(&m);
     }
 }
-static bool near(int x,int y){return std::abs(x-y)<=2;}
+static bool channel_matches(int x,int y){return std::abs(x-y)<=2;}
 static void run(const char *name,D3D_DRIVER_TYPE driver,HWND w){
     ComPtr<ID3D11Device> dev; ComPtr<ID3D11DeviceContext> ctx; ComPtr<IDXGISwapChain> swap;
     DXGI_SWAP_CHAIN_DESC sd={};
@@ -43,7 +43,7 @@ static void run(const char *name,D3D_DRIVER_TYPE driver,HWND w){
         if(FAILED(h)){match=false;break;}
         if(!map.pData||map.RowPitch<320*4)match=false;
         else{auto p=static_cast<const BYTE*>(map.pData)+120*map.RowPitch+160*4;
-             match=match&&near(p[0],expected[i][0])&&near(p[1],expected[i][1])&&near(p[2],expected[i][2])&&p[3]>=253;}
+             match=match&&channel_matches(p[0],expected[i][0])&&channel_matches(p[1],expected[i][1])&&channel_matches(p[2],expected[i][2])&&p[3]>=253;}
         ctx->Unmap(staging.Get(),0);
     }
     report(name,"MAP",h);printf("SWCOMPAT_D3D_%s_TEXTURE=%s\n",name,match?"MATCH":"NOT_VERIFIED");fflush(stdout);
@@ -51,7 +51,7 @@ static void run(const char *name,D3D_DRIVER_TYPE driver,HWND w){
     for(int i=0;i<20;++i){pump();Sleep(25);}
     HDC dc=GetDC(w);COLORREF p=dc?GetPixel(dc,160,120):CLR_INVALID;if(dc)ReleaseDC(w,dc);
     printf("SWCOMPAT_D3D_%s_WINDOW=%s\n",name,p==CLR_INVALID?"API_FAILED":
-        (near(GetRValue(p),29)&&near(GetGValue(p),205)&&near(GetBValue(p),91))?"MATCH":"NO_MATCH");
+        (channel_matches(GetRValue(p),29)&&channel_matches(GetGValue(p),205)&&channel_matches(GetBValue(p),91))?"MATCH":"NO_MATCH");
     report(name,"DEVICE_REMOVED",dev->GetDeviceRemovedReason());ctx->ClearState();ctx->Flush();
 }
 int main(){
