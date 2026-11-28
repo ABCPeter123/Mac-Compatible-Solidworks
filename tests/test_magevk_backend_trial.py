@@ -50,7 +50,7 @@ class MageVKTests(unittest.TestCase):
             new = root / "verified.dylib"
             new.write_bytes(b"new")
             wire_loader(engine, new)
-            self.assertEqual(old.resolve(), new)
-            self.assertEqual(dangling.resolve(), new)
+            self.assertEqual(old.resolve(), new.resolve())
+            self.assertEqual(dangling.resolve(), new.resolve())
             self.assertEqual((a / (old.name + ".swcompat-original")).read_bytes(), b"original")
             self.assertEqual(str((b / (old.name + ".swcompat-original")).readlink()), "missing.dylib")
