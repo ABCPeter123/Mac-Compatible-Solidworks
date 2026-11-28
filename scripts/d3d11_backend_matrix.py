@@ -22,20 +22,22 @@ def main():
             raise ValueError("Unable to quiesce isolated graphics prefix")
         if wineboot_restart(wine, prefix) != "COMPLETED":
             raise ValueError("Unable to restart isolated graphics prefix")
-        env = dict(os.environ, WINEPREFIX=str(prefix), WINEARCH="win64", WINEDEBUG="-all")
+        env = dict(os.environ, WINEPREFIX=str(prefix), WINEARCH="win64", WINEDEBUG="-all,err+winediag,err+wined3d,err+vulkan")
         env.pop("WINE_D3D_CONFIG", None)
         if profile != "default":
             env["WINE_D3D_CONFIG"] = "renderer=" + profile
         with tempfile.TemporaryFile() as log:
             try:
-                p = subprocess.run([str(wine), str(Path("build/d3d11_present_probe.exe").resolve())], env=env, stdout=log, stderr=subprocess.DEVNULL, timeout=90, check=False)
+                p = subprocess.run([str(wine), str(Path("build/d3d11_present_probe.exe").resolve())], env=env, stdout=log, stderr=subprocess.STDOUT, timeout=90, check=False)
                 rc = p.returncode
             except subprocess.TimeoutExpired:
                 rc = 124
             log.seek(0)
             raw = log.read(65537)
         safe = [line for line in raw.decode("ascii", "replace").splitlines() if MARKER.fullmatch(line)] if len(raw) <= 65536 else []
+        decoded = raw.decode("ascii", "replace") if len(raw) <= 65536 else ""
         print("Graphics profile:", profile, "exit:", rc)
+        print("Wine renderer selection:", "VULKAN" if "Using the Vulkan renderer." in decoded else "OPENGL" if "Using the OpenGL renderer." in decoded else "NOT_OBSERVED")
         print("\n".join(safe))
         Path("build/d3d11-present-" + profile + "-sanitized.txt").write_text("\n".join(safe)+"\n", encoding="ascii")
         complete = (rc == 0 and safe.count("SWCOMPAT_D3D_PROBE=COMPLETE") == 1

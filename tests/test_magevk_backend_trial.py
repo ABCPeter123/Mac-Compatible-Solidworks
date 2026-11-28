@@ -4,7 +4,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
-from scripts.magevk_backend_trial import extract_library
+from scripts.magevk_backend_trial import extract_library, wire_loader
 
 
 class MageVKTests(unittest.TestCase):
@@ -35,3 +35,22 @@ class MageVKTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     extract_library(p, dest, digest=expected)
                 self.assertFalse(dest.exists())
+
+    def test_preserve_existing_regular_and_dangling_loader(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            engine = root / "wiage"
+            a = engine / "lib"
+            b = a / "wine/x86_64-unix"
+            b.mkdir(parents=True)
+            old = a / "libvulkan.1.dylib"
+            old.write_bytes(b"original")
+            dangling = b / old.name
+            dangling.symlink_to("missing.dylib")
+            new = root / "verified.dylib"
+            new.write_bytes(b"new")
+            wire_loader(engine, new)
+            self.assertEqual(old.resolve(), new)
+            self.assertEqual(dangling.resolve(), new)
+            self.assertEqual((a / (old.name + ".swcompat-original")).read_bytes(), b"original")
+            self.assertEqual(str((b / (old.name + ".swcompat-original")).readlink()), "missing.dylib")

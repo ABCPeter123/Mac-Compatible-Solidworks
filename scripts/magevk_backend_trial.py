@@ -39,25 +39,58 @@ def extract_library(archive: Path, target: Path, *, digest: str = DIGEST):
     return target
 
 
+def wire_loader(engine: Path, destination: Path):
+    """Keep the original entries for inspection; only modify this private engine."""
+    if destination.is_symlink() or not destination.is_file():
+        raise ValueError("Verified regular replacement required")
+    directories = (engine / "lib", engine / "lib/wine/x86_64-unix")
+    entries = []
+    for directory in directories:
+        if not directory.is_dir() or not directory.resolve().is_relative_to(engine.resolve()):
+            raise ValueError("Missing engine library directory")
+        link = directory / "libvulkan.1.dylib"
+        backup = directory / "libvulkan.1.dylib.swcompat-original"
+        if backup.exists() or backup.is_symlink():
+            raise ValueError("Unexpected previous backup")
+        if link.is_symlink():
+            category = "SYMLINK_RESOLVED" if link.exists() else "SYMLINK_DANGLING"
+        elif link.is_file():
+            category = "REGULAR_FILE"
+        elif link.exists():
+            raise ValueError("Unexpected Vulkan loader type")
+        else:
+            category = "ABSENT"
+        entries.append((link, backup, category))
+    completed = []
+    try:
+        for link, backup, category in entries:
+            if category != "ABSENT":
+                link.rename(backup)
+            completed.append((link, backup, category))
+            link.symlink_to(destination)
+            if not link.is_file() or link.resolve() != destination.resolve():
+                raise ValueError("Replacement loader did not resolve")
+    except Exception:
+        for link, backup, category in reversed(completed):
+            if link.is_symlink():
+                link.unlink()
+            if category != "ABSENT":
+                backup.rename(link)
+        raise
+    for i, (_, _, category) in enumerate(entries):
+        print("Original Vulkan loader slot", i, ":", category)
+
+
 def main():
     root = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
     engine = root / "msxml3-wine-build" / "wiage"
     wine = engine / "bin/wine"
-    if engine.is_symlink() or not wine.is_file() or not os.access(wine, os.X_OK):
+    if (engine.is_symlink() or engine.resolve() != engine
+            or not wine.is_file() or not os.access(wine, os.X_OK)):
         raise ValueError("Pinned engine required")
     destination = root / "magevk-pinned" / "libMoltenVK.dylib"
     extract_library(root / "magevk-lib.tar.gz", destination)
-    # The upstream Wiage README documents these two loader locations.
-    # Never overwrite an existing regular file or an unrelated symlink.
-    for directory in (engine / "lib", engine / "lib/wine/x86_64-unix"):
-        if not directory.is_dir() or not directory.resolve().is_relative_to(engine.resolve()):
-            raise ValueError("Missing engine library directory")
-        link = directory / "libvulkan.1.dylib"
-        if link.exists() or link.is_symlink():
-            if link.resolve() != destination:
-                raise ValueError("Existing Vulkan loader must be measured separately")
-        else:
-            link.symlink_to(destination)
+    wire_loader(engine, destination)
     print("Pinned MageVK loader installed in isolated CI engine")
 
 

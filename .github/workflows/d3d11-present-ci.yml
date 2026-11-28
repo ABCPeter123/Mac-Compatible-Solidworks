@@ -5,6 +5,9 @@ on:
     paths:
       - 'probes/d3d11_present_probe.cpp'
       - '.github/workflows/d3d11-present-ci.yml'
+      - 'scripts/magevk_backend_trial.py'
+      - 'scripts/d3d11_backend_matrix.py'
+      - 'tests/test_magevk_backend_trial.py'
 permissions:
   contents: read
 concurrency:
