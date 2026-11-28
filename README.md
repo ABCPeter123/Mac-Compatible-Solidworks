@@ -2,7 +2,13 @@
 
 An open-source engineering testbed for running the **original, licensed Windows SOLIDWORKS application** on macOS, without rebuilding SOLIDWORKS or requiring a commercial VM.
 
-**Status: independent Windows x64 execution, OpenGL 4.5 depth-buffered rendering, and official Microsoft WebView2 Runtime installation with a real controller are verified on hosted Apple Silicon Wine. SOLIDWORKS installation, activation and CAD functionality have NOT been demonstrated.**
+**Status: native Microsoft CLR 4.8.1 and official WebView2 now coexist in one Apple Silicon Wine prefix. All 10 x86/x64 CAD prerequisite probes and native Win32 GDI passed. SOLIDWORKS installation, activation and CAD functionality remain unverified.**
+
+## Current milestone: combined runtime prerequisites verified
+
+[Integrated Apple Silicon run 46082976493](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/46082976493) installed genuine WebView2 with exit zero, verified controller creation after full Wine shutdown/restart, serviced the authentic Microsoft CLR4 to the experimental original-payload 4.8.1 candidate, registered all 274 original GAC entries, verified eight deferred files and all four native CLR/mscorlib byte identities, and rechecked WebView2 afterward. Both architectures passed CLR, WinForms, WPF pixel readback, WCF and COM tests. HTML/DOM, Canvas 2D and CSS layout passed; browser compositor pixels and animation frames remain unverified. This is not complete Windows CBS equivalence.
+
+**Next: [run the integrated licensed bootstrapper workflow](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/workflows/netfx481-ipd-apply-candidate-ci.yml)** on `main` with `try_solidworks_after_ipd` enabled. Supply a private unexpired installer URL and matching SHA-256 through GitHub Actions secrets; see [setup instructions](docs/FIRST_AUTHENTIC_INSTALLER_TRIAL.md). The original installer is never fetched during an ordinary PR or push. No license activation or full installation is automated.
 
 ## Authentic installer launch (verified process execution, installation unverified)
 
@@ -12,7 +18,9 @@ The opt-in [licensed installer trial](.github/workflows/solidworks-bootstrap-tri
 
 **The authentic SOLIDWORKS installer has now been downloaded, digitally verified and executed under hosted Apple Silicon Wine** ([CI run 43494158179](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/43494158179)). Its process started and remained running until the bounded 120-second timeout. Installation Manager visibility, completed installation, activation and working CAD remain **NOT VERIFIED**. Later diagnostic runs detected one visible, responsive installer-associated Win32 window, but client-area pixel readback failed. The current probe also checks visible child HWNDs, owned popup windows and composition styles on the next manually dispatched trial, without collecting screenshots or licenses.
 
-## Current compatibility blocker: original Microsoft .NET 4.8 MSP error 1603
+## Historical compatibility blocker: original Microsoft .NET 4.8 MSP error 1603
+
+The experimental original-payload IPD route now provides a functional native 4.8.1 runtime candidate without asserting that the original 4.8 MSP or Windows CBS servicing succeeds. The following evidence remains historical context, not the current integrated runtime blocker.
 
 **Verified on authenticated Apple Silicon, November 24, 2026:** [Run #45426863980, attempt 2](https://github.com/ABCPeter123/Mac-Compatible-Solidworks/actions/runs/45426863980) passed genuine .NET 4.0 x64 and x86 NGen preflights, installed the original signed .NET 4.8 x64 MSI, changed the authentic x64 Microsoft CLR binary, reached genuine registry `NETFX48_RANGE`, and ran native-only managed code successfully **after a clean Wine restart**.
 
