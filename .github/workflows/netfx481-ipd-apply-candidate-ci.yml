@@ -44,3 +44,5 @@ jobs:
 # Experimental prerequisite order: verified WebView2 first, then native CLR; re-probe both after servicing.
 
 # Recover only an observed functional browser after verified shutdown and restart; keep strict licensed-launch gate.
+
+# Synthetic-only foreground and software compositor differential after the verified same-prefix baseline.

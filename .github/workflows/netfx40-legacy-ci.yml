@@ -2255,6 +2255,15 @@ jobs:
             --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" --probe build/webview2_render_probe.exe \
             --runtime build/solidworks-webview2-prerequisite.json --restart build/solidworks-webview2-restart.json \
             --output build/ipd-webview2-render.json
+      - name: Compare foreground scheduling and software compositor on synthetic WebView2
+        if: github.event_name == 'pull_request' && inputs.try_481_ipd_apply_candidate && inputs.try_webview2_after_ipd
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx481_webview2_render --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" --probe build/webview2_render_probe.exe \
+            --runtime build/solidworks-webview2-prerequisite.json --restart build/solidworks-webview2-restart.json \
+            --output build/ipd-webview2-compositor-differential.json --compare-compositor-profiles
       - name: Launch verified original SOLIDWORKS bootstrapper with real CLR and WebView2
         if: github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd && inputs.try_481_ipd_apply_candidate
         shell: bash
@@ -2282,6 +2291,7 @@ jobs:
             build/solidworks-webview2-restart-attempt1.json
             build/solidworks-webview2-persistence.json
             build/ipd-webview2-render.json
+            build/ipd-webview2-compositor-differential.json
             build/netfx481-cad-prerequisites.json
             build/netfx481-cad-windows-reference.json
             build/solidworks-macos-gdi-reference.json

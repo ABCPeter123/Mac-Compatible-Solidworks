@@ -13,13 +13,25 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from scripts.netfx481_trial import validate_prefix
+from scripts.netfx481_trial import validate_prefix, wineboot_restart
+from scripts.netfx40_legacy import _terminate_private_setup_wineserver
 from scripts.netfx481_webview2_restart_gate import operational
 from scripts import webview2_render_report as render
 from scripts import webview2_canvas_report as canvas
 from scripts import webview2_layout_report as layout
 from scripts import webview2_gdi_report as gdi
 from scripts.webview2_render_gate import classify, load_report
+
+# Only local synthetic HTML. No sandbox, origin, certificate or security
+# switches; no flags are inherited by the private installer.
+PROFILES = {
+    "default": (),
+    "foreground": ("--disable-background-timer-throttling", "--disable-renderer-backgrounding",
+                   "--disable-backgrounding-occluded-windows"),
+    "software_foreground": ("--disable-gpu", "--disable-gpu-compositing",
+                            "--disable-features=Vulkan", "--disable-background-timer-throttling",
+                            "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows"),
+}
 
 
 def measure(log: str, exit_code: int, screenshot: bytes | None, runtime: dict, *, restart: dict | None = None) -> dict:
@@ -28,7 +40,7 @@ def measure(log: str, exit_code: int, screenshot: bytes | None, runtime: dict, *
                     operational_restart=restart)
 
 
-def run(wine: Path, prefix: Path, probe: Path, runtime: dict, restart: dict) -> dict:
+def run(wine: Path, prefix: Path, probe: Path, runtime: dict, restart: dict, *, profile: str = "default") -> dict:
     validate_prefix(prefix)
     root = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
     if (os.name == "nt" or prefix.is_symlink()
@@ -48,6 +60,10 @@ def run(wine: Path, prefix: Path, probe: Path, runtime: dict, restart: dict) -> 
     env = os.environ.copy()
     env.pop("WINEDLLOVERRIDES", None)
     env.pop("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", None)
+    if profile not in PROFILES:
+        raise ValueError("Unknown bounded synthetic render profile")
+    if PROFILES[profile]:
+        env["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = " ".join(PROFILES[profile])
     env.update(WINEPREFIX=str(prefix.resolve()), WINEARCH="win64", WINEDEBUG="-all")
     with tempfile.TemporaryDirectory(prefix="swcompat-ipd-webview-") as directory:
         scratch = Path(directory)
@@ -82,11 +98,42 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     for key in ("wine", "prefix", "probe", "runtime", "restart", "output"):
         p.add_argument("--" + key, required=True, type=Path)
+    p.add_argument("--compare-compositor-profiles", action="store_true", help="Synthetic diagnostic only; restart Wine between profiles")
     a = p.parse_args()
     if (a.output.exists() or a.output.is_symlink()
             or a.output.resolve().is_relative_to(a.prefix.resolve())):
         raise ValueError("Fresh external report required")
-    result = run(a.wine, a.prefix, a.probe, load_report(a.runtime), load_report(a.restart))
+    runtime, restart = load_report(a.runtime), load_report(a.restart)
+    if a.compare_compositor_profiles:
+        # Stop old browser instances, including renderer descendants, so a
+        # newly selected process-local profile cannot accidentally reuse them.
+        # This path is never executed by the licensed launch workflow.
+        validate_prefix(a.prefix)
+        root = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
+        if (a.prefix.is_symlink() or a.prefix.resolve() != root / "netfx40-msxml3-prefix"
+                or not operational(runtime, restart)):
+            raise ValueError("Verified disposable prefix required")
+        profiles = {}
+        for profile in ("foreground", "software_foreground"):
+            if not _terminate_private_setup_wineserver(a.wine, a.prefix):
+                profiles[profile] = {"session": "SHUTDOWN_FAILED", "result": None}
+                break
+            state = wineboot_restart(a.wine, a.prefix, timeout=120)
+            if state != "COMPLETED":
+                profiles[profile] = {"session": state, "result": None}
+                break
+            profiles[profile] = {"session": state,
+                                 "result": run(a.wine, a.prefix, a.probe, runtime, restart, profile=profile)}
+        cleaned = _terminate_private_setup_wineserver(a.wine, a.prefix)
+        result = {"schema": 1, "profiles": profiles, "final_session_quiesced": cleaned,
+                  "solidworks_compatibility": "NOT_DEMONSTRATED"}
+        a.output.parent.mkdir(parents=True, exist_ok=True)
+        a.output.write_text(json.dumps(result, sort_keys=True) + "\n", encoding="ascii")
+        print("Synthetic compositor differential " + json.dumps(result, sort_keys=True))
+        return 0 if (cleaned and len(profiles) == 2
+                     and all(v["session"] == "COMPLETED" and v["result"] is not None
+                             for v in profiles.values())) else 1
+    result = run(a.wine, a.prefix, a.probe, runtime, restart)
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_text(json.dumps(result, sort_keys=True) + "\n", encoding="ascii")
     print("Same-prefix WebView2 rendering " + json.dumps(result, sort_keys=True))
