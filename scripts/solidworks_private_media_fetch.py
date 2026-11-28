@@ -38,31 +38,55 @@ class HTTPSOnlyRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(request, fp, code, msg, headers, newurl)
 
 
-def check_url(url: str, now: datetime | None = None) -> str | None:
-    """Returns a bounded status only. Does not reveal URL or query contents."""
+def url_diagnostic(url: str, now: datetime | None = None) -> tuple[str | None, str]:
+    """Fixed diagnostic codes only; never echo any secret substring."""
     if not url:
-        return "MISSING_CONFIGURATION"
-    if len(url) > MAX_URL_LENGTH or url.strip() != url or any(ord(c) < 32 for c in url):
-        return "UNSAFE_URL"
+        return "MISSING_CONFIGURATION", "EMPTY"
+    if len(url) > MAX_URL_LENGTH:
+        return "UNSAFE_URL", "TOO_LONG"
+    if url.strip() != url:
+        return "UNSAFE_URL", "SURROUNDING_WHITESPACE"
+    if any(ord(c) < 32 or ord(c) == 127 for c in url):
+        return "UNSAFE_URL", "CONTROL_CHARACTER"
+    if any(c.isspace() for c in url):
+        return "UNSAFE_URL", "UNENCODED_WHITESPACE"
+    if url.startswith(('"', "'")) or url.endswith(('"', "'")):
+        return "UNSAFE_URL", "SURROUNDING_QUOTES"
     try:
         parsed = urllib.parse.urlsplit(url)
-        if (parsed.scheme.lower() != "https" or not parsed.hostname
-                or parsed.username is not None or parsed.password is not None
-                or parsed.fragment or parsed.port not in (None, 443)):
-            return "UNSAFE_URL"
+        if parsed.scheme.lower() != "https":
+            return "UNSAFE_URL", "HTTPS_REQUIRED"
+        if not parsed.hostname:
+            return "UNSAFE_URL", "HOST_REQUIRED"
+        if parsed.username is not None or parsed.password is not None:
+            return "UNSAFE_URL", "EMBEDDED_CREDENTIALS"
+        if parsed.fragment:
+            return "UNSAFE_URL", "URL_FRAGMENT"
+        if parsed.port not in (None, 443):
+            return "UNSAFE_URL", "NONSTANDARD_PORT"
         query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
         signed = query.get("X-Amz-Date")
         ttl = query.get("X-Amz-Expires")
-        if signed and ttl and len(signed) == len(ttl) == 1:
-            timestamp = datetime.strptime(signed[0], "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
-            lifetime = int(ttl[0])
+        if signed is not None or ttl is not None:
+            if not signed or not ttl or len(signed) != 1 or len(ttl) != 1:
+                return "UNSAFE_URL", "SIGNATURE_FIELDS"
+            try:
+                timestamp = datetime.strptime(signed[0], "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+                lifetime = int(ttl[0])
+            except (ValueError, OverflowError):
+                return "UNSAFE_URL", "SIGNATURE_DATE_OR_TTL"
             if not 1 <= lifetime <= 604800:
-                return "UNSAFE_URL"
+                return "UNSAFE_URL", "SIGNATURE_TTL_RANGE"
             if (now or datetime.now(timezone.utc)) >= timestamp + timedelta(seconds=lifetime):
-                return "PRESIGNED_URL_EXPIRED"
+                return "PRESIGNED_URL_EXPIRED", "SIGNATURE_EXPIRED"
     except (ValueError, OverflowError):
-        return "UNSAFE_URL"
-    return None
+        return "UNSAFE_URL", "MALFORMED_URL"
+    return None, "ACCEPTED"
+
+
+def check_url(url: str, now: datetime | None = None) -> str | None:
+    """Preserve the existing public classification contract."""
+    return url_diagnostic(url, now)[0]
 
 
 def http_status(code: int) -> str:
@@ -86,7 +110,8 @@ def fetch(url: str, dest: Path, *, opener=None, sleep=time.sleep) -> dict:
         "secret_url_logged": False,
         "solidworks_compatibility": "NOT_DEMONSTRATED",
     }
-    invalid = check_url(url)
+    invalid, reason = url_diagnostic(url)
+    result["url_diagnostic"] = reason
     if invalid:
         result["result"] = invalid
         return result
@@ -148,7 +173,10 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError):
         parser.error("Unable to write sanitized media-download status")
     print("Private installer download:", result["result"])
-    if result["result"] == "HTTP_404_NOT_FOUND":
+    print("Private installer URL diagnostic:", result["url_diagnostic"])
+    if result["result"] == "UNSAFE_URL":
+        print("Replace the secret with a raw HTTPS GET URL, without quotes, spaces, newlines, or fragments. For R2, generate a fresh signature with a lifetime of at most seven days.")
+    elif result["result"] == "HTTP_404_NOT_FOUND":
         print("R2 object/key could not be fetched. Verify exact bucket, object name and signed GET URL locally.")
     elif result["result"] in ("PRESIGNED_URL_EXPIRED", "HTTP_403_FORBIDDEN"):
         print("Verify R2 signed URL expiration, method GET and token permissions; generate a fresh URL.")
