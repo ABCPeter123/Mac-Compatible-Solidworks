@@ -316,7 +316,8 @@ def reconstruct(codec: Path, raw_dir: Path, extracted: list[Path],
                 work: Path, expanded: Path | None,
                 verified_codec: Path | None = None,
                 recipe_dir: Path | None = None,
-                allow_synthesis: bool = False) -> dict:
+                allow_synthesis: bool = False,
+                stage_dir: Path | None = None) -> dict:
     """Reconstruct every eligible CIX node with its declared private basis.
 
     Native Windows Expand is an independent oracle, never a source for the
@@ -501,6 +502,13 @@ def reconstruct(codec: Path, raw_dir: Path, extracted: list[Path],
         tree.update(entries[fid].length.to_bytes(8, "little"))
         tree.update(sha256_file(target))
     report["cix_tree_sha256"] = tree.hexdigest()
+    if stage_dir is not None:
+        from scripts.netfx481_native_delta_gate import require_complete
+        from scripts.netfx481_ipd_stage import stage_original
+        require_complete(dict(report, catalog_verified=True, ipd_cabs=1,
+                              oracle_available=bool(expanded)), windows_oracle=bool(expanded))
+        report.update(stage_original({entries[fid].name: target for fid, target in outputs.items()},
+                                     stage_dir))
     return report
 
 
@@ -508,7 +516,8 @@ def inspect(package: Path, manifest: Path, sevenzip: Path, codec: Path,
             expand: Path | None = None,
             verified_codec: Path | None = None,
             recipe_dir: Path | None = None,
-            allow_synthesis: bool = False) -> dict:
+            allow_synthesis: bool = False,
+            stage_dir: Path | None = None) -> dict:
     paths = [package, manifest, sevenzip, codec] + ([expand] if expand else [])
     if any(p.is_symlink() for p in paths):
         raise ValueError("Linked inputs prohibited")
@@ -532,6 +541,10 @@ def inspect(package: Path, manifest: Path, sevenzip: Path, codec: Path,
         if recipe_dir.is_symlink() or not recipe_dir.is_dir():
             raise ValueError("Invalid recipe directory")
         recipe_dir = recipe_dir.resolve(strict=True)
+    if stage_dir is not None:
+        if stage_dir.exists() or stage_dir.is_symlink():
+            raise ValueError("Stage destination must be fresh")
+        stage_dir = stage_dir.parent.resolve(strict=True) / stage_dir.name
     report = {"catalog_verified": True, "cab_count": 0, "ipd_cabs": 0,
               "candidate_streams": 0, "sampled_streams": 0, "decoded": 0,
               "failed": 0, "oracle_available": bool(expand), "oracle_matches": 0,
@@ -577,14 +590,17 @@ def inspect(package: Path, manifest: Path, sevenzip: Path, codec: Path,
                     raise ValueError("Empty Windows reference expansion")
             graph_work = work / f"graph-{index}"
             graph_work.mkdir()
-            graph = reconstruct(codec, raw_dir, extracted, graph_work, expanded, verified_codec, recipe_dir, allow_synthesis)
+            graph = reconstruct(codec, raw_dir, extracted, graph_work, expanded, verified_codec, recipe_dir, allow_synthesis, stage_dir)
             # KB5011048 is pinned to a single IPD cabinet. Refuse a
             # second graph rather than silently mix unrelated tree digests.
             if "cix_tree_sha256" in report:
                 raise ValueError("Unexpected second CIX graph")
             report["cix_tree_sha256"] = graph.pop("cix_tree_sha256")
             for key, value in graph.items():
-                report[key] = report.get(key, 0) + value
+                if key.startswith("stage_"):
+                    report[key] = value
+                else:
+                    report[key] = report.get(key, 0) + value
             # Preserve the earlier independent empty-source control sample.
             for p in sorted(extracted, key=lambda p: (p.stat().st_size, str(p))):
                 if not 8 <= p.stat().st_size <= MAX_FILE:
@@ -623,10 +639,11 @@ def main() -> int:
                    default=Path(__file__).resolve().parents[1] / "data/netfx481/recipes")
     p.add_argument("--synthesize-recipes", action="store_true",
                    help="Research only: explicitly allow Windows-reference recipe synthesis")
+    p.add_argument("--stage-dir", type=Path, help="Explicit private CI staging of the verified full tree")
     a = p.parse_args()
     if a.output.is_symlink() or a.output.exists():
         p.error("Report must be a fresh path")
-    r = inspect(a.package, a.sha256_file, a.sevenzip, a.codec, a.expand, a.verified_codec, a.recipe_dir, a.synthesize_recipes)
+    r = inspect(a.package, a.sha256_file, a.sevenzip, a.codec, a.expand, a.verified_codec, a.recipe_dir, a.synthesize_recipes, a.stage_dir)
     a.output.write_text(json.dumps(r, sort_keys=True), encoding="ascii")
     for key, value in r.items():
         print("Native IPD delta reconstruction", key, value)

@@ -4,6 +4,11 @@ on:
     paths:
       - 'scripts/netfx481_native_delta.py'
       - 'scripts/netfx481_native_delta_gate.py'
+      - 'scripts/netfx481_ipd_stage.py'
+      - 'scripts/patch_wusa_ipd_dryrun.py'
+      - 'scripts/netfx481_ipd_wusa_dryrun.py'
+      - 'tests/test_netfx481_ipd_wusa_dryrun.py'
+      - 'tests/test_netfx481_ipd_stage.py'
       - 'scripts/netfx481_cix_graph.py'
       - 'data/netfx481/recipes/**'
       - 'scripts/patch_msdelta_compat.py'
@@ -27,6 +32,10 @@ jobs:
           python-version: '3.12'
       - name: Test bounded decoder adapter
         run: python -m unittest discover -s tests -p test_netfx481_native_delta.py -v
+      - name: Test private staging safety
+        run: python -m unittest discover -s tests -p test_netfx481_ipd_stage.py -v
+      - name: Test WUSA preflight contract
+        run: python -m unittest discover -s tests -p test_netfx481_ipd_wusa_dryrun.py -v
       - name: Build pinned MSDelta CLI and intrinsic-hash compatibility adapter
         shell: bash
         run: |
@@ -66,8 +75,8 @@ jobs:
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 3 || 7 }}
   decode-macos:
-    runs-on: macos-15
-    timeout-minutes: 25
+    runs-on: macos-26
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -75,6 +84,10 @@ jobs:
           python-version: '3.12'
       - name: Test bounded decoder adapter
         run: python -m unittest discover -s tests -p test_netfx481_native_delta.py -v
+      - name: Test private staging safety
+        run: python -m unittest discover -s tests -p test_netfx481_ipd_stage.py -v
+      - name: Test WUSA preflight contract
+        run: python -m unittest discover -s tests -p test_netfx481_ipd_wusa_dryrun.py -v
       - name: Build pinned MSDelta CLI and intrinsic-hash compatibility adapter
         shell: bash
         run: |
@@ -95,7 +108,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build
-          trap 'rm -f build/KB5011048.msu' EXIT
           curl --fail --location --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 600 --connect-timeout 20 --max-time 120 --output build/KB5011048.msu \
             'https://catalog.s.download.windowsupdate.com/c/msdownload/update/software/ftpk/2023/09/windows10.0-kb5011048-x64_411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e.msu'
           python -c 'import hashlib; from pathlib import Path; p=Path("build/KB5011048.msu"); data=p.read_bytes(); assert len(data)==71059034 and hashlib.sha1(data).hexdigest()=="411d40ab5705c99f2bdb576ad3dc3e6ec0f3902e"; Path("build/netfx481-catalog.sha256").write_text(hashlib.sha256(data).hexdigest())'
@@ -104,13 +116,93 @@ jobs:
             --sevenzip "$(realpath "$(command -v 7zz)")" \
             --codec "$RUNNER_TEMP/swcompat-msdelta-source/target/release/ms-delta" \
             --verified-codec "$RUNNER_TEMP/swcompat-msdelta-source/target/release/swcompat-verified-delta" \
-            --recipe-dir data/netfx481/recipes --output build/netfx481-native-delta.json
+            --recipe-dir data/netfx481/recipes --stage-dir "$RUNNER_TEMP/netfx481-ipd-stage" \
+            --output build/netfx481-native-delta.json
+      - name: Validate fully materialized private Apple Silicon tree
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, json
+          from pathlib import Path
+          from scripts.netfx481_ipd_stage import inventory, digest_tree
+          from scripts.netfx481_native_delta_gate import EXPECTED_TREE_SHA256
+          root = Path(os.environ['RUNNER_TEMP']) / 'netfx481-ipd-stage'
+          files = inventory(root)
+          assert len(files) == 2446 and digest_tree(files) == EXPECTED_TREE_SHA256
+          report = json.loads(Path('build/netfx481-native-delta.json').read_text())
+          assert report['stage_verified'] is True and report['stage_files'] == 2446
+          print('Private stage contains all 2446 exact manifest-path files')
+          PY
       - name: Require complete tree and independently verified Windows digest
         run: python -m scripts.netfx481_native_delta_gate build/netfx481-native-delta.json
+      - name: Build read-only WUSA source probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install mingw-w64
+          src="$RUNNER_TEMP/wusa-original"
+          dst="$RUNNER_TEMP/wusa-ipd-dryrun"
+          mkdir -p "$src/wine"
+          base=https://raw.githubusercontent.com/wine-mirror/wine/wine-11.13
+          for name in main.c manifest.c wusa.h; do
+            curl --fail --location --retry 4 --retry-all-errors --max-time 60 --output "$src/$name" "$base/programs/wusa/$name"
+          done
+          curl --fail --location --retry 4 --retry-all-errors --max-time 60 --output "$src/wine/list.h" "$base/include/wine/list.h"
+          python -m scripts.patch_wusa_ipd_dryrun "$src" "$dst"
+          x86_64-w64-mingw32-gcc -std=gnu11 -O2 -municode -mconsole -static -D_WIN32_WINNT=0x0601 \
+            -I"$dst" "$dst/main.c" "$dst/manifest.c" \
+            -o "$RUNNER_TEMP/swcompat-wusa-ipd-dryrun.exe" \
+            -lcabinet -lshlwapi -lole32 -loleaut32 -ladvapi32 -lshell32 -luuid
+      - name: Prepare pinned Wiage Wine 11.13 disposable prefix
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/wiage-ipd-runtime.tar.gz"
+          curl --fail --location --retry 4 --retry-all-errors --max-time 600 --output "$archive" \
+            "https://github.com/dttdrv/mage/releases/download/preview-2026-08-02/wiage-runtime.tar.gz"
+          printf '%s  %s\n' d0cea7ff492dd3801dfa26a2a7d5ed1331e60f65929318d17301a3ce9cbba56c "$archive" | shasum -a 256 -c -
+          python -m scripts.wine_engine_archive --archive "$archive"
+          mkdir -p "$RUNNER_TEMP/ipd-wine-engine"
+          COPYFILE_DISABLE=1 tar --exclude='._*' --exclude='*/._*' -xzf "$archive" -C "$RUNNER_TEMP/ipd-wine-engine"
+          rm -f "$archive"
+          export SWCOMPAT_WINE="$RUNNER_TEMP/ipd-wine-engine/wiage/bin/wine"
+          export MAGE_BACKGROUND_EXE=rundll32.exe:services.exe:explorer.exe:conhost.exe
+          export WINEMSYNC=1
+          test -x "$SWCOMPAT_WINE"
+          python -m swcompat --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --logs-dir "$RUNNER_TEMP/netfx481-ipd-wusa-logs" init --timeout 120 --skip-bootstrap-mono-gecko
+          touch "$RUNNER_TEMP/netfx40-msxml3-prefix/.swcompat-netfx481-disposable"
+          python -m scripts.netfx40_prefix_readiness --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --output build/netfx481-ipd-prefix-readiness.json --agree-disposable-prefix
+      - name: Exercise original WUSA dependency and file preflight against verified IPD stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          export MAGE_BACKGROUND_EXE=rundll32.exe:services.exe:explorer.exe:conhost.exe
+          export WINEMSYNC=1
+          python -m scripts.netfx481_ipd_wusa_dryrun \
+            --wine "$RUNNER_TEMP/ipd-wine-engine/wiage/bin/wine" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --fixture "$RUNNER_TEMP/swcompat-wusa-ipd-dryrun.exe" \
+            --package build/KB5011048.msu --sha256-file build/netfx481-catalog.sha256 \
+            --stage "$RUNNER_TEMP/netfx481-ipd-stage" \
+            --output build/netfx481-ipd-wusa-dryrun.json
+      - name: Remove private staged Microsoft files
+        if: always()
+        shell: bash
+        run: |
+          if [[ -x "$RUNNER_TEMP/ipd-wine-engine/wiage/bin/wineserver" && -f "$RUNNER_TEMP/netfx40-msxml3-prefix/.swcompat-netfx481-disposable" ]]; then
+            WINEPREFIX="$RUNNER_TEMP/netfx40-msxml3-prefix" "$RUNNER_TEMP/ipd-wine-engine/wiage/bin/wineserver" -k || true
+          fi
+          rm -f -- build/KB5011048.msu "$RUNNER_TEMP/wiage-ipd-runtime.tar.gz"
+          rm -rf -- "$RUNNER_TEMP/netfx481-ipd-stage"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-delta-allowlisted-result-macos-15
-          path: build/netfx481-native-delta.json
+          name: native-delta-allowlisted-result-macos-26
+          path: |
+            build/netfx481-native-delta.json
+            build/netfx481-ipd-wusa-dryrun.json
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 3 || 7 }}
