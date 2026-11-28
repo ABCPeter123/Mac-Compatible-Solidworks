@@ -14,7 +14,9 @@
 #include <wchar.h>
 #include <stdio.h>
 
-#if defined(SWCOMPAT_NETFX48)
+#if defined(SWCOMPAT_WEBVIEW2)
+#define WAIT_LIMIT_MS 240000u
+#elif defined(SWCOMPAT_NETFX48)
 /* The original 4.8 prerequisite receives a dedicated bounded wait. */
 #define WAIT_LIMIT_MS 420000u
 #else
@@ -28,7 +30,9 @@
 #define COMMAND_LIMIT 8192u
 #define MAX_CHILDREN 12
 #define PREFIX L"SWCOMPAT_WIN32_SETUP"
-#if defined(SWCOMPAT_NETFX40)
+#if defined(SWCOMPAT_WEBVIEW2)
+#define ORIGINAL_SETUP_FILENAME L"MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
+#elif defined(SWCOMPAT_NETFX40)
 #define ORIGINAL_SETUP_FILENAME L"dotNetFx40_Full_x86_x64.exe"
 #elif defined(SWCOMPAT_NETFX48)
 #define LOG_FILE L"C:\\swcompat-netfx48-private\\framework-setup.txt"
@@ -203,7 +207,11 @@ int wmain(int argc, wchar_t **argv) {
             return 1;
         }
     } else {
-#ifdef SWCOMPAT_NETFX40
+#ifdef SWCOMPAT_WEBVIEW2
+        if (wcscpy_s(app, COMMAND_LIMIT, argv[1]) != 0 ||
+            swprintf_s(command, COMMAND_LIMIT,
+                L"\"%ls\" /silent /install", app) < 0) {
+#elif defined(SWCOMPAT_NETFX40)
         /* Exact Winetricks-supported .NET 4.0 bootstrapper child invocation.
          * 4.0 uses /c:install.exe rather than the newer /norestart /log.
          * fusion=b must be scoped to the calling Wine process by Python.

@@ -114,6 +114,15 @@ class TrialTests(unittest.TestCase):
         self.assertNotIn("SECRET-LICENSE", report)
         self.assertNotIn("private_path", report)
 
+    def test_snapshot_keeps_only_valid_public_hresult_codes(self):
+        before = sample()
+        before["environment_hresult"] = "0x80070002"
+        before["controller_hresult"] = "private path"
+        report = trial.combine(before, sample(), "EXIT_NONZERO", 1)
+        self.assertEqual(report["before"]["environment_hresult"], "0X80070002")
+        self.assertIsNone(report["before"]["controller_hresult"])
+        self.assertNotIn("private path", json.dumps(report))
+
     def test_run_installer_process_error(self):
         with mock.patch.object(trial.subprocess, "Popen", side_effect=OSError("private path")):
             result = trial.run_installer(Path("wine"), Path("installer.exe"), {}, 30)

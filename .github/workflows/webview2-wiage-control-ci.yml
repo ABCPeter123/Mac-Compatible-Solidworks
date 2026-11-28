@@ -1,0 +1,161 @@
+name: Fresh Wiage WebView2 engine differential
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/webview2-wiage-control-ci.yml'
+permissions:
+  contents: read
+concurrency:
+  group: webview2-wiage-control-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  signed-source:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify pinned official Microsoft WebView2 SDK and compile x64 controller
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          $sdkUrl = "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.4314.35/microsoft.web.webview2.1.0.4314.35.nupkg"
+          curl.exe --fail --location --retry 3 --output build/sdk.zip $sdkUrl
+          if ($LASTEXITCODE -ne 0) { throw "Official WebView2 SDK download failed" }
+          if ((Get-FileHash build/sdk.zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne "90778deb1b77e36292828b4b5833c9255c27533f40e0ddd55891ae718944edc4") { throw "SDK SHA256 mismatch" }
+          Expand-Archive -LiteralPath build/sdk.zip -DestinationPath build/sdk -Force
+          Copy-Item build/sdk/runtimes/win-x64/native/WebView2Loader.dll build/WebView2Loader.dll
+          if ((Get-FileHash build/WebView2Loader.dll -Algorithm SHA256).Hash.ToLowerInvariant() -ne "d3fce90bdeecb08596e377dea6a316354dd8949e32ff09b89d51be00c14e21b6") { throw "WebView2 loader SHA256 mismatch" }
+          $sdk = (Resolve-Path build/sdk/build/native/include).Path
+          cmake -S probes/webview2 -B build/webview2-msvc -G "Visual Studio 18 2026" -A x64 "-DWEBVIEW2_SDK_INCLUDE=$sdk"
+          if ($LASTEXITCODE -ne 0) { throw "Controller CMake failed" }
+          cmake --build build/webview2-msvc --config Release --target webview2_controller_probe --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "Controller/render MSVC build failed" }
+          Copy-Item build/webview2-msvc/Release/webview2_controller_probe.exe build/webview2_controller_probe.exe
+      - name: Verify official Microsoft-signed Evergreen x64 standalone runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          curl.exe --fail --location --retry 3 --max-time 360 --output build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe "https://go.microsoft.com/fwlink/?linkid=2124701"
+          if ($LASTEXITCODE -ne 0) { throw "Official WebView2 runtime download failed" }
+          $file = Get-Item build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe
+          if ($file.Length -lt 8388608 -or $file.Length -gt 471859200) { throw "Invalid runtime installer size" }
+          $sig = Get-AuthenticodeSignature -LiteralPath $file.FullName
+          if ($sig.Status -ne [System.Management.Automation.SignatureStatus]::Valid) { throw "Invalid Microsoft signature" }
+          if ($null -eq $sig.SignerCertificate -or $sig.SignerCertificate.Subject -notmatch '(^|, )O=Microsoft Corporation(,|$)') { throw "Unexpected installer publisher" }
+          $sha = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -Path build/evergreen-installer.sha256 -Value $sha -NoNewline -Encoding ascii
+          Write-Output "Microsoft runtime publisher and SHA-256 verified"
+      - name: Compile and test original Windows full-exit launcher
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          if (!(Test-Path $vswhere)) { throw "MSVC locator missing" }
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw "MSVC tools missing" }
+          $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+          if (!(Test-Path $vcvars)) { throw "MSVC x64 environment missing" }
+          $cmdText = "@echo off`r`ncall `"$vcvars`"`r`ncl /nologo /W4 /O2 /DSWCOMPAT_WEBVIEW2 /Fe:build\webview2_win32_launch.exe probes\netfx481_win32_launch.c`r`nexit /b %errorlevel%`r`n"
+          Set-Content -LiteralPath build/compile-webview2-launcher.cmd -Value $cmdText -Encoding ascii
+          & cmd.exe /d /c build\compile-webview2-launcher.cmd
+          if ($LASTEXITCODE -ne 0) { throw "WebView2 launcher compile failed" }
+          $self = & build\webview2_win32_launch.exe --selftest-3010
+          if ($LASTEXITCODE -ne 0 -or $self -notcontains 'SWCOMPAT_WIN32_SETUP_EXIT_HEX=00000BC2') { throw "Full DWORD selftest failed" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wiage-webview2-self-authored-and-digest
+          path: |
+            build/evergreen-installer.sha256
+            build/webview2_win32_launch.exe
+            build/webview2_controller_probe.exe
+          if-no-files-found: error
+          retention-days: 1
+      - name: Remove original Microsoft media
+        if: always()
+        shell: pwsh
+        run: Remove-Item -LiteralPath build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe,build/sdk.zip,build/WebView2Loader.dll -ErrorAction SilentlyContinue
+  fresh-wiage:
+    name: WebView2 on fresh Wiage macOS 26 Win11 (no native CLR)
+    needs: signed-source
+    runs-on: macos-26
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: wiage-webview2-self-authored-and-digest
+          path: build
+      - name: Authenticate same pinned Wiage as IPD
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          ARCHIVE="$RUNNER_TEMP/wiage-11.13-runtime.tar.gz"
+          curl --fail --location --retry 3 --max-time 600 --output "$ARCHIVE" \
+            "https://github.com/dttdrv/mage/releases/download/preview-2026-08-02/wiage-runtime.tar.gz"
+          printf '%s  %s\n' d0cea7ff492dd3801dfa26a2a7d5ed1331e60f65929318d17301a3ce9cbba56c "$ARCHIVE" | shasum -a 256 -c -
+          python3 -m scripts.wine_engine_archive --archive "$ARCHIVE"
+          mkdir -p "$RUNNER_TEMP/msxml3-wine-build"
+          COPYFILE_DISABLE=1 tar --exclude='._*' --exclude='*/._*' -xzf "$ARCHIVE" -C "$RUNNER_TEMP/msxml3-wine-build"
+          WINE_BIN="$RUNNER_TEMP/msxml3-wine-build/wiage/bin/wine"
+          test -x "$WINE_BIN"
+          test -x "$RUNNER_TEMP/msxml3-wine-build/wiage/bin/wineserver"
+          echo "SWCOMPAT_WINE=$WINE_BIN" >> "$GITHUB_ENV"
+          echo "WINEMSYNC=1" >> "$GITHUB_ENV"
+          echo "MAGE_BACKGROUND_EXE=rundll32.exe:services.exe:explorer.exe:conhost.exe" >> "$GITHUB_ENV"
+      - name: Initialize fresh disposable prefix with same engine and Win11 profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Same reserved runner-local name as the existing strict launcher.
+          # No .NET package, msxml3 verb, IPD payload or private media is applied.
+          PREFIX="$RUNNER_TEMP/netfx40-msxml3-prefix"
+          test ! -e "$PREFIX"
+          python3 -m swcompat --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" --logs-dir "$RUNNER_TEMP/wiage-webview-logs" init --timeout 120 --skip-bootstrap-mono-gecko
+          touch "$PREFIX/.swcompat-netfx481-disposable"
+          python3 -m scripts.netfx40_prefix_readiness --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" --output build/wiage-webview-prefix.json --agree-disposable-prefix
+          python3 -m swcompat --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" --logs-dir "$RUNNER_TEMP/wiage-webview-logs" set-winver win11
+          touch "$PREFIX/.swcompat-webview2-disposable"
+      - name: Fetch matching official Microsoft runtime and SDK loader
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --max-time 360 --output build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe 'https://go.microsoft.com/fwlink/?linkid=2124701'
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          p = Path("build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe")
+          assert hashlib.file_digest(p.open("rb"), "sha256").hexdigest() == Path("build/evergreen-installer.sha256").read_text().strip()
+          PY
+          curl --fail --location --retry 3 --max-time 120 --output build/sdk.zip 'https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.4314.35/microsoft.web.webview2.1.0.4314.35.nupkg'
+          printf '%s  %s\n' 90778deb1b77e36292828b4b5833c9255c27533f40e0ddd55891ae718944edc4 build/sdk.zip | shasum -a 256 -c -
+          unzip -p build/sdk.zip runtimes/win-x64/native/WebView2Loader.dll > build/WebView2Loader.dll
+          printf '%s  %s\n' d3fce90bdeecb08596e377dea6a316354dd8949e32ff09b89d51be00c14e21b6 build/WebView2Loader.dll | shasum -a 256 -c -
+      - name: Observe actual Windows setup exit and browser readiness without CLR servicing
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.webview2_runtime_trial --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --installer build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe --sha256-file build/evergreen-installer.sha256 \
+            --probe build/webview2_controller_probe.exe --output build/wiage-webview-runtime.json \
+            --timeout-seconds 240 --agree-disposable-prefix --experiment-full-win32-exit build/webview2_win32_launch.exe
+          python3 -m scripts.solidworks_runtime_gate --input build/wiage-webview-runtime.json
+          echo "Fresh Wine control only; no native CLR or SOLIDWORKS compatibility established."
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wiage-webview-sanitized
+          path: |
+            build/wiage-webview-prefix.json
+            build/wiage-webview-runtime.json
+          if-no-files-found: warn
+          retention-days: 3
+      - name: Remove original media
+        if: always()
+        shell: bash
+        run: rm -f -- build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe build/sdk.zip build/WebView2Loader.dll

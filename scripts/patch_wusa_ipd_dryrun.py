@@ -51,7 +51,7 @@ void swcompat_wusa_event(const char *format)
     else if (strstr(format, "Failed to extract")) category = 6;
     else if (strstr(format, "version difference")) category = 7;
     else if (strstr(format, "unexpected tag") || strstr(format, "dependency type")) category = 8;
-    else if (strstr(format, "Failed to load all")) category = 9;
+    else if (strstr(format, "Failed to load all") || !strncmp(format, "XML ", 4)) category = 9;
     if (swcompat_counts[category] < 1000000) swcompat_counts[category]++;
 }
 '''
@@ -290,7 +290,7 @@ def patch_resource_dependencies(main: str, manifest: str, header: str) -> tuple[
     """
     header = replace_once(header,
         "    struct assembly_identity identity;\n};\n\nstruct fileop_entry",
-        "    struct assembly_identity identity;\n    BOOL resource_prerequisite;\n};\n\nstruct fileop_entry")
+        "    struct assembly_identity identity;\n    BOOL resource_prerequisite;\n    BOOL swcompat_prerequisite;\n};\n\nstruct fileop_entry")
     manifest = replace_once(manifest,
         "    struct assembly_entry *assembly = context;\n    struct dependency_entry *entry;\n\n    if (wcscmp(tagname, L\"dependentAssembly\"))",
         "    struct swcompat_dependency_context *ctx = context;\n"
@@ -304,6 +304,7 @@ def patch_resource_dependencies(main: str, manifest: str, header: str) -> tuple[
         '            TRACE("Found dependency %s\\n", debugstr_w(entry->identity.name));',
         r'''            WCHAR *kind = get_xml_attribute(child, L"dependencyType");
             size_t n = wcslen(entry->identity.name);
+            entry->swcompat_prerequisite = kind && !wcscmp(kind, L"prerequisite");
             entry->resource_prerequisite = ctx->resource && kind &&
                 !wcscmp(kind, L"prerequisite") &&
                 !wcscmp(entry->identity.language, L"*") &&
@@ -408,6 +409,97 @@ def patch_neutral_preflight(main: str) -> str:
     return main
 
 
+def patch_package_local_trial(main: str) -> str:
+    """Separate package-local WCF discrepancy experiment; never install."""
+    main = replace_once(main, "static unsigned swcompat_counts[23];",
+                        "static unsigned swcompat_counts[27];\nstatic BOOL swcompat_package_local;")
+    main = replace_once(main, "        if (!install_assembly(manifest_list, &dependency->identity, dryrun)) return FALSE;",
+                        r'''        /* Only the independently audited single edge in KB5011048.
+         * Keep the original identity immutable. No global version fallback.
+         * The host revalidates every byte of this exact package and stage. */
+        if (dryrun && swcompat_neutral && swcompat_package_local &&
+            dependency->swcompat_prerequisite && !dependency->resource_prerequisite &&
+            !wcsicmp(assembly->identity.name, L"netfx4clientcorecomp") &&
+            !wcsicmp(assembly->identity.architecture, L"wow64") &&
+            !wcsicmp(assembly->identity.language, L"neutral") &&
+            !wcscmp(assembly->identity.version, L"10.0.15840.239") &&
+            !wcsicmp(dependency->identity.name, L"netfx4-servicemodelreg_exe") &&
+            !wcsicmp(dependency->identity.architecture, L"x86") &&
+            !wcsicmp(dependency->identity.language, L"neutral") &&
+            !wcscmp(dependency->identity.version, L"4.0.15840.239") &&
+            !lookup_assembly(manifest_list, &dependency->identity))
+        {
+            struct assembly_identity alternate = dependency->identity;
+            alternate.version = L"4.0.15840.3";
+            if (!lookup_assembly(manifest_list, &alternate)) return FALSE;
+            if (!install_assembly(manifest_list, &alternate, TRUE)) return FALSE;
+            swcompat_counts[23]++;
+            continue;
+        }
+        if (!install_assembly(manifest_list, &dependency->identity, dryrun)) return FALSE;''')
+    main = replace_once(main, "            swcompat_neutral = FALSE;\n        }\n        goto done;",
+                        r'''            swcompat_neutral = FALSE;
+            /* A second independent experiment uses the original, verified
+             * packaged x86 executable. It is not proof of native CBS
+             * applicability or permission to enable servicing. */
+            if (!swcompat_counts[22] && swcompat_counts[17] == 1 &&
+                !swcompat_counts[19] && swcompat_counts[18] == 141)
+            {
+                swcompat_counts[24] = 1;
+                swcompat_counts[20] = 0;
+                set_assembly_status(&state->assemblies, ASSEMBLY_STATUS_NONE);
+                swcompat_neutral = swcompat_package_local = TRUE;
+                swcompat_counts[25] = install_updates(state, TRUE);
+                swcompat_counts[26] = swcompat_counts[25] &&
+                    swcompat_counts[23] == 1 &&
+                    swcompat_counts[20] == swcompat_counts[18] &&
+                    !swcompat_counts[12] && !swcompat_counts[13];
+                swcompat_neutral = swcompat_package_local = FALSE;
+            }
+        }
+        goto done;''')
+    return main
+
+
+def patch_xml_loader(text: str) -> str:
+    """Make the pinned XML parser synchronous and count actual COM failures."""
+    return replace_once(text, r'''    if (SUCCEEDED(CoCreateInstance(&CLSID_DOMDocument, NULL, CLSCTX_INPROC_SERVER, &IID_IXMLDOMDocument, (void **)&document)))
+    {
+        VariantInit(&variant);
+        V_VT(&variant) = VT_BSTR;
+        V_BSTR(&variant) = bstr;
+
+        if (SUCCEEDED(document->lpVtbl->load(document, variant, &success)) && success)
+        {
+            if (FAILED(document->lpVtbl->get_documentElement(document, &root)))
+                root = NULL;
+        }
+        document->lpVtbl->Release(document);
+    }''', r'''    if (SUCCEEDED(CoCreateInstance(&CLSID_DOMDocument, NULL, CLSCTX_INPROC_SERVER, &IID_IXMLDOMDocument, (void **)&document)))
+    {
+        VariantInit(&variant);
+        V_VT(&variant) = VT_BSTR;
+        V_BSTR(&variant) = bstr;
+        success = VARIANT_FALSE;
+
+        if (FAILED(document->lpVtbl->put_async(document, VARIANT_FALSE)) ||
+            FAILED(document->lpVtbl->put_validateOnParse(document, VARIANT_FALSE)) ||
+            FAILED(document->lpVtbl->put_resolveExternals(document, VARIANT_FALSE)))
+            swcompat_wusa_event("XML parser configuration failed");
+        else if (FAILED(document->lpVtbl->load(document, variant, &success)))
+            swcompat_wusa_event("XML load HRESULT failed");
+        else if (success != VARIANT_TRUE)
+            swcompat_wusa_event("XML load returned false");
+        else if (FAILED(document->lpVtbl->get_documentElement(document, &root)) || !root)
+        {
+            root = NULL;
+            swcompat_wusa_event("XML document root missing");
+        }
+        document->lpVtbl->Release(document);
+    }
+    else swcompat_wusa_event("XML COM activation failed");''')
+
+
 def git_blob(data: bytes) -> str:
     return hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()
 
@@ -429,8 +521,8 @@ def prepare(source: Path, destination: Path) -> None:
         patch_manifest(original["manifest.c"].decode("utf-8")),
         original["wusa.h"].decode("utf-8"))
     main, manifest, header = patch_resource_dependencies(patch_full_preflight(main), manifest, header)
-    original["main.c"] = patch_neutral_preflight(main).encode("utf-8")
-    original["manifest.c"] = manifest.encode("utf-8")
+    original["main.c"] = patch_package_local_trial(patch_neutral_preflight(main)).encode("utf-8")
+    original["manifest.c"] = patch_xml_loader(manifest).encode("utf-8")
     original["wusa.h"] = header.encode("utf-8")
     destination.mkdir()
     (destination / "wine").mkdir()

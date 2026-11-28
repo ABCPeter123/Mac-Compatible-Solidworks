@@ -93,6 +93,21 @@ on:
         type: boolean
         required: false
         default: false
+      try_481_ipd_apply_candidate:
+        description: 'Explicit isolated experimental IPD WUSA transaction; requires native CLR4 and complete package-local preflight'
+        type: boolean
+        required: false
+        default: false
+      try_webview2_after_ipd:
+        description: 'Verify genuine CLR and WebView2 coexist in same disposable prefix, no private media'
+        type: boolean
+        required: false
+        default: false
+      try_solidworks_after_ipd:
+        description: 'Manual only: licensed bootstrapper after verified native .NET 4.8.1 and ready WebView2 in same prefix'
+        type: boolean
+        required: false
+        default: false
       try_481_after_verified_partial48:
         description: 'Independent genuine 4.8.1 recovery after native 4.8 MSP 1603; never marks 4.8 complete'
         type: boolean
@@ -163,6 +178,11 @@ on:
         type: string
         required: false
         default: '11.21'
+    secrets:
+      SWCOMPAT_INSTALLER_URL:
+        required: false
+      SWCOMPAT_INSTALLER_SHA256:
+        required: false
   workflow_dispatch:
     inputs:
       try_48_intermediate:
@@ -310,14 +330,14 @@ concurrency:
   # Keep experiments from distinct commits separated, even when the reusable
   # workflow is called on the same branch and shares the workflow name.
   # Preserve existing cancellation behavior for ordinary non-experiment CI.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.try_wow64_managed && format('wow64-{0}-{1}-{2}-{3}', github.sha, inputs.wine_baseline, inputs.use_macos26_runner, inputs.wow64_host_stack64) || inputs.try_40_core_msi_recovery && format('core-{0}-{1}-{2}', github.sha, inputs.probe_native40_ngen_if_ready, inputs.use_macos26_runner) || (inputs.try_48_msi || inputs.try_48_direct || inputs.try_48_intermediate) && github.sha || 'shared' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.try_wow64_managed && format('wow64-{0}-{1}-{2}-{3}', github.sha, inputs.wine_baseline, inputs.use_macos26_runner, inputs.wow64_host_stack64) || inputs.try_40_core_msi_recovery && format('core-{0}-{1}-{2}', github.sha, inputs.probe_native40_ngen_if_ready, inputs.use_macos26_runner) || inputs.try_481_ipd_apply_candidate && format('ipd-{0}', github.sha) || (inputs.try_48_msi || inputs.try_48_direct || inputs.try_48_intermediate) && github.sha || 'shared' }}
   cancel-in-progress: ${{ !inputs.try_48_msi && !inputs.try_48_direct && !inputs.try_48_intermediate && !inputs.try_wow64_managed && !inputs.try_40_core_msi_recovery }}
 
 jobs:
   absolute-path-regressions:
     name: Verify .NET 4.0 native CLR false-positive regressions on POSIX
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: ${{ inputs.try_481_ipd_apply_candidate && 12 || 5 }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -325,6 +345,10 @@ jobs:
           python-version: '3.12'
       - name: Run absolute media and fixture path regression tests
         run: |
+          python -m unittest discover -s tests -p 'test_netfx481_ipd_apply_candidate.py' -v
+          python -m unittest discover -s tests -p 'test_netfx481_ipd_gac.py' -v
+          python -m unittest discover -s tests -p 'test_netfx481_solidworks_gate.py' -v
+          python -m unittest discover -s tests -p 'test_netfx481_cad_prerequisites.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_legacy.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_launcher_timeout.py' -v
           python -m unittest discover -s tests -p 'test_netfx40_original_installer_group.py' -v
@@ -361,10 +385,37 @@ jobs:
           python -m unittest discover -s tests -p 'test_netfx48_msi_registration.py' -v
           python -m unittest discover -s tests -p 'test_netfx48_msp_patch_sequence.py' -v
 
+      - name: Compile exact pinned Wine source for IPD preflight and apply candidate before native CLR installation
+        if: inputs.try_481_ipd_apply_candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64-posix
+          src="$RUNNER_TEMP/wusa-original"
+          mkdir -p "$src/wine"
+          base=https://raw.githubusercontent.com/wine-mirror/wine/wine-11.13
+          for name in main.c manifest.c wusa.h; do
+            curl --fail --location --retry 4 --retry-all-errors --max-time 60 --output "$src/$name" "$base/programs/wusa/$name"
+          done
+          curl --fail --location --retry 4 --retry-all-errors --max-time 60 --output "$src/wine/list.h" "$base/include/wine/list.h"
+          python -m scripts.patch_wusa_ipd_dryrun "$src" "$RUNNER_TEMP/wusa-ipd-dryrun"
+          python -m scripts.patch_wusa_ipd_apply_candidate "$src" "$RUNNER_TEMP/wusa-ipd-apply-candidate"
+          for mode in dryrun apply-candidate; do
+            dst="$RUNNER_TEMP/wusa-ipd-$mode"
+            x86_64-w64-mingw32-gcc-posix -std=gnu11 -O2 -municode -mconsole -static -D_WIN32_WINNT=0x0601 \
+              -I"$dst" "$dst/main.c" "$dst/manifest.c" \
+              -o "$RUNNER_TEMP/swcompat-wusa-ipd-$mode.exe" \
+              -lcabinet -lshlwapi -lole32 -loleaut32 -ladvapi32 -lshell32 -luuid
+          done
+          x86_64-w64-mingw32-gcc-posix -std=gnu11 -O2 -municode -mconsole -static \
+            probes/netfx481_ipd_gac.c -o "$RUNNER_TEMP/swcompat-netfx481-ipd-gac.exe"
+          echo "Pinned Wine dry-run and experimental apply candidates compiled"
+  
   authentic-netfx40-windows:
     name: Authenticate original Microsoft .NET 4.0 and compile CLR probes
     runs-on: windows-2025
-    timeout-minutes: 20
+    timeout-minutes: ${{ inputs.try_webview2_after_ipd && 35 || inputs.try_solidworks_after_ipd && 35 || 20 }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -423,6 +474,14 @@ jobs:
           $selftest = & build\netfx40_win32_launch.exe --selftest-3010
           if ($LASTEXITCODE -ne 0 -or $selftest -notcontains 'SWCOMPAT_WIN32_SETUP_EXIT_HEX=00000BC2') {
             throw "Exact 4.8 Windows process exit selftest failed"
+          }
+          if ("${{ inputs.try_481_ipd_apply_candidate }}" -eq "true") {
+            $cmdText = "@echo off`r`ncall `"$vcvars`"`r`ncl /nologo /W4 /O2 /DSWCOMPAT_WEBVIEW2 /Fe:build\webview2_win32_launch.exe probes\netfx481_win32_launch.c`r`nexit /b %errorlevel%`r`n"
+            Set-Content -LiteralPath build/compile-webview2-launcher.cmd -Value $cmdText -Encoding ascii
+            & cmd.exe /d /c build\compile-webview2-launcher.cmd
+            if ($LASTEXITCODE -ne 0) { throw "WebView2 Win32 launcher compile failed" }
+            $wvtest = & build\webview2_win32_launch.exe --selftest-3010
+            if ($LASTEXITCODE -ne 0 -or $wvtest -notcontains 'SWCOMPAT_WIN32_SETUP_EXIT_HEX=00000BC2') { throw "WebView2 Win32 launcher selftest failed" }
           }
           $cmdText = "@echo off`r`ncall `"$vcvars`"`r`ncl /nologo /W4 /O2 /DUNICODE /D_UNICODE /Fe:build\netfx481_win32_launch.exe probes\netfx481_win32_launch.c`r`nexit /b %errorlevel%`r`n"
           Set-Content -LiteralPath build/compile-upgrade-481-launcher.cmd -Value $cmdText -Encoding ascii
@@ -717,6 +776,103 @@ jobs:
           $ErrorActionPreference = "Stop"
           python -m scripts.netfx40_windows_extract_reference --installer build/dotNetFx40_Full_x86_x64.exe
           if ($LASTEXITCODE -ne 0) { throw "Original .NET 4.0 native Windows extraction control failed" }
+      - name: Fetch private installer and classify missing R2 object or expired signed URL
+        if: github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd && inputs.try_481_ipd_apply_candidate
+        shell: pwsh
+        env:
+          SWCOMPAT_INSTALLER_URL: ${{ secrets.SWCOMPAT_INSTALLER_URL }}
+          SWCOMPAT_INSTALLER_SHA256: ${{ secrets.SWCOMPAT_INSTALLER_SHA256 }}
+        run: |
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          python -m scripts.solidworks_private_media_fetch --destination build/SolidworksSetup.exe --output build/solidworks-windows-fetch.json
+          if ($LASTEXITCODE -ne 0) { throw "Private installer download failed; inspect sanitized fetch status" }
+      - name: Verify exact SHA256, original PE and Dassault Authenticode signature
+        if: github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd && inputs.try_481_ipd_apply_candidate
+        shell: pwsh
+        env:
+          SWCOMPAT_INSTALLER_URL: ${{ secrets.SWCOMPAT_INSTALLER_URL }}
+          SWCOMPAT_INSTALLER_SHA256: ${{ secrets.SWCOMPAT_INSTALLER_SHA256 }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not $env:SWCOMPAT_INSTALLER_SHA256) { throw "Set SWCOMPAT_INSTALLER_SHA256 repository secret" }
+          python -m scripts.solidworks_bootstrap_trial --installer build/SolidworksSetup.exe --sha256 $env:SWCOMPAT_INSTALLER_SHA256 --output build/solidworks-windows-media.json
+          if ($LASTEXITCODE -ne 0) { throw "SHA256 or Windows PE invalid" }
+          $signature = Get-AuthenticodeSignature -LiteralPath build/SolidworksSetup.exe
+          if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) { throw "Invalid Authenticode signature" }
+          if ($null -eq $signature.SignerCertificate -or $signature.SignerCertificate.Subject -notmatch '(?i)SOLIDWORKS|DASSAULT') { throw "Unexpected executable publisher" }
+          Write-Output "Original SOLIDWORKS publisher and SHA256: VERIFIED"
+      - name: Compile dual architecture CAD prerequisite fixture and run independent Windows controls
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
+        shell: pwsh
+        run: ./scripts/build-netfx481-cad-probes.ps1
+      - name: Verify pinned official Microsoft WebView2 SDK and compile x64 controller
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          $sdkUrl = "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.4314.35/microsoft.web.webview2.1.0.4314.35.nupkg"
+          curl.exe --fail --location --retry 3 --output build/sdk.zip $sdkUrl
+          if ($LASTEXITCODE -ne 0) { throw "Official WebView2 SDK download failed" }
+          if ((Get-FileHash build/sdk.zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne "90778deb1b77e36292828b4b5833c9255c27533f40e0ddd55891ae718944edc4") { throw "SDK SHA256 mismatch" }
+          Expand-Archive -LiteralPath build/sdk.zip -DestinationPath build/sdk -Force
+          Copy-Item build/sdk/runtimes/win-x64/native/WebView2Loader.dll build/WebView2Loader.dll
+          if ((Get-FileHash build/WebView2Loader.dll -Algorithm SHA256).Hash.ToLowerInvariant() -ne "d3fce90bdeecb08596e377dea6a316354dd8949e32ff09b89d51be00c14e21b6") { throw "WebView2 loader SHA256 mismatch" }
+          $sdk = (Resolve-Path build/sdk/build/native/include).Path
+          cmake -S probes/webview2 -B build/webview2-msvc -G "Visual Studio 18 2026" -A x64 "-DWEBVIEW2_SDK_INCLUDE=$sdk"
+          if ($LASTEXITCODE -ne 0) { throw "Controller CMake failed" }
+          cmake --build build/webview2-msvc --config Release --target webview2_controller_probe webview2_render_probe --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "Controller/render MSVC build failed" }
+          Copy-Item build/webview2-msvc/Release/webview2_controller_probe.exe build/webview2_controller_probe.exe
+          Copy-Item build/webview2-msvc/Release/webview2_render_probe.exe build/webview2_render_probe.exe
+      - name: Verify official Microsoft-signed Evergreen x64 standalone runtime
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          curl.exe --fail --location --retry 3 --max-time 360 --output build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe "https://go.microsoft.com/fwlink/?linkid=2124701"
+          if ($LASTEXITCODE -ne 0) { throw "Official WebView2 runtime download failed" }
+          $file = Get-Item build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe
+          if ($file.Length -lt 8388608 -or $file.Length -gt 471859200) { throw "Invalid runtime installer size" }
+          $sig = Get-AuthenticodeSignature -LiteralPath $file.FullName
+          if ($sig.Status -ne [System.Management.Automation.SignatureStatus]::Valid) { throw "Invalid Microsoft signature" }
+          if ($null -eq $sig.SignerCertificate -or $sig.SignerCertificate.Subject -notmatch '(^|, )O=Microsoft Corporation(,|$)') { throw "Unexpected installer publisher" }
+          $sha = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -Path build/evergreen-installer.sha256 -Value $sha -NoNewline -Encoding ascii
+          Write-Output "Microsoft runtime publisher and SHA-256 verified"
+      - name: Build and smoke-test original Win32 x64 installer UI census
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cmake -S probes/installer-ui -B build/installer-ui -G "Visual Studio 18 2026" -A x64
+          if ($LASTEXITCODE -ne 0) { throw "Win32 census CMake configure failed" }
+          cmake --build build/installer-ui --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "Win32 census MSVC build failed" }
+          & .\build\installer-ui\Release\solidworks_installer_ui_probe.exe
+          if ($LASTEXITCODE -ne 0) { throw "Win32 window census native smoke failed" }
+          & .\build\installer-ui\Release\solidworks_installer_ui_probe.exe --self-test
+          if ($LASTEXITCODE -ne 0) { throw "Synthetic Win32 HWND responsiveness or GDI surface test failed" }
+          Copy-Item build/installer-ui/Release/solidworks_installer_ui_probe.exe build/solidworks_installer_ui_probe.exe
+      - uses: actions/upload-artifact@v4
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
+        with:
+          name: ipd-solidworks-self-authored-probes-and-webview-digest
+          path: |
+            build/evergreen-installer.sha256
+            build/webview2_controller_probe.exe
+            build/webview2_render_probe.exe
+            build/webview2_win32_launch.exe
+            build/solidworks_installer_ui_probe.exe
+            build/netfx481_cad_prerequisites_x86.exe
+            build/netfx481_cad_prerequisites_x64.exe
+            build/netfx481-cad-windows-reference.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Remove private SOLIDWORKS and Microsoft WebView2 installers
+        if: always() && (inputs.try_webview2_after_ipd || inputs.try_solidworks_after_ipd)
+        shell: pwsh
+        run: Remove-Item -LiteralPath build/SolidworksSetup.exe,build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe -ErrorAction SilentlyContinue
       # NEVER include original Microsoft .NET installers in GitHub Actions
       # artifacts. These are downloadable from public-repo runs even when the
       # artifact name contains "private". Transfer only signed SHA256 digests
@@ -955,7 +1111,7 @@ jobs:
     name: Try genuine .NET 4.0 after msxml3 in a fresh Apple Silicon Wine prefix
     needs: [authentic-netfx40-windows, absolute-path-regressions]
     runs-on: ${{ inputs.use_macos26_runner && 'macos-26' || 'macos-15' }}
-    timeout-minutes: ${{ inputs.signed_msp_reinstall && inputs.signed_msi_timeout_seconds == 1200 && 70 || inputs.progress_gated_native40_ngen && 55 || inputs.try_48_msi && inputs.signed_msi_timeout_seconds == 1200 && 55 || inputs.try_40_core_msi_recovery && inputs.probe_native40_ngen_if_ready && 55 || 35 }}
+    timeout-minutes: ${{ inputs.signed_msp_reinstall && inputs.signed_msi_timeout_seconds == 1200 && 70 || inputs.progress_gated_native40_ngen && 55 || inputs.try_48_msi && inputs.signed_msi_timeout_seconds == 1200 && 55 || inputs.try_40_core_msi_recovery && inputs.probe_native40_ngen_if_ready && 55 || inputs.try_481_ipd_apply_candidate && 65 || 35 }}
     env:
       SWCOMPAT_TRY_48_INTERMEDIATE: ${{ inputs.try_48_intermediate }}
       SWCOMPAT_TRY_48_DIRECT: ${{ inputs.try_48_direct }}
@@ -969,6 +1125,9 @@ jobs:
         with:
           name: self-authored-netfx40-probes-and-signed-digests
           path: build
+      - name: Reject IPD apply candidate outside authenticated catalog arm
+        if: inputs.try_481_ipd_apply_candidate && !inputs.try_481_catalog_wusa
+        run: exit 1
       - name: Reject catalog WUSA outside independent native CLR4 trial
         if: inputs.try_481_catalog_wusa && (inputs.host_provenance_only || inputs.try_48_msi || inputs.try_48_direct || inputs.try_48_intermediate || inputs.try_48_payload_host || inputs.try_481_after_verified_partial48 || inputs.wine_baseline != 'wiage-11.13' || !inputs.use_macos26_runner)
         shell: bash
@@ -1202,6 +1361,33 @@ jobs:
             --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
             --output build/netfx40-prefix-readiness.json \
             --agree-disposable-prefix
+      - uses: actions/download-artifact@v4
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
+        with:
+          name: ipd-solidworks-self-authored-probes-and-webview-digest
+          path: build
+      - name: Fetch independently verified WebView2 media and pinned SDK loader privately
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --max-time 360 --output build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe 'https://go.microsoft.com/fwlink/?linkid=2124701'
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          p = Path("build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe")
+          assert hashlib.file_digest(p.open("rb"), "sha256").hexdigest() == Path("build/evergreen-installer.sha256").read_text().strip()
+          PY
+          curl --fail --location --retry 3 --max-time 120 --output build/ipd-webview-sdk.zip 'https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.4314.35/microsoft.web.webview2.1.0.4314.35.nupkg'
+          printf '%s  %s\n' 90778deb1b77e36292828b4b5833c9255c27533f40e0ddd55891ae718944edc4 build/ipd-webview-sdk.zip | shasum -a 256 -c -
+          unzip -p build/ipd-webview-sdk.zip runtimes/win-x64/native/WebView2Loader.dll > build/WebView2Loader.dll
+          printf '%s  %s\n' d3fce90bdeecb08596e377dea6a316354dd8949e32ff09b89d51be00c14e21b6 build/WebView2Loader.dll | shasum -a 256 -c -
+      - name: Install official WebView2 in fresh prefix before native CLR servicing
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/netfx481_webview2_first.sh build/solidworks-webview2-prerequisite.json
       - name: Install native msxml3 through original Winetricks verb
         shell: bash
         run: |
@@ -1263,14 +1449,17 @@ jobs:
             --original build/netfx40-msxml3-runtime.json \
             --output build/netfx40-msxml3-restart.json \
             --agree-disposable-prefix
-      # Only the authenticated signed-MSP one-shot may spend another fresh
-      # prefix after the original .NET 4.0 setup returned exact Win32 1603.
+      # Only authenticated signed-MSP or IPD apply experiments may spend another
+      # fresh prefix after original .NET 4.0 setup returned exact Win32 1603.
       # Neither a failed partial installation nor a missing CLR can pass.
       - name: One genuine CLR4 retry in a second fresh disposable Wine prefix after 1603
-        if: env.SWCOMPAT_MSXML3_READY == 'yes' && inputs.signed_msp_win32_exit
+        if: env.SWCOMPAT_MSXML3_READY == 'yes' && (inputs.signed_msp_win32_exit || inputs.try_481_ipd_apply_candidate)
         shell: bash
         env:
           SWCOMPAT_WIN7_SETUP: ${{ inputs.win7_setup }}
+          SWCOMPAT_IPD_SYNC_RETRY: ${{ inputs.try_481_ipd_apply_candidate }}
+          SWCOMPAT_RETRY_WINE_BASELINE: ${{ inputs.wine_baseline }}
+          SWCOMPAT_WEBVIEW2_FIRST: ${{ inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd)) }}
         run: |
           set -euo pipefail
           outcome=$(python3 -m scripts.netfx40_fresh_prefix_retry \
@@ -1288,6 +1477,19 @@ jobs:
           mv build/netfx40-msxml3-runtime.json build/netfx40-msxml3-runtime-attempt1.json
           mv build/netfx40-msxml3-restart.json build/netfx40-msxml3-restart-attempt1.json
 
+          # Wiage's optional Mach semaphore backend is enabled in the original
+          # attempt. After a verified 1603 and successful server shutdown, test
+          # ordinary wineserver synchronization in the new IPD prefix only.
+          # Set the environment before *any* new prefix process, and retain it
+          # for later servicing, rather than mixing server/client backends.
+          if [[ "$SWCOMPAT_IPD_SYNC_RETRY" == "true" && "$SWCOMPAT_RETRY_WINE_BASELINE" == "wiage-11.13" ]]; then
+            test "${WINEMSYNC:-}" = "1"
+            export WINEMSYNC=0
+            echo "WINEMSYNC=0" >> "$GITHUB_ENV"
+            echo "Original CLR4 IPD fresh retry synchronization: MSYNC_DISABLED"
+            echo "## CLR4 fresh retry: MSYNC_DISABLED (experimental)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
           # Reuse the canonical prefix path for all downstream gate checks.
           # The original attempt was moved, not mutated or reused.
           python3 -m swcompat \
@@ -1300,6 +1502,12 @@ jobs:
             --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
             --output build/netfx40-prefix-readiness-retry.json \
             --agree-disposable-prefix
+          if [[ "$SWCOMPAT_WEBVIEW2_FIRST" == "true" ]]; then
+            # Previous report describes the archived prefix, not this one.
+            mv build/solidworks-webview2-prerequisite.json build/solidworks-webview2-attempt1.json
+            mv build/solidworks-webview2-restart.json build/solidworks-webview2-restart-attempt1.json
+            bash scripts/netfx481_webview2_first.sh build/solidworks-webview2-prerequisite.json
+          fi
           python3 -m scripts.netfx40_msxml3_prerequisite \
             --wine "$SWCOMPAT_WINE" \
             --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
@@ -1336,6 +1544,9 @@ jobs:
           if [[ "${SWCOMPAT_WIN7_SETUP:-false}" == "true" ]]; then
             set -- "$@" --experiment-win7-setup
           fi
+          if [[ "$SWCOMPAT_IPD_SYNC_RETRY" == "true" && "$SWCOMPAT_RETRY_WINE_BASELINE" == "wiage-11.13" ]]; then
+            set -- "$@" --experiment-dll-relay-output build/netfx40-msxml3-dll-relay.json
+          fi
           "$@"
           python3 -m scripts.netfx40_msxml3_restart \
             --wine "$SWCOMPAT_WINE" \
@@ -1349,10 +1560,20 @@ jobs:
           import json
           from pathlib import Path
           from scripts.netfx40_msxml3_restart import validate
+          from scripts.netfx40_fresh_prefix_retry import decision
           r = json.loads(Path("build/netfx40-msxml3-restart.json").read_text())
+          original = json.loads(Path("build/netfx40-msxml3-runtime.json").read_text())
           assert validate(r)
-          assert r["persistent_native_managed"] and r["native_only_managed"] == "PASS", (
-              "Second independent original CLR4 attempt did not establish native Microsoft execution")
+          outcome = decision(original, r)
+          if r["persistent_native_managed"] and r["native_only_managed"] == "PASS":
+              assert outcome == "ALREADY_VERIFIED"
+          else:
+              # Only the exact clean, observed 1603 failure can proceed to the
+              # existing read-only MSI attribution steps. The native40 gate
+              # below must still fail. Unknown lifecycle/partial state aborts.
+              assert outcome == "RETRY_ELIGIBLE", (
+                  "Second independent original CLR4 attempt ended in an unverified state")
+              print("Second authentic CLR4 attempt returned 1603; collecting private MSI attribution before failing native CLR gate.")
           PY
 
       - name: Extract unchanged signed .NET 4.0 MSI for private failure attribution
@@ -1400,6 +1621,8 @@ jobs:
         shell: bash
         env:
           SWCOMPAT_REQUIRE_NATIVE40_FOR_NGEN: ${{ inputs.drain_native40_ngen }}
+          SWCOMPAT_REQUIRE_NATIVE40_FOR_IPD: ${{ inputs.try_481_ipd_apply_candidate }}
+          SWCOMPAT_REQUIRE_NATIVE40_FOR_SIGNED_MSP: ${{ inputs.signed_msp_win32_exit }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -1420,6 +1643,12 @@ jobs:
           if os.environ.get("SWCOMPAT_REQUIRE_NATIVE40_FOR_NGEN") == "true":
               assert r["persistent_native_managed"] and r["native_only_managed"] == "PASS", (
                   "Original Microsoft CLR4 prerequisite failed; NGen experiment not run")
+          if os.environ.get("SWCOMPAT_REQUIRE_NATIVE40_FOR_IPD") == "true":
+              assert r["persistent_native_managed"] and r["native_only_managed"] == "PASS", (
+                  "Original Microsoft CLR4 prerequisite failed; IPD apply experiment not run")
+          if os.environ.get("SWCOMPAT_REQUIRE_NATIVE40_FOR_SIGNED_MSP") == "true":
+              assert r["persistent_native_managed"] and r["native_only_managed"] == "PASS", (
+                  "Original Microsoft CLR4 prerequisite failed; signed MSP experiment not run")
           PY
       - name: Diagnose new WoW64 x86 process startup versus original Microsoft managed activation
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && inputs.try_wow64_managed && inputs.try_wow64_faults
@@ -1876,7 +2105,7 @@ jobs:
             --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
             --logs-dir "$RUNNER_TEMP/netfx40-msxml3-logs" set-winver win10
       - name: Apply original Microsoft catalog KB5011048 through actual Wine WUSA
-        if: inputs.try_481_catalog_wusa && env.SWCOMPAT_NATIVE40_READY == 'yes'
+        if: inputs.try_481_catalog_wusa && !inputs.try_481_ipd_apply_candidate && env.SWCOMPAT_NATIVE40_READY == 'yes'
         shell: bash
         run: |
           set -euo pipefail
@@ -1889,6 +2118,177 @@ jobs:
             --fixture build/netfx481_catalog_wusa.exe --loader build/netfx481_clr_load.exe \
             --managed build/netfx481_runtime_probe.exe --native40-report build/netfx40-msxml3-restart.json \
             --output build/netfx481-catalog-wusa.json
+      - name: Verify private IPD stage and compile independent WUSA candidates
+        if: inputs.try_481_ipd_apply_candidate && env.SWCOMPAT_NATIVE40_READY == 'yes'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p 'test_netfx481_ipd_apply_candidate.py' -v
+          brew install sevenzip mingw-w64
+          git clone --filter=blob:none --no-checkout https://github.com/CaddyGlow/ms-delta.git "$RUNNER_TEMP/swcompat-msdelta-source"
+          git -C "$RUNNER_TEMP/swcompat-msdelta-source" checkout --detach 6f25d63e8a8573015feb2f6a3d3f98861edbb22c
+          test "$(git -C "$RUNNER_TEMP/swcompat-msdelta-source" rev-parse HEAD)" = 6f25d63e8a8573015feb2f6a3d3f98861edbb22c
+          python3 -m scripts.patch_msdelta_compat "$RUNNER_TEMP/swcompat-msdelta-source/src/pa30.rs"
+          mkdir -p "$RUNNER_TEMP/swcompat-msdelta-source/src/bin"
+          cp probes/swcompat_verified_delta.rs "$RUNNER_TEMP/swcompat-msdelta-source/src/bin/swcompat-verified-delta.rs"
+          cargo +stable build --manifest-path "$RUNNER_TEMP/swcompat-msdelta-source/Cargo.toml" --locked --release --features cli --bin ms-delta --bin swcompat-verified-delta
+          python3 -m scripts.netfx481_native_delta \
+            --package build/KB5011048.msu --sha256-file build/netfx481-catalog.sha256 \
+            --sevenzip "$(realpath "$(command -v 7zz)")" \
+            --codec "$RUNNER_TEMP/swcompat-msdelta-source/target/release/ms-delta" \
+            --verified-codec "$RUNNER_TEMP/swcompat-msdelta-source/target/release/swcompat-verified-delta" \
+            --recipe-dir data/netfx481/recipes --stage-dir "$RUNNER_TEMP/netfx481-ipd-stage" \
+            --output build/netfx481-native-delta.json
+          python3 -m scripts.netfx481_native_delta_gate build/netfx481-native-delta.json
+          src="$RUNNER_TEMP/wusa-original"
+          mkdir -p "$src/wine"
+          base=https://raw.githubusercontent.com/wine-mirror/wine/wine-11.13
+          for name in main.c manifest.c wusa.h; do
+            curl --fail --location --retry 4 --retry-all-errors --max-time 60 --output "$src/$name" "$base/programs/wusa/$name"
+          done
+          curl --fail --location --retry 4 --retry-all-errors --max-time 60 --output "$src/wine/list.h" "$base/include/wine/list.h"
+          python3 -m scripts.patch_wusa_ipd_dryrun "$src" "$RUNNER_TEMP/wusa-ipd-dryrun"
+          python3 -m scripts.patch_wusa_ipd_apply_candidate "$src" "$RUNNER_TEMP/wusa-ipd-apply-candidate"
+          for mode in dryrun apply-candidate; do
+            dst="$RUNNER_TEMP/wusa-ipd-$mode"
+            x86_64-w64-mingw32-gcc -std=gnu11 -O2 -municode -mconsole -static -D_WIN32_WINNT=0x0601 \
+              -I"$dst" "$dst/main.c" "$dst/manifest.c" \
+              -o "$RUNNER_TEMP/swcompat-wusa-ipd-$mode.exe" \
+              -lcabinet -lshlwapi -lole32 -loleaut32 -ladvapi32 -lshell32 -luuid
+          done
+          x86_64-w64-mingw32-gcc -std=gnu11 -O2 -municode -mconsole -static \
+            probes/netfx481_ipd_gac.c -o "$RUNNER_TEMP/swcompat-netfx481-ipd-gac.exe"
+      - name: Run independent read-only preflight on actual persistent native CLR4
+        if: inputs.try_481_ipd_apply_candidate && env.SWCOMPAT_NATIVE40_READY == 'yes'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m swcompat --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --logs-dir "$RUNNER_TEMP/netfx40-msxml3-logs" set-winver win10
+          python3 -m scripts.netfx481_ipd_wusa_dryrun \
+            --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --fixture "$RUNNER_TEMP/swcompat-wusa-ipd-dryrun.exe" \
+            --package build/KB5011048.msu --sha256-file build/netfx481-catalog.sha256 \
+            --stage "$RUNNER_TEMP/netfx481-ipd-stage" --output build/netfx481-ipd-wusa-dryrun.json
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.netfx481_ipd_apply_candidate import preflight_ready
+          ready = preflight_ready(json.loads(Path("build/netfx481-ipd-wusa-dryrun.json").read_text()))
+          print("Authenticated native CLR4 package-local preflight ready:", ready)
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write("SWCOMPAT_IPD_APPLY_READY=" + ("yes" if ready else "no") + "\n")
+          PY
+      - name: Attempt gated original-payload IPD servicing and verify native CLR after restart
+        if: inputs.try_481_ipd_apply_candidate && env.SWCOMPAT_NATIVE40_READY == 'yes' && env.SWCOMPAT_IPD_APPLY_READY == 'yes'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx481_ipd_apply_candidate \
+            --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --fixture "$RUNNER_TEMP/swcompat-wusa-ipd-apply-candidate.exe" \
+            --package build/KB5011048.msu --sha256-file build/netfx481-catalog.sha256 \
+            --stage "$RUNNER_TEMP/netfx481-ipd-stage" \
+            --loader build/netfx481_clr_load.exe --managed build/netfx481_runtime_probe.exe \
+            --native40-report build/netfx40-msxml3-restart.json \
+            --preflight-report build/netfx481-ipd-wusa-dryrun.json \
+            --output build/netfx481-ipd-apply-candidate.json --agree-disposable-experimental-servicing
+      - name: Require verified native framework and complete original GAC before licensed trial
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx481_solidworks_gate --report build/netfx481-ipd-apply-candidate.json
+          python3 -m swcompat --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --logs-dir "$RUNNER_TEMP/netfx40-msxml3-logs" set-winver win11
+          python3 -m scripts.netfx481_solidworks_gate --report build/netfx481-ipd-apply-candidate.json \
+            --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" --managed build/netfx481_runtime_probe.exe
+      - name: Measure dual architecture CAD runtime subsystems before WebView2
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx481_cad_prerequisites --wine "$SWCOMPAT_WINE" --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" \
+            --report build/netfx481-ipd-apply-candidate.json --fixture-dir build --output build/netfx481-cad-prerequisites.json
+      - name: Verify same-prefix native Win32 GDI baseline without private installer
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
+        shell: bash
+        run: |
+          set -euo pipefail
+          PREFIX="$RUNNER_TEMP/netfx40-msxml3-prefix"
+          # The exact prefix has already passed the live original CLR/GAC gate.
+          # The synthetic GDI control requires this separate disposable marker.
+          test -f "$PREFIX/.swcompat-netfx481-disposable"
+          test ! -L "$PREFIX/.swcompat-solidworks-installer-disposable"
+          touch "$PREFIX/.swcompat-solidworks-installer-disposable"
+          python3 -m scripts.solidworks_ui_gdi_reference --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" \
+            --probe build/solidworks_installer_ui_probe.exe --output build/solidworks-macos-gdi-reference.json
+      - name: Recheck installed WebView2 and native managed execution in same prefix
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
+        shell: bash
+        run: |
+          set -euo pipefail
+          PREFIX="$RUNNER_TEMP/netfx40-msxml3-prefix"
+          test -f "$PREFIX/.swcompat-solidworks-installer-disposable"
+          python3 -m scripts.netfx481_webview2_persistence --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" \
+            --probe build/webview2_controller_probe.exe --initial build/solidworks-webview2-prerequisite.json \
+            --restart build/solidworks-webview2-restart.json --output build/solidworks-webview2-persistence.json
+          python3 -m scripts.netfx481_solidworks_gate --report build/netfx481-ipd-apply-candidate.json \
+            --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" --managed build/netfx481_runtime_probe.exe
+      - name: Measure browser DOM and composition in the verified CLR and WebView2 prefix
+        if: inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m scripts.netfx481_webview2_render --wine "$SWCOMPAT_WINE" \
+            --prefix "$RUNNER_TEMP/netfx40-msxml3-prefix" --probe build/webview2_render_probe.exe \
+            --runtime build/solidworks-webview2-prerequisite.json --restart build/solidworks-webview2-restart.json \
+            --output build/ipd-webview2-render.json
+      - name: Launch verified original SOLIDWORKS bootstrapper with real CLR and WebView2
+        if: github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd && inputs.try_481_ipd_apply_candidate
+        shell: bash
+        env:
+          WINEDLLOVERRIDES: "mscoree=n;clr=n"
+          SWCOMPAT_INSTALLER_URL: ${{ secrets.SWCOMPAT_INSTALLER_URL }}
+          SWCOMPAT_INSTALLER_SHA256: ${{ secrets.SWCOMPAT_INSTALLER_SHA256 }}
+        run: |
+          set -euo pipefail
+          PREFIX="$RUNNER_TEMP/netfx40-msxml3-prefix"
+          # Keep strict installer transaction evidence mandatory for private licensed launch.
+          python3 -m scripts.solidworks_runtime_gate --input build/solidworks-webview2-prerequisite.json --require-ready
+          python3 -m scripts.solidworks_private_media_fetch --destination build/SolidworksSetup.exe --output build/solidworks-macos-fetch.json
+          python3 -m scripts.solidworks_bootstrap_trial --wine "$SWCOMPAT_WINE" --prefix "$PREFIX" \
+            --agree-disposable-prefix --installer build/SolidworksSetup.exe --sha256 "$SWCOMPAT_INSTALLER_SHA256" \
+            --window-probe build/solidworks_installer_ui_probe.exe --timeout-seconds 120 --output build/solidworks-macos-trial.json
+      - uses: actions/upload-artifact@v4
+        if: always() && inputs.try_481_ipd_apply_candidate && (inputs.try_webview2_after_ipd || (github.event_name == 'workflow_dispatch' && inputs.try_solidworks_after_ipd))
+        with:
+          name: ipd-solidworks-bootstrap-sanitized
+          path: |
+            build/solidworks-webview2-prerequisite.json
+            build/solidworks-webview2-attempt1.json
+            build/solidworks-webview2-restart.json
+            build/solidworks-webview2-restart-attempt1.json
+            build/solidworks-webview2-persistence.json
+            build/ipd-webview2-render.json
+            build/netfx481-cad-prerequisites.json
+            build/netfx481-cad-windows-reference.json
+            build/solidworks-macos-gdi-reference.json
+            build/solidworks-macos-fetch.json
+            build/solidworks-macos-trial.json
+          if-no-files-found: warn
+          retention-days: 3
+      - name: Remove private original SOLIDWORKS and WebView2 media
+        if: always() && (inputs.try_webview2_after_ipd || inputs.try_solidworks_after_ipd)
+        shell: bash
+        run: |
+          rm -f -- build/SolidworksSetup.exe build/MicrosoftEdgeWebView2RuntimeInstallerX64.exe build/ipd-webview-sdk.zip build/WebView2Loader.dll
+      - name: Remove private IPD staged Microsoft content
+        if: always() && inputs.try_481_ipd_apply_candidate
+        shell: bash
+        run: |
+          rm -rf -- "$RUNNER_TEMP/netfx481-ipd-stage"
+          rm -f -- build/KB5011048.msu
       - name: Upgrade functioning Microsoft .NET 4.x CLR with original Microsoft 4.8.1
         if: env.SWCOMPAT_NATIVE40_READY == 'yes' && !inputs.host_provenance_only && !inputs.try_481_catalog_wusa && ((!inputs.try_48_intermediate && !inputs.try_48_direct && !inputs.try_48_msi) || env.SWCOMPAT_NATIVE48_READY == 'yes' || env.SWCOMPAT_NATIVE481_RECOVERY == 'yes')
         shell: bash
@@ -2269,6 +2669,9 @@ jobs:
           name: original-netfx40-after-msxml3-privacy-safe-result
           path: |
             build/netfx40-prefix-readiness.json
+            build/netfx481-native-delta.json
+            build/netfx481-ipd-wusa-dryrun.json
+            build/netfx481-ipd-apply-candidate.json
             build/netfx40-native-ngen-drain.json
             build/netfx40-msxml3-prerequisite.json
             build/netfx40-msxml3-runtime.json
@@ -2279,6 +2682,7 @@ jobs:
             build/netfx40-msxml3-prerequisite-retry.json
             build/netfx40-msxml3-original-extract.json
             build/netfx40-msxml3-original-table.json
+            build/netfx40-msxml3-dll-relay.json
             build/netfx40-original-core-msi-recovery.json
             build/netfx40-core-path-ngen-drain.json
             build/netfx40-mscoree-provenance.json
@@ -2303,6 +2707,7 @@ jobs:
           SWCOMPAT_CORE_NGEN: ${{ inputs.probe_native40_ngen_if_ready }}
           SWCOMPAT_TRY_481_RECOVERY: ${{ inputs.try_481_after_verified_partial48 }}
           SWCOMPAT_TRY_CATALOG: ${{ inputs.try_481_catalog_wusa }}
+          SWCOMPAT_TRY_IPD_APPLY: ${{ inputs.try_481_ipd_apply_candidate }}
         shell: bash
         run: |
           python3 - <<'PY'
@@ -2477,7 +2882,22 @@ jobs:
                           assert not intermediate_ready
                   catalog_requested = os.environ.get("SWCOMPAT_TRY_CATALOG") == "true"
                   catalog_path = Path("build/netfx481-catalog-wusa.json")
-                  assert catalog_path.is_file() == (catalog_requested and native40_ready)
+                  ipd_requested = os.environ.get("SWCOMPAT_TRY_IPD_APPLY") == "true"
+                  assert catalog_path.is_file() == (catalog_requested and native40_ready and not ipd_requested)
+                  ipd_preflight = Path("build/netfx481-ipd-wusa-dryrun.json")
+                  ipd_apply = Path("build/netfx481-ipd-apply-candidate.json")
+                  assert ipd_preflight.is_file() == (ipd_requested and native40_ready)
+                  if ipd_preflight.is_file():
+                      from scripts.netfx481_ipd_apply_candidate import preflight_ready
+                      eligible = preflight_ready(json.loads(ipd_preflight.read_text(encoding="ascii")))
+                      assert ipd_apply.is_file() == eligible
+                      if ipd_apply.is_file():
+                          result = json.loads(ipd_apply.read_text(encoding="ascii"))
+                          assert result["experimental"] is True and result["strict_cbs_equivalence"] is False
+                          assert result["solidworks_compatibility"] == "NOT_DEMONSTRATED"
+                          print("Experimental IPD framework confirmed:", result["framework481_confirmed"])
+                  else:
+                      assert not ipd_apply.is_file()
                   if catalog_path.is_file():
                       from scripts.netfx481_catalog_wusa import valid as valid_catalog
                       catalog = json.loads(catalog_path.read_text(encoding="ascii"))

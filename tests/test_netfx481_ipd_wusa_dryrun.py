@@ -1,7 +1,7 @@
 """Tests for the dry-run-only WUSA integration."""
 from pathlib import Path
 import unittest
-from scripts.patch_wusa_ipd_dryrun import patch_main, OLD_IPD, OLD_INSTALL, OLD_DWORD, git_blob, patch_manifest, patch_file_names, patch_full_preflight, patch_neutral_preflight
+from scripts.patch_wusa_ipd_dryrun import patch_main, OLD_IPD, OLD_INSTALL, OLD_DWORD, git_blob, patch_manifest, patch_file_names, patch_full_preflight, patch_neutral_preflight, patch_package_local_trial
 from scripts.netfx481_ipd_wusa_dryrun import parse_packet, CATEGORIES
 
 
@@ -78,6 +78,30 @@ class WusaDryRunTests(unittest.TestCase):
         self.assertIn("swcompat_counts[20] == swcompat_counts[18]", code)
         self.assertNotIn("install_updates(state, FALSE)", code)
         self.assertNotIn("ret = TRUE", code)
+
+    def test_package_local_wcf_trial_is_narrow_and_read_only(self):
+        import inspect
+        code = inspect.getsource(patch_package_local_trial)
+        for token in ("dryrun && swcompat_neutral && swcompat_package_local",
+                      "dependency->swcompat_prerequisite",
+                      "netfx4clientcorecomp", "netfx4-servicemodelreg_exe",
+                      "10.0.15840.239", "4.0.15840.239", "4.0.15840.3",
+                      "alternate = dependency->identity", "lookup_assembly(manifest_list, &alternate)",
+                      "install_assembly(manifest_list, &alternate, TRUE)",
+                      "swcompat_counts[17] == 1", "swcompat_counts[18] == 141"):
+            self.assertIn(token, code)
+        self.assertNotIn("install_updates(state, FALSE)", code)
+        self.assertNotIn("ret = TRUE", code)
+
+    def test_xml_loader_requires_synchronous_document_and_disables_external_resolution(self):
+        import inspect
+        from scripts.patch_wusa_ipd_dryrun import patch_xml_loader
+        code = inspect.getsource(patch_xml_loader)
+        self.assertIn("put_async(document, VARIANT_FALSE)", code)
+        self.assertIn("put_resolveExternals(document, VARIANT_FALSE)", code)
+        self.assertIn("put_validateOnParse(document, VARIANT_FALSE)", code)
+        self.assertIn("success != VARIANT_TRUE", code)
+        self.assertIn("XML COM activation failed", code)
 
     def test_git_blob_identity(self):
         self.assertEqual(git_blob(b""), "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391")

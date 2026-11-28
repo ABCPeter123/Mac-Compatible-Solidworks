@@ -24,7 +24,9 @@ CATEGORIES = ("missing_assembly", "missing_file", "expression", "registry_type",
               "unsafe_relative_file_names", "assembly_empty_expansions",
               "exact_dependencies", "version_only_dependencies",
               "absent_resource_prerequisites", "absent_other_dependencies",
-              "neutral_deferred_resources", "neutral_preflight_attempted", "neutral_preflight_passed")
+              "neutral_deferred_resources", "neutral_preflight_attempted", "neutral_preflight_passed",
+              "package_local_wcf_uses", "package_local_trial_attempted",
+              "package_local_graph_passed", "package_local_preflight_passed")
 
 
 def parse_packet(raw: bytes, code: int) -> dict:
@@ -75,7 +77,11 @@ def inspect(wine: Path, prefix: Path, fixture: Path, package: Path,
         raise ValueError("Unverified staging tree")
     env = os.environ.copy()
     env.update(WINEPREFIX=str(prefix.resolve()), WINEARCH="win64", WINEDEBUG="-all")
-    env.pop("WINEDLLOVERRIDES", None)
+    # WUSA's CLSID_DOMDocument parser passed in clean Wine. Winetricks
+    # installs a native MSXML3 override into the persistent CLR4 prefix.
+    # Isolate WUSA's COM parser without changing the prefix's overrides
+    # or the independently measured native CLR baseline.
+    env["WINEDLLOVERRIDES"] = "msxml,msxml2,msxml3,msxml4,msxml6=b"
     # Exercise the compiled numeric parser on the real Wine runtime before
     # trusting the dependency report. Neither self-test nor probe may install.
     with tempfile.TemporaryFile() as test_out:

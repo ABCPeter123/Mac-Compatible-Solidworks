@@ -105,6 +105,34 @@ def run_installer(
     return ("EXIT_ZERO" if code == 0 else "EXIT_NONZERO"), code
 
 
+def run_installer_win32(wine: Path, prefix: Path, installer: Path, launcher: Path,
+                        env: dict[str, str], timeout: int) -> tuple[str, int | None]:
+    from swcompat.wine_paths import windows_media_path
+    from scripts.netfx481_win32_exit import parse
+    root = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
+    if (os.name == "nt" or prefix != root / "netfx40-msxml3-prefix"
+            or not (prefix / ".swcompat-netfx481-disposable").is_file()
+            or launcher.is_symlink() or not launcher.is_file()
+            or launcher.name != "webview2_win32_launch.exe" or timeout != 240):
+        raise ValueError("Unexpected bounded WebView2 launcher inputs")
+    media = windows_media_path(wine, prefix, installer)
+    with tempfile.TemporaryFile() as out:
+        try:
+            p = subprocess.run([str(wine), str(launcher.resolve()), media],
+                               cwd=installer.parent, env=env, stdin=subprocess.DEVNULL,
+                               stdout=out, stderr=subprocess.DEVNULL, timeout=275, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            return "PROCESS_ERROR", None
+        out.seek(0)
+        report = parse(out.read(4097), p.returncode)
+    print("WebView2 Win32 launcher status:", report["status"])
+    print("WebView2 direct child lifecycle:", report["child_lifecycle"])
+    if report["status"] == "EXIT_CAPTURED":
+        code = int(report["exit_hex"], 16)
+        return ("EXIT_ZERO" if code == 0 else "EXIT_NONZERO"), code
+    return ("TIMEOUT" if report["status"] == "TIMEOUT" else "PROCESS_ERROR"), None
+
+
 def snapshot(report: dict) -> dict:
     return {
         "probe_result": report["probe_result"],
@@ -112,6 +140,12 @@ def snapshot(report: dict) -> dict:
         "environment_creation": report["environment_creation"],
         "controller_creation": report["controller_creation"],
         "controller_created": report["controller_created"],
+        # Preserve the independent probe's sanitized diagnostic codes. Never
+        # forward raw logs, exception messages, paths or arbitrary fields.
+        **{key: value.upper() if isinstance(value, str)
+           and re.fullmatch(r"0[xX][0-9a-fA-F]{8}", value) else None
+           for key in ("environment_hresult", "controller_hresult")
+           for value in (report.get(key),)},
     }
 
 
@@ -161,6 +195,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--probe", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout-seconds", type=int, default=240)
+    parser.add_argument("--experiment-full-win32-exit", type=Path,
+                        help="Use the original bounded Windows launcher in an isolated IPD prefix")
     parser.add_argument("--agree-disposable-prefix", action="store_true", required=True,
                         help="I confirm this Wine prefix contains no personal data")
     args = parser.parse_args(argv)
@@ -185,7 +221,12 @@ def main(argv: list[str] | None = None) -> int:
         verify_installer(installer, sha)
         env = wine_environment(prefix)
         before = probe(wine, exe, env)
-        termination, code = run_installer(wine, installer, env, args.timeout_seconds)
+        if args.experiment_full_win32_exit:
+            termination, code = run_installer_win32(
+                wine, prefix, installer, args.experiment_full_win32_exit, env,
+                args.timeout_seconds)
+        else:
+            termination, code = run_installer(wine, installer, env, args.timeout_seconds)
         if termination != "TIMEOUT":
             # Evergreen setup can launch helper processes before exiting.
             time.sleep(5)
@@ -198,6 +239,9 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(str(exc) if isinstance(exc, ValueError) else "Trial setup failed")
 
     print("WebView2 runtime install attempt:", result["installer_execution"])
+    print("WebView2 installer exit code:", result["installer_exit_code"])
+    print("WebView2 environment HRESULT:", result["after"]["environment_hresult"])
+    print("WebView2 controller HRESULT:", result["after"]["controller_hresult"])
     print("Browser discovered before:", result["before"]["runtime_discovery"])
     print("Browser discovered after:", result["after"]["runtime_discovery"])
     print("Environment after:", result["after"]["environment_creation"])

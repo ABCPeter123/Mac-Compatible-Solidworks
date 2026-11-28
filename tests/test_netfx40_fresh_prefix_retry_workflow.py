@@ -12,7 +12,7 @@ CALLER = ROOT / ".github/workflows/netfx48-wiage-ngen-progress-msi-once-ci.yml"
 
 
 class Native40FreshRetryWorkflowTests(TestCase):
-    def test_only_original_signed_msp_one_shot_can_trigger_it(self):
+    def test_only_original_signed_msp_or_ipd_apply_can_trigger_it(self):
         body = WORKFLOW.read_text(encoding="utf-8")
         caller = CALLER.read_text(encoding="utf-8")
         start = body.index(
@@ -23,8 +23,14 @@ class Native40FreshRetryWorkflowTests(TestCase):
             "attribution", start)
         block = body[start:end]
         self.assertIn(
+            "if: env.SWCOMPAT_MSXML3_READY == 'yes' && "
+            "(inputs.signed_msp_win32_exit || inputs.try_481_ipd_apply_candidate)", block)
+        conditions = re.findall(r"(?m)^\s*if: (.+)$", block)
+        self.assertEqual(conditions, [
             "env.SWCOMPAT_MSXML3_READY == 'yes' && "
-            "inputs.signed_msp_win32_exit", block)
+            "(inputs.signed_msp_win32_exit || inputs.try_481_ipd_apply_candidate)"])
+        self.assertIn("SWCOMPAT_REQUIRE_NATIVE40_FOR_IPD: ${{ inputs.try_481_ipd_apply_candidate }}", body)
+        self.assertIn('"Original Microsoft CLR4 prerequisite failed; IPD apply experiment not run"', body)
         self.assertIn("netfx40_fresh_prefix_retry", block)
         self.assertIn("--agree-disposable-prefix", block)
         self.assertIn('test "$outcome" = "FRESH_PREFIX_REQUIRED"', block)
@@ -92,6 +98,38 @@ class Native40FreshRetryWorkflowTests(TestCase):
             "from scripts.netfx40_msxml3_prerequisite import validate as valid_msxml",
             block,
         )
+
+    def test_ipd_retry_changes_sync_only_after_exact_clean_failure(self):
+        body = WORKFLOW.read_text(encoding="utf-8")
+        start = body.index("- name: One genuine CLR4 retry")
+        end = body.index("- name: Extract unchanged signed .NET 4.0 MSI", start)
+        block = body[start:end]
+        verified = block.index('test "$outcome" = "FRESH_PREFIX_REQUIRED"')
+        mode = block.index("export WINEMSYNC=0")
+        init = block.index("--skip-bootstrap-mono-gecko")
+        self.assertLess(verified, mode)
+        self.assertLess(mode, init)
+        self.assertIn('if [[ "$SWCOMPAT_IPD_SYNC_RETRY" == "true" && "$SWCOMPAT_RETRY_WINE_BASELINE" == "wiage-11.13" ]]', block)
+        self.assertIn('echo "WINEMSYNC=0" >> "$GITHUB_ENV"', block)
+        self.assertIn('test "${WINEMSYNC:-}" = "1"', block)
+        self.assertIn('SWCOMPAT_IPD_SYNC_RETRY: ${{ inputs.try_481_ipd_apply_candidate }}', block)
+
+    def test_exact_second_failure_allows_only_attribution_before_strict_gate(self):
+        body = WORKFLOW.read_text(encoding="utf-8")
+        start = body.index("- name: One genuine CLR4 retry")
+        extract = body.index("- name: Extract unchanged signed .NET 4.0 MSI", start)
+        table = body.index("- name: Privately correlate original Microsoft MSI", extract)
+        gate = body.index("- name: Gate original 4.8.1 upgrade on restarted native Microsoft 4.0", table)
+        apply = body.index("- name: Attempt gated original-payload IPD servicing", gate)
+        retry = body[start:extract]
+        self.assertIn("outcome = decision(original, r)", retry)
+        self.assertIn('assert outcome == "ALREADY_VERIFIED"', retry)
+        self.assertIn('assert outcome == "RETRY_ELIGIBLE"', retry)
+        self.assertIn("collecting private MSI attribution before failing native CLR gate", retry)
+        self.assertIn('SWCOMPAT_REQUIRE_NATIVE40_FOR_SIGNED_MSP:', body[gate:apply])
+        self.assertIn("signed MSP experiment not run", body[gate:apply])
+        self.assertIn("IPD apply experiment not run", body[gate:apply])
+        self.assertIn("SWCOMPAT_NATIVE40_READY == 'yes'", body[apply:apply+400])
 
     def test_original_success_gate_and_private_reports_are_preserved(self):
         body = WORKFLOW.read_text(encoding="utf-8")

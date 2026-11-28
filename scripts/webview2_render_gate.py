@@ -17,7 +17,8 @@ RESULTS = {"SCREENSHOT_PIXELS_VERIFIED", "GDI_PIXELS_VERIFIED",
            "KNOWN_CAPTURE_BLOCKER", "UNEXPECTED_FAILURE"}
 
 
-def classify(runtime: dict, render: dict, gdi: dict, canvas: dict, layout: dict) -> dict:
+def classify(runtime: dict, render: dict, gdi: dict, canvas: dict, layout: dict,
+             *, operational_restart: dict | None = None) -> dict:
     def safe(data: object, key: str):
         return data.get(key) if isinstance(data, dict) else None
 
@@ -36,6 +37,12 @@ def classify(runtime: dict, render: dict, gdi: dict, canvas: dict, layout: dict)
         and safe(after, "controller_creation") == "READY"
         and safe(after, "controller_created") is True
     )
+    # Only the IPD experiment supplies independently verified operational
+    # restart evidence. Keep the original strict installer classification for
+    # every existing workflow and do not rewrite the original transaction.
+    if operational_restart is not None:
+        from scripts.netfx481_webview2_restart_gate import operational
+        runtime_ok = operational(runtime, operational_restart)
     gdi_client = safe(gdi, "window_client_bitblt")
     gdi_desktop = safe(gdi, "desktop_bitblt")
     gdi_ok = (
